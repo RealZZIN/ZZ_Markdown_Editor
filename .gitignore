@@ -5,3 +5,4 @@ qa-*.png
 *.rolled-back-*.html
 node_modules/
 *.log
+tests/
