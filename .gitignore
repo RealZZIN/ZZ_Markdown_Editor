@@ -1,0 +1,7 @@
+tmp/
+qa-*.png
+*.backup-*.html
+*.before-*.html
+*.rolled-back-*.html
+node_modules/
+*.log

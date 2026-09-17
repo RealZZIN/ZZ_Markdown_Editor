@@ -1,0 +1,58 @@
+const {chromium}=require('C:/Users/xxinz/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const {pathToFileURL}=require('node:url');const path=require('node:path');const assert=require('node:assert/strict');
+(async()=>{const browser=await chromium.launch({headless:true,channel:'msedge'});try{
+ const page=await browser.newPage({viewport:{width:1400,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.dismiss());
+ await page.goto(pathToFileURL(path.resolve('md_dark_viewer_working_final.html')).href,{waitUntil:'domcontentloaded'});await page.waitForTimeout(1000);
+ assert.equal(await page.locator('#sidebar-files-tab').innerText(),'파일 [0]');
+ assert.equal(await page.locator('#file-count').isVisible(),false);
+ assert.deepEqual(await page.locator('#file-list > .sidebar-root-group > .folder-title .folder-label').allTextContents(),['로컬 [0]','업로드된 파일 [0]']);
+ assert.equal(await page.locator('#file-list > .sidebar-root-group .folder-count').first().evaluate(el=>getComputedStyle(el).marginLeft),'4px');
+ await page.locator('#file-list').click({button:'right',position:{x:25,y:400}});
+ assert.deepEqual(await page.locator('.sidebar-context-menu button').allTextContents(),['새 폴더','새 문서','파일 업로드','폴더 업로드']);
+ await page.locator('.sidebar-context-menu').getByRole('button',{name:'새 폴더',exact:true}).click();
+ await page.locator('.file-dialog-input').fill('테스트폴더');await page.locator('[data-folder-dialog="ok"]').click();
+ const folder=page.locator('[data-sidebar-key="로컬/테스트폴더"] > .folder-title');
+ assert.equal(await folder.evaluate(el=>getComputedStyle(el).justifyContent),'flex-start');
+ await folder.click({button:'right'});
+ const chooserPromise=page.waitForEvent('filechooser');await page.locator('.sidebar-context-menu').getByRole('button',{name:'폴더에 파일 업로드',exact:true}).click();
+ const chooser=await chooserPromise;await chooser.setFiles([{name:'문서.md',mimeType:'text/markdown',buffer:Buffer.from('![그림](pic.png)')},{name:'pic.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=','base64')}]);
+ await page.waitForFunction(()=>state.files.some(f=>f.path==='테스트폴더/문서.md'));
+ assert.equal(await page.locator('#sidebar-files-tab').innerText(),'파일 [1]');
+ assert.equal(await page.locator('[data-sidebar-key="로컬/테스트폴더"] .file-item').count(),0);
+ assert.equal(await page.locator('[data-sidebar-key="업로드된 파일/테스트폴더"] .file-item').count(),1);
+ await page.locator('#file-list .file-item').filter({hasText:'pic.png'}).click();
+ assert.match(await page.locator('.modal-card').innerText(),/테스트폴더\/문서.md/);await page.locator('.modal-card').getByRole('button',{name:'닫기',exact:true}).click();
+ const uploadedFolder=page.locator('[data-sidebar-key="업로드된 파일/테스트폴더"] > .folder-title');
+ await uploadedFolder.click({button:'right'});await page.locator('.sidebar-context-menu').getByRole('button',{name:'이름 변경',exact:true}).click();
+ await page.locator('.file-dialog-input').fill('변경폴더');await page.locator('[data-folder-dialog="ok"]').click();
+ assert.equal(await page.evaluate(()=>state.files[0].path),'변경폴더/문서.md');
+ const doc=page.locator('#file-list .file-item').filter({hasText:'문서.md'});
+ await doc.click({button:'right'});await page.keyboard.press('Escape');
+ await page.locator('#file-list').click({button:'right',position:{x:5,y:400}});await page.keyboard.press('Escape');
+ await doc.click({button:'right'});assert.equal(await page.locator('.file-context-menu:not([hidden]) [data-file-action="rename"]').count(),1);
+ await page.keyboard.press('Escape');
+ await page.locator('#file-list .folder-title').filter({hasText:'변경폴더'}).click({button:'right'});await page.locator('.sidebar-context-menu').getByRole('button',{name:'제거',exact:true}).click();
+ await page.locator('[data-remove-choice="remove"]').click();assert.equal(await page.evaluate(()=>state.files.length),0);
+ await page.locator('#file-list').evaluate(list=>{
+   sidebarDragItem={kind:'file',key:'로컬/stale.md'};
+   list.addEventListener('drop',event=>event.stopImmediatePropagation(),{once:true});
+   const transfer=new DataTransfer();transfer.items.add(new File(['드래그 문서'],'drop.md',{type:'text/markdown'}));
+   list.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));
+ });
+ await page.waitForFunction(()=>state.files.some(file=>file.name==='drop.md'));
+ const directFallback=await page.evaluate(async()=>{
+   const file=new File(['native'],'native.md');
+   const files=await droppedSidebarFiles({files:[file],items:[{kind:'file',getAsFile:()=>file,webkitGetAsEntry:()=>({name:'native.md',isFile:true,file:(_ok,fail)=>fail(new Error('entry unavailable'))})}]});
+   return files.length===1&&await files[0].text()==='native';
+ });assert.ok(directFallback);
+ const directory=await page.evaluate(async()=>{
+   const file=new File(['하위 문서'],'nested.md',{type:'text/markdown'});
+   const child={name:'nested.md',isFile:true,file:resolve=>resolve(file)};
+   const folder={name:'드래그폴더',isDirectory:true,createReader(){let count=0;return{readEntries:resolve=>resolve(count++?[]:[child])}}};
+   const files=await droppedSidebarFiles({items:[{webkitGetAsEntry:()=>folder}],files:[]},'업로드된 파일/대상');
+   await uploadIntoSidebar(files,'업로드된 파일/대상');
+   return state.files.some(file=>file.path==='대상/드래그폴더/nested.md');
+ });assert.ok(directory);
+ assert.equal(await page.locator('#add-files,#add-images,#drop').count(),0);assert.deepEqual(errors,[]);
+ console.log('PASS context menus, chooser upload, image metadata, rename/remove, menu reopening, file drop and recursive directory import');
+}finally{await browser.close()}})().catch(e=>{console.error(e);process.exitCode=1});
