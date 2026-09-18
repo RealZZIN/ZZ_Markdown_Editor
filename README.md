@@ -89,7 +89,6 @@ https://realzzin.github.io/ZZ_Markdown_Editor/
 - [ ] 모바일 환경 최적화
 - [ ] 전체 UI / UX 개선
 - [ ] 처음 사용하는 사용자를 위한 가이드 / 튜토리얼
-- [ ] PDF → Markdown 변환 정확도 개선
 - [ ] 표 편집 기능 개선
 - [ ] 파일 관리 기능 개선
 - [ ] 추가 Markdown 편집 기능
