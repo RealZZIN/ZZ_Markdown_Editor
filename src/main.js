@@ -4362,7 +4362,7 @@ function updateConvertPreview(){
   setupLazyDocumentPreview(els.convertPreview,files,'convert',()=>job===convertPreviewJob);
 }
 function renderConvertList(skipPreview=false){if(!els.convertList)return;if(!state.files.length){els.convertList.innerHTML='';if(!skipPreview)updateConvertPreview();return}els.convertList.innerHTML='';state.files.forEach((file,i)=>{const row=document.createElement('label');row.className='convert-item';row.dataset.index=i;const status=file.convertedFromPdf?'PDF → MD 준비됨':file.convertedFromCode?`${file.codeLanguage||'text'} 코드블록 → MD 준비됨`:'MD → PDF 가능';row.innerHTML=`<input type="checkbox" value="${i}" checked><span><span class="convert-name">${htmlEsc(file.displayName||file.name)}</span><div class="convert-meta">${status} · ${htmlEsc(file.path)}</div></span>`;row.querySelector('input').addEventListener('change',updateConvertPreview);row.addEventListener('mouseenter',showMergePreview);row.addEventListener('mouseleave',scheduleHideMergePreview);row.ondblclick=()=>openFile(i);els.convertList.appendChild(row)});if(!skipPreview)updateConvertPreview()}
-function renderHomeMergeList(){if(!els.homeMergeList)return;const checkedBefore=new Set([...els.homeMergeList.querySelectorAll('input:checked')].map(i=>i.value));const hadChecks=els.homeMergeList.querySelectorAll('input').length>0;els.homeMergeList.innerHTML='';if(state.homeMergeNotice){const note=document.createElement('div');note.className='muted';note.textContent=state.homeMergeNotice;els.homeMergeList.appendChild(note)}if(!state.files.length){const empty=document.createElement('div');empty.className='muted';empty.textContent='업로드한 MD 파일이 없어요. 위 칸에 파일을 올려주세요.';els.homeMergeList.appendChild(empty);return}state.files.forEach((file,i)=>{const row=document.createElement('label');row.className='home-merge-item';row.innerHTML=`<input type="checkbox" ${!hadChecks||checkedBefore.has(String(i))?'checked':''} value="${i}"><span>${htmlEsc(file.displayName||file.name)}</span>`;els.homeMergeList.appendChild(row)})}
+function renderHomeMergeList(){if(!els.homeMergeList)return;const checkedBefore=new Set([...els.homeMergeList.querySelectorAll('input:checked')].map(i=>i.value));const hadChecks=els.homeMergeList.querySelectorAll('input').length>0;els.homeMergeList.innerHTML='';if(state.homeMergeNotice){const note=document.createElement('div');note.className='muted';note.textContent=state.homeMergeNotice;els.homeMergeList.appendChild(note)}if(!state.files.length){const empty=document.createElement('div');empty.className='muted home-merge-empty';empty.textContent='왼쪽에서 MD 파일을 추가하면 여기에 표시됩니다.';els.homeMergeList.appendChild(empty);return}state.files.forEach((file,i)=>{const row=document.createElement('label');row.className='home-merge-item';row.innerHTML=`<input type="checkbox" ${!hadChecks||checkedBefore.has(String(i))?'checked':''} value="${i}"><span>${htmlEsc(file.displayName||file.name)}</span>`;els.homeMergeList.appendChild(row)})}
 function renderAll(){const activeText=state.active>=0?(state.files[state.active]?.text||''):els.editor.value;if(state.active>=0&&els.editor.value!==activeText)els.editor.value=activeText;renderList();renderMergeList(true);renderConvertList(true);renderHomeMergeList();if(state.mode==='edit')renderMarkdown(activeText);updateHomeConvert();updateLineNumbers();const activePanel=document.querySelector('.panel.active');if(activePanel?.id==='panel-convert')scheduleModePreview('convert');else if(activePanel?.id==='panel-merge')scheduleModePreview('merge')}
 function updateHomeImageSummary(file){
   if(!els.homeImageSummary)return;
@@ -6809,11 +6809,23 @@ els.folderInput.onchange=e=>addFiles(e.target.files);
 els.fileInput.onchange=e=>addFiles(e.target.files);
 els.imageInput.onchange=e=>{if(state.insertingImage){insertImageFiles(e.target.files);state.insertingImage=false}else addFiles(e.target.files)};
 $('home-convert-upload').onclick=()=>{state.stayHomeAfterConvert=true;els.fileInput.click()};
-$('home-merge-upload').onclick=()=>els.fileInput.click();
 $('pdf-drop').onclick=()=>els.pdfInput.click();
 els.pdfInput.onchange=e=>addFiles(e.target.files);
 document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>setMode(b.dataset.mode,false));
-document.querySelectorAll('.home [data-mode]').forEach(b=>b.onclick=e=>{e.stopPropagation();setMode(b.dataset.mode,false)});
+document.querySelectorAll('.home [data-mode]').forEach(b=>b.onclick=e=>{
+  e.stopPropagation();
+  if(b.dataset.mode==='edit'){
+    if(b.classList.contains('home-start-button')&&state.files.length){
+      if(state.active<0)openFile(0);
+      else setMode('edit',false);
+      return;
+    }
+    newDocument();
+    scheduleWorkspaceSave();
+    return;
+  }
+  setMode(b.dataset.mode,false);
+});
 $('home-select-merge').onclick=mergeSelectedFromHome;
 function rememberEditorInsertionPoint(){
   state.lastInsertionSurface='editor';
@@ -7263,7 +7275,16 @@ $('convert-resizer').addEventListener('mousedown',e=>startSourceResize(e,'md-con
 $('merge-resizer').addEventListener('mousedown',e=>startSourceResize(e,'md-merge-source-width'));
 setupSourcePane('convert-grid','convert-source-toggle','md-convert-source');
 setupSourcePane('merge-grid','merge-source-toggle','md-merge-source');
-$('fmt-heading').onchange=e=>{applyHeading(e.target.value);e.target.value=''};
+function showHeadingMenu(){
+  const menu=$('fmt-heading-menu'),combo=$('fmt-heading-combo'),toggle=$('fmt-heading-toggle'),r=combo.getBoundingClientRect();
+  menu.classList.remove('hidden');toggle.setAttribute('aria-expanded','true');
+  const width=menu.getBoundingClientRect().width||86;
+  menu.style.top=(r.bottom+4)+'px';menu.style.left=Math.max(8,Math.min(r.left,window.innerWidth-width-8))+'px';
+}
+function hideHeadingMenu(){$('fmt-heading-menu').classList.add('hidden');$('fmt-heading-toggle').setAttribute('aria-expanded','false')}
+$('fmt-heading-toggle').onmousedown=e=>e.preventDefault();
+$('fmt-heading-toggle').onclick=e=>{e.stopPropagation();$('fmt-heading-menu').classList.contains('hidden')?showHeadingMenu():hideHeadingMenu()};
+$('fmt-heading-menu').addEventListener('click',e=>{const button=e.target.closest('[data-heading]');if(!button)return;applyHeading(button.dataset.heading);hideHeadingMenu()});
 function applyFontSizeInput(){
   const input=$('fmt-size');
   const size=Math.max(6,Math.min(96,Number(input.value)||0));
@@ -7334,6 +7355,7 @@ $('fmt-size-menu').addEventListener('click',e=>{
 });
 document.addEventListener('click',e=>{
   if(!$('fmt-size-combo').contains(e.target))hideFontSizeMenu();
+  if(!$('fmt-heading-combo').contains(e.target))hideHeadingMenu();
 });
 $('fmt-undo').onclick=undoEdit;$('fmt-redo').onclick=redoEdit;
 function toggleWrap(before,after=before){
@@ -8565,6 +8587,8 @@ function customFormatEditor(preset=null,source=null){
         if(part.classList.contains('cp-hue')){
           hue=Math.max(0,Math.min(360,((pointerEvent.clientY-rect.top)/rect.height)*360));
           colorPicker.dataset.hue=String(hue);
+          if(saturation<.08)saturation=1;
+          if(brightness<.12)brightness=1;
         }else{
           saturation=Math.max(0,Math.min(1,(pointerEvent.clientX-rect.left)/rect.width));
           brightness=1-Math.max(0,Math.min(1,(pointerEvent.clientY-rect.top)/rect.height));
@@ -11591,13 +11615,15 @@ document.querySelectorAll('.cp-picker-main').forEach(picker=>{
   const type=picker.dataset.colorTarget;
   const input=$(type==='text'?'fmt-color':type==='bg'?'fmt-bg':'custom-theme-color');
   const update=(part,e)=>{
-    const rgb=hexToRgb(input.value)||{r:255,g:0,b:0};
+    const rgb=hexToRgb(getHexInputValue(input))||{r:255,g:0,b:0};
     const current=rgbToHsv(rgb);
     let h=Number(picker.dataset.hue)||current.h,s=current.s,v=current.v;
     const rect=part.getBoundingClientRect();
     if(part.classList.contains('cp-hue')){
       h=Math.max(0,Math.min(360,((e.clientY-rect.top)/rect.height)*360));
       picker.dataset.hue=String(h);
+      if(s<.08)s=1;
+      if(v<.12)v=1;
     }else{
       s=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width));
       v=1-Math.max(0,Math.min(1,(e.clientY-rect.top)/rect.height));

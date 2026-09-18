@@ -15,7 +15,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mathlive/dist/mathlive.min.js"></script>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,600&display=swap">
+<link rel="stylesheet" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css">
 <link rel="stylesheet" href="/styles/app.css">
 </head>
@@ -73,7 +73,7 @@
               </div>
             </div>
           </div>
-          <button class="ribbon-toggle" id="ribbon-toggle">⌃</button>
+          <button class="ribbon-toggle" id="ribbon-toggle" type="button" title="도구 모음 접기/펼치기" aria-label="도구 모음 접기/펼치기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 14l6-6 6 6"/></svg></button>
         </div>
       </nav>
 
@@ -132,7 +132,12 @@
           </button>
         </div>
         <div class="format-sep" aria-hidden="true"></div>
-        <span class="format-select"><select id="fmt-heading"><option value="">서식</option><option value="p">본문</option><option value="h1">제목 1</option><option value="h2">제목 2</option><option value="h3">제목 3</option><option value="h4">제목 4</option><option value="h5">제목 5</option></select></span>
+        <div class="format-select" id="fmt-heading-combo">
+          <button id="fmt-heading-toggle" type="button" aria-label="서식 목록" aria-expanded="false">서식</button>
+          <div class="heading-menu hidden" id="fmt-heading-menu">
+            <button type="button" data-heading="p">본문</button><button type="button" data-heading="h1">제목 1</button><button type="button" data-heading="h2">제목 2</button><button type="button" data-heading="h3">제목 3</button><button type="button" data-heading="h4">제목 4</button><button type="button" data-heading="h5">제목 5</button>
+          </div>
+        </div>
         <div class="size-combo" id="fmt-size-combo">
           <input id="fmt-size" type="text" inputmode="numeric" autocomplete="off" placeholder="크기" title="글씨 크기(px)">
           <button id="fmt-size-toggle" type="button" title="글씨 크기 목록" aria-label="글씨 크기 목록"></button>
@@ -205,36 +210,49 @@
 
     <section class="workspace" id="workspace">
       <div class="home" id="home">
-        <div class="home-menu">
-          <button class="home-tab" data-mode="convert">문서 변환</button>
-          <button class="home-tab" data-mode="edit">마크다운 편집</button>
-          <button class="home-tab" data-mode="merge">마크다운 병합</button>
-        </div>
-        <div class="home-work">
-          <section class="home-card">
-            <h2>문서 변환</h2>
-            <p>파일을 올리면 형식에 맞게 자동으로 변환 준비를 합니다.</p>
-            <div class="home-convert-options">
-              <div class="convert-row"><b>입력</b><span id="home-source-name">업로드된 문서 없음</span></div>
-              <div class="convert-row"><b>출력 이름</b><div class="output-name-wrap"><input id="home-output-name" value="converted-document"><span class="output-ext pending" id="home-output-ext"></span></div></div>
-              <button class="home-drop-mini" id="home-convert-upload">PDF, MD, 이미지를 함께 업로드</button>
-              <div class="merge-home-action hidden" id="home-image-summary"></div>
+        <header class="home-command-header">
+          <div class="home-identity">
+            <span class="home-kicker">ZZ / DOCUMENT WORKSPACE</span>
+            <h1>문서 작업</h1>
+            <p>파일을 추가한 뒤 필요한 작업을 선택하세요.</p>
+          </div>
+        </header>
+
+        <div class="home-dashboard">
+          <section class="home-convert-workflow">
+            <div class="home-section-head">
+              <div><span class="home-section-index">01</span><h2>작업할 파일</h2></div>
             </div>
-            <div class="home-actions">
-              <button class="tool primary" id="home-convert-run">변환 실행</button>
-              <button class="tool" data-mode="convert">자세히 보기</button>
+            <button class="home-convert-drop" id="home-convert-upload">
+              <span class="home-drop-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7.5 8.5L12 4l4.5 4.5"/><path d="M5 14v4a2 2 0 002 2h10a2 2 0 002-2v-4"/></svg></span>
+              <span><strong>작업할 파일을 여기에 놓으세요</strong></span>
+            </button>
+            <div class="home-convert-summary">
+              <div class="home-source-summary"><span>선택한 문서</span><strong id="home-source-name">업로드된 문서 없음</strong></div>
+              <label class="home-output-field"><span>저장할 이름</span><span class="output-name-wrap"><input id="home-output-name" value="converted-document"><span class="output-ext pending" id="home-output-ext"></span></span></label>
             </div>
-          </section>
-          <section class="home-card">
-            <h2>마크다운 병합</h2>
-            <p>홈에서도 MD 파일을 올리고 필요한 항목만 골라 바로 합칠 수 있습니다.</p>
-            <button class="home-merge-drop" id="home-merge-upload">MD 파일 또는 폴더를 올려주세요.<br>드래그하거나 클릭해서 업로드</button>
-            <div class="home-merge-list" id="home-merge-list"></div>
-            <div class="home-actions">
-              <button class="tool primary" id="home-run-merge">전체 병합</button>
-              <button class="tool" id="home-select-merge">선택 병합</button>
+            <div class="merge-home-action hidden" id="home-image-summary"></div>
+            <div class="home-workflow-footer">
+              <span>파일 형식에 맞춰 출력 형식을 자동으로 선택합니다.</span>
+              <div class="home-actions"><button class="tool" data-mode="convert">옵션</button><button class="tool primary" id="home-convert-run">변환 시작</button></div>
             </div>
           </section>
+
+          <div class="home-side-stack">
+            <section class="home-start-card">
+              <div class="home-section-head"><div><span class="home-section-index">02</span><h2>편집</h2></div></div>
+              <p>현재 문서를 열어 글쓰기, 표 편집, 코드 정리를 시작합니다.</p>
+              <button type="button" class="home-start-button" data-mode="edit"><span>편집 화면 열기</span><span aria-hidden="true">→</span></button>
+            </section>
+
+            <section class="home-merge-workflow">
+              <div class="home-section-head">
+                <div><span class="home-section-index">03</span><h2>문서 합치기</h2></div>
+              </div>
+              <div class="home-merge-list" id="home-merge-list"></div>
+              <div class="home-actions"><button class="tool primary" id="home-run-merge">전체 병합</button><button class="tool" id="home-select-merge">선택 병합</button></div>
+            </section>
+          </div>
         </div>
       </div>
 
@@ -259,7 +277,7 @@
           <div class="box">
             <div class="box-head">변환 결과
               <span class="convert-actions no-print">
-                <button class="tool primary" id="convert-run-selected">선택 변환</button>
+                <button class="tool primary" id="convert-run-selected">선택한 문서 변환</button>
                 <button class="tool" id="convert-edit-selected">편집하기</button>
                 <button class="tool" id="convert-merge-selected">병합하기</button>
               </span>
