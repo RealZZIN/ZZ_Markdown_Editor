@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  base: '/ZZ_Markdown_Editor/',
+
   publicDir: 'src',
   server: {
     host: '127.0.0.1',
