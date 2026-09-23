@@ -1746,7 +1746,6 @@ body.dark .tab.active { background: var(--s3); color: var(--t1); }
 .home-section-head { display:flex;align-items:center;justify-content:space-between;gap:16px; }
 .home-section-head > div { display:flex;align-items:center;gap:10px; }
 .home-section-head h2 { margin:0;color:var(--t1);font-size:21px;font-weight:750;letter-spacing:-.025em; }
-.home-section-index { color:var(--t3);font:650 11px/1 var(--font); }
 .home-format-route { padding:5px 8px;border:1px solid var(--b2);border-radius:2px;background:transparent;color:var(--t3);font:650 9.5px/1 var(--font); }
 .home-convert-drop {
   flex:1;
@@ -3140,6 +3139,7 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
   border-radius: 5px;
   background: var(--s1);
 }
+.print-scale-control { display:inline-flex;align-items:center;gap:3px; }
 .print-scale-input-wrap input {
   width: 58px;
   height: 28px;
@@ -3150,8 +3150,12 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
   color: var(--t1);
   font-size: 12px;
   font-weight: 700;
+  appearance: textfield;
 }
-.print-scale-input-wrap span { padding-right: 8px; color: var(--t3); }
+.print-scale-input-wrap input::-webkit-inner-spin-button,
+.print-scale-input-wrap input::-webkit-outer-spin-button { margin:0;appearance:none;-webkit-appearance:none; }
+.print-scale-input-wrap .print-scale-unit { padding-right: 8px; color: var(--t3); }
+.print-scale-stepper { width:18px;height:30px;flex:0 0 18px; }
 .print-dialog-actions { display: flex; gap: 6px; }
 .print-dialog-actions .tool { height: 32px; }
 .print-viewer-footer {

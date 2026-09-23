@@ -6506,7 +6506,7 @@ function showPrintScaleDialog(source){
     wrap.innerHTML=`<div class="print-dialog-shell" role="dialog" aria-modal="true" aria-labelledby="print-dialog-title">
       <div class="print-dialog-head">
         <h3 id="print-dialog-title">PDF 저장 미리보기</h3>
-        <label class="print-scale-field">배율 <span class="print-scale-input-wrap"><input id="print-scale-input" type="number" min="25" max="200" step="5" value="100" inputmode="numeric"><span>%</span></span></label>
+        <label class="print-scale-field">배율 <span class="print-scale-control"><span class="print-scale-input-wrap"><input id="print-scale-input" type="number" min="25" max="200" step="5" value="100" inputmode="numeric"><span class="print-scale-unit">%</span></span><span class="size-stepper print-scale-stepper" aria-label="PDF 배율 조절"><button class="size-up" type="button" data-print-scale-step="5" title="배율 높이기" aria-label="배율 5% 높이기"></button><button class="size-down" type="button" data-print-scale-step="-5" title="배율 낮추기" aria-label="배율 5% 낮추기"></button></span></span></label>
         <label class="print-pages-field">시트당 페이지 <select id="print-pages-select"><option value="1">1쪽</option><option value="2">2쪽</option><option value="4">4쪽</option><option value="6">6쪽</option><option value="9">9쪽</option></select></label>
         <div class="print-dialog-actions"><button class="tool" type="button" data-print-action="cancel">취소</button><button class="tool primary" type="button" data-print-action="print">PDF 저장</button></div>
       </div>
@@ -6593,6 +6593,10 @@ function showPrintScaleDialog(source){
     };
     const onKey=e=>{if(e.key==='Escape')finish(null)};
     input.addEventListener('input',update);
+    wrap.querySelectorAll('[data-print-scale-step]').forEach(button=>button.onclick=()=>{
+      input.value=String(Math.max(25,Math.min(200,(Number(input.value)||100)+Number(button.dataset.printScaleStep))));
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+    });
     input.addEventListener('change',()=>{input.value=String(printScaleValue(input.value));update()});
     pagesSelect.addEventListener('change',update);
     wrap.querySelector('[data-print-action="cancel"]').onclick=()=>finish(null);
