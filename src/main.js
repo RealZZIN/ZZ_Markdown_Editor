@@ -12742,7 +12742,34 @@ els.outline.addEventListener('contextmenu',e=>{
   const tagButton=e.target.closest('[data-outline-tag]');
   if(tagButton)showHashtagContextMenu(e,tagButton.dataset.outlineTag);
 });
-$('side-handle').onclick=()=>els.app.classList.toggle('sidebar-collapsed');
+function syncSidebarHandle(){
+  const mobile=matchMedia('(max-width: 860px)').matches;
+  const open=mobile?els.app.classList.contains('mobile-sidebar-open'):!els.app.classList.contains('sidebar-collapsed');
+  $('side-handle').setAttribute('aria-label',mobile?(open?'사이드바 닫기':'사이드바 열기'):(open?'사이드바 접기':'사이드바 펼치기'));
+  $('side-handle').setAttribute('aria-expanded',String(open));
+}
+$('side-handle').onclick=()=>{
+  if(matchMedia('(max-width: 860px)').matches){
+    els.app.classList.remove('sidebar-collapsed');
+    els.app.classList.toggle('mobile-sidebar-open');
+    syncSidebarHandle();
+    return;
+  }
+  els.app.classList.toggle('sidebar-collapsed');
+  syncSidebarHandle();
+};
+document.addEventListener('click',event=>{
+  if(!els.app.classList.contains('mobile-sidebar-open'))return;
+  if(event.target.closest('#sidebar,#side-handle'))return;
+  els.app.classList.remove('mobile-sidebar-open');
+  syncSidebarHandle();
+});
+matchMedia('(max-width: 860px)').addEventListener('change',event=>{
+  els.app.classList.remove('mobile-sidebar-open');
+  if(event.matches)els.app.classList.remove('sidebar-collapsed');
+  syncSidebarHandle();
+});
+syncSidebarHandle();
 $('side-resizer').addEventListener('mousedown',e=>{
   if(els.app.classList.contains('sidebar-collapsed'))return;
   e.preventDefault();
