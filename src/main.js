@@ -112,7 +112,7 @@ async function insertCodeFilesIntoActiveDocument(files){
 function canInsertCodeIntoActiveDocument(){
   return state.mode==='edit'&&state.active>=0&&document.querySelector('#panel-edit.active')&&els.home.classList.contains('hidden');
 }
-const CUSTOM_THEME_VARS=['--bg','--white','--s1','--s2','--s3','--b1','--b2','--t1','--t2','--t3','--ink','--ink-soft','--check-off','--check-mark','--accent','--code-bg','--code-head','--code-text','--code-head-text','--code-border','--sb','--sb2','--sb3','--sbb','--sbt','--sbt2','--sbt3'];
+const CUSTOM_THEME_VARS=['--bg','--white','--s1','--s2','--s3','--b1','--b2','--t1','--t2','--t3','--ink','--on-ink','--ink-soft','--check-off','--check-mark','--accent','--on-accent','--code-bg','--code-head','--code-text','--code-head-text','--code-border','--sb','--sb2','--sb3','--sbb','--sbt','--sbt2','--sbt3'];
 function mixThemeColor(from,to,amount){
   const a=hexToRgb(from),b=hexToRgb(to),ratio=Math.max(0,Math.min(1,amount));
   if(!a||!b)return from;
@@ -188,6 +188,7 @@ function applyCustomThemeVars(){
   const codeHeadText=themeColorLuminance(codeHead)<.42?'#ffffff':'#111110';
   const effectiveText=ensureThemeTextContrast(text,panelBackground,5.6);
   const effectiveCodeText=ensureThemeTextContrast(text,codeBackground,5.8);
+  const accent=dark?mixThemeColor(background,'#ffffff',.38):mixThemeColor(background,'#000000',.3);
   const values={
     '--bg':background,
     '--white':panelBackground,
@@ -200,10 +201,12 @@ function applyCustomThemeVars(){
     '--t2':mixThemeColor(effectiveText,background,.2),
     '--t3':mixThemeColor(effectiveText,background,.35),
     '--ink':effectiveText,
+    '--on-ink':themeColorLuminance(effectiveText)<.45?'#ffffff':'#111110',
     '--ink-soft':mixThemeColor(effectiveText,background,.18),
     '--check-off':checkboxOff,
     '--check-mark':background,
-    '--accent':dark?mixThemeColor(background,'#ffffff',.38):mixThemeColor(background,'#000000',.3),
+    '--accent':accent,
+    '--on-accent':themeColorLuminance(accent)<.45?'#ffffff':'#111110',
     '--code-bg':codeBackground,
     '--code-head':codeHead,
     '--code-text':effectiveCodeText,
@@ -4614,7 +4617,8 @@ function setMode(mode,showHome=false){
     if(mode==='convert'&&els.convertList.querySelectorAll('.convert-item').length!==state.files.length)renderConvertList(true);
     if(mode==='merge'&&els.mergeList.querySelectorAll('input[type="checkbox"]').length!==state.files.length)renderMergeList(true);
     if(mode==='merge'||mode==='convert'||mode==='edit')scheduleModePreview(mode);
-  }
+    if(mode==='edit'||mode==='convert'||mode==='merge')scheduleModeGuideWelcome(mode);
+  }else scheduleModeGuideWelcome('home');
 }
 function pushHistory(force=false){if(state.restoring)return;clearTimeout(state.historyTimer);const commit=()=>{const v=els.editor.value;if(state.history[state.history.length-1]!==v){state.history.push(v);if(state.history.length>80)state.history.shift();state.future=[]}updateUndoRedoButtons()};force?commit():state.historyTimer=setTimeout(commit,650)}
 function markDirty(){state.dirty=els.editor.value!==state.savedText}
@@ -6968,8 +6972,8 @@ els.editor.addEventListener('keydown',e=>{
     insertMarkdownHardBreak();
     return;
   }
-  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redoEdit():undoEdit()}
-  else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();redoEdit()}
+  if(shortcutMatches(e,'undo')){e.preventDefault();undoEdit()}
+  else if(shortcutMatches(e,'redo')){e.preventDefault();redoEdit()}
 });
 $('run-merge').onclick=mergeSelected;
 $('home-run-merge').onclick=mergeAllFromHome;
@@ -7204,15 +7208,14 @@ els.preview.addEventListener('keydown',e=>{
   }
   if(preservePreviewFormatOnDelete(e))return;
   if(insertPlainPreviewParagraph(e))return;
-  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?redoEdit():undoEdit()}
-  else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();redoEdit()}
+  if(shortcutMatches(e,'undo')){e.preventDefault();undoEdit()}
+  else if(shortcutMatches(e,'redo')){e.preventDefault();redoEdit()}
 });
 document.addEventListener('keydown',e=>{
   if(e.defaultPrevented||state.mode!=='edit'||!(e.ctrlKey||e.metaKey))return;
   if(e.target!==els.editor&&!els.preview.contains(e.target)&&e.target.closest?.('input,textarea,[contenteditable="true"],[role="dialog"],.modal-backdrop'))return;
-  const key=e.key.toLowerCase();
-  if(key==='z'){e.preventDefault();e.shiftKey?redoEdit():undoEdit()}
-  else if(key==='y'){e.preventDefault();redoEdit()}
+  if(shortcutMatches(e,'undo')){e.preventDefault();undoEdit()}
+  else if(shortcutMatches(e,'redo')){e.preventDefault();redoEdit()}
 });
 $('view-pdf-to-md').onclick=()=>els.pdfInput.click();
 $('view-md-to-pdf').onclick=runSelectedConvert;
@@ -8376,7 +8379,7 @@ function customFormatEditor(preset=null,source=null){
           <span class="custom-format-editor-section-desc">아래 값을 바꾸면 해당 속성이 자동으로 저장 항목에 포함됩니다.</span>
           <div class="custom-format-control-row">
             <label><span>서식</span><select data-custom-control="blockTag"><option value="p">본문</option><option value="h1">제목 1</option><option value="h2">제목 2</option><option value="h3">제목 3</option><option value="h4">제목 4</option><option value="h5">제목 5</option></select></label>
-            <label><span>크기</span><input type="number" min="6" max="160" data-custom-control="fontSize"></label>
+            <label><span>크기</span><div class="custom-format-number-control"><input type="number" min="6" max="160" data-custom-control="fontSize"><span class="size-stepper custom-format-size-stepper" aria-label="서식 글씨 크기 조절"><button class="size-up" type="button" data-custom-font-step="1" aria-label="글씨 크기 1px 키우기"></button><button class="size-down" type="button" data-custom-font-step="-1" aria-label="글씨 크기 1px 줄이기"></button></span></div></label>
             <label><span>정렬</span><select data-custom-control="textAlign"><option value="left">왼쪽</option><option value="center">가운데</option><option value="right">오른쪽</option><option value="justify">양쪽</option></select></label>
           </div>
           <div class="custom-format-inline-tools"><button type="button" data-custom-toggle="bold"><b>B</b></button><button type="button" data-custom-toggle="italic"><i>I</i></button><button type="button" data-custom-toggle="underline"><u>U</u></button></div>
@@ -8405,7 +8408,7 @@ function customFormatEditor(preset=null,source=null){
           <section class="custom-format-editor-section">
             <strong class="custom-format-editor-section-title">저장 정보</strong>
             <label><span>서식명</span><input type="text" maxlength="60" data-custom-meta="name"></label>
-            <label style="margin-top:10px"><span>폴더</span><select data-custom-meta="folder"><option value="">개별 서식</option>${store.folders.map(folder=>`<option value="${htmlEsc(folder.id)}">${htmlEsc(folder.name)}</option>`).join('')}</select></label>
+            <label class="custom-format-meta-field"><span>폴더</span><select data-custom-meta="folder"><option value="">개별 서식</option>${store.folders.map(folder=>`<option value="${htmlEsc(folder.id)}">${htmlEsc(folder.name)}</option>`).join('')}</select></label>
           </section>
           <section class="custom-format-editor-section">
             <strong class="custom-format-editor-section-title">저장할 항목</strong>
@@ -8447,6 +8450,11 @@ function customFormatEditor(preset=null,source=null){
       values[name]=name==='fontSize'?Math.max(6,Math.min(160,Number(event.target.value)||14)):event.target.value;
       setFieldChecked(name,true);
       refresh();
+    }));
+    wrap.querySelectorAll('[data-custom-font-step]').forEach(button=>button.addEventListener('click',()=>{
+      const input=control('fontSize');
+      input.value=String(Math.max(6,Math.min(160,(Number(input.value)||14)+Number(button.dataset.customFontStep))));
+      input.dispatchEvent(new Event('input',{bubbles:true}));
     }));
     const colorPanel=wrap.querySelector('[data-custom-color-panel]');
     const colorPicker=colorPanel.querySelector('[data-custom-color-picker]');
@@ -10381,6 +10389,7 @@ tableSizePanel.innerHTML=`
     </div>
     <label class="table-custom-delimiter-wrap" id="table-custom-delimiter-wrap" hidden><span class="table-delimiter-title">기타 구분자</span><input id="table-custom-delimiter" type="text" maxlength="8" placeholder="예: ; 또는 ::"></label>
     <div class="table-delimiter-help">자동 감지는 탭·쉼표·띄어쓰기·/·세미콜론·| 중에서 여러 줄에 반복되고, 각 줄의 열 수가 가장 일정해지는 문자를 선택합니다. <span class="table-delimiter-status" id="table-delimiter-status"></span></div>
+    <div class="table-data-preview" id="table-data-preview" aria-live="polite"></div>
     <button class="table-custom-submit" id="table-delimited-submit" type="button">텍스트를 표로 변환</button>
   </section>`;
 document.body.appendChild(tableSizePanel);
@@ -10537,8 +10546,13 @@ function selectedTableDelimiters(text){
 function updateDelimiterControls(){
   const custom=tableSizePanel.querySelector('.table-delimiter-options input[value="custom"]').checked;
   $('table-custom-delimiter-wrap').hidden=!custom;
-  const {detected}=selectedTableDelimiters($('table-delimited-text').value);
-  $('table-delimiter-status').textContent=detected?`현재 감지: ${detected.label}`:$('table-delimited-text').value.trim()?'감지 결과 없음':'';
+  const text=$('table-delimited-text').value;
+  const {detected}=selectedTableDelimiters(text);
+  $('table-delimiter-status').textContent=detected?`현재 감지: ${detected.label}`:text.trim()?'감지 결과 없음':'';
+  const preview=$('table-data-preview');
+  const demo=!text.trim();
+  const rows=demo?[['이름','점수'],['민지','95'],['서준','88']]:parseDelimitedRows(text);
+  preview.innerHTML=`<span class="table-data-preview-title">${demo?'입력 예시':'변환 미리보기'}</span>${rows.length?`<div class="table-data-preview-scroll"><table><thead><tr>${rows[0].map(value=>`<th>${htmlEsc(value)}</th>`).join('')}</tr></thead>${rows.length>1?`<tbody>${rows.slice(1,5).map(row=>`<tr>${row.map(value=>`<td>${htmlEsc(value)}</td>`).join('')}</tr>`).join('')}</tbody>`:''}</table></div>`:'<p>구분자를 확인하면 표 모양을 미리 볼 수 있습니다.</p>'}`;
 }
 function parseDelimitedRows(text,kinds,custom=''){
   const lines=String(text||'').replace(/\r/g,'').split('\n').filter(line=>line.trim());
@@ -10577,11 +10591,11 @@ const acPanelHtml=`
     <div class="ac-group-title">작성 옵션</div>
     <label title="Enter를 누르면 마크다운 강제 줄바꿈 문법인 공백 두 칸 + 줄바꿈을 넣습니다.">
       <input type="checkbox" id="enable-paragraph-break" checked>
-      <span><b>Enter로 줄바꿈</b><div class="ac-desc">Enter로 바로 줄바꿈</div></span>
+      <span><b>Enter로 줄바꿈</b><div class="ac-desc">Enter를 누른 위치에서 바로 줄바꿈</div></span>
     </label>
     <label title="프리뷰에서 완성한 마크다운 문법을 굵게, 코드, 제목, 목록 등의 실제 서식으로 바로 변환합니다.">
       <input type="checkbox" id="enable-preview-markdown" checked>
-      <span><b>프리뷰 MD 문법 적용</b><div class="ac-desc">입력한 MD 문법을 바로 서식으로 변환</div></span>
+      <span><b>프리뷰 MD 문법 적용</b><div class="ac-desc">Preview에 입력한 Markdown 문법을 서식으로 변환</div></span>
     </label>
     <label title="URL을 붙여넣으면 클릭할 수 있는 링크 서식으로 자동 변환합니다.">
       <input type="checkbox" id="enable-auto-link" checked>
@@ -10590,7 +10604,7 @@ const acPanelHtml=`
     <div class="ac-option-block">
       <label title="미리보기의 글씨에 설정한 시간 동안 마우스를 올리면 원문을 수정할 수 있는 작은 창을 표시합니다.">
         <input type="checkbox" id="enable-source-syntax-hover" checked>
-        <span><b>문법 빠른 편집</b><div class="ac-desc">미리보기에서 드래그한 글씨의 실제 문법 수정</div></span>
+        <span><b>문법 빠른 편집</b><div class="ac-desc">Preview의 문장에 마우스를 올려 Markdown 원문 수정</div></span>
       </label>
       <div class="ac-hover-delay" id="source-syntax-hover-delay-wrap">
         <span>창 표시까지</span><input type="number" id="source-syntax-hover-delay" min="1" max="30" step="1" value="5" inputmode="numeric" aria-label="빠른 편집 대기 시간"><span>초</span>
@@ -10602,19 +10616,19 @@ const acPanelHtml=`
     </label>
     <label title="라이트 모드에서 흰색/밝은 글씨를 검은색 계열로,&#10;다크 모드에서 검은색/어두운 글씨를 흰색 계열로&#10;자동 변환하여 가독성을 높입니다.&#10;&#10;(미리보기에만 적용, 원본은 변경하지 않음)">
       <input type="checkbox" id="enable-color-correct" checked>
-      <span><b>색상 가독성 보정</b><div class="ac-desc">모드에 맞춰 글자색 자동 보정</div></span>
+      <span><b>색상 가독성 보정</b><div class="ac-desc">화면 테마에 맞춰 읽기 어려운 글자색을 자동 보정</div></span>
     </label>
   </div>
   <div class="ac-group">
     <div class="ac-group-title">보기 옵션</div>
-    <label><input type="checkbox" id="enable-table-filter"><span><b>표 필터·정렬</b><div class="ac-desc">표 머리글에서 필터·정렬 · 원문은 유지</div></span></label>
+    <label><input type="checkbox" id="enable-table-filter"><span><b>표 필터·정렬</b><div class="ac-desc">표 머리글에서 행을 필터링하거나 정렬하며 원문은 유지</div></span></label>
     <label title="편집창과 미리보기의 세로 스크롤 위치를 서로 맞춥니다.">
       <input type="checkbox" id="enable-sync-scroll">
       <span><b>스크롤 동기화</b><div class="ac-desc">Markdown과 Preview를 함께 스크롤</div></span>
     </label>
     <label title="마크다운 편집창 왼쪽에 행 번호를 표시합니다.">
       <input type="checkbox" id="enable-line-numbers">
-      <span><b>행 번호 보기</b><div class="ac-desc">Markdown(편집 모드)에서 현재 위치를 행 번호로 표시</div></span>
+      <span><b>행 번호 보기</b><div class="ac-desc">Markdown 편집창 왼쪽에 행 번호 표시</div></span>
     </label>
     <label title="분할 보기에서 Preview를 왼쪽, Markdown을 오른쪽으로 배치합니다.">
       <input type="checkbox" id="enable-swap-panes">
@@ -10628,10 +10642,62 @@ const acPanelHtml=`
 </div>`;
 document.body.insertAdjacentHTML('beforeend',acPanelHtml);
 PANELS.push('ac-panel');TOGGLES.push('autocorrect-toggle');
+const optionPreviewExamples={
+  'enable-paragraph-break':{title:'Enter로 줄바꿈',body:'<div class="option-live-demo"><small>Enter를 누르면 다음 줄이 바로 만들어집니다.</small><div class="option-enter-animation"><span>첫 번째 줄</span><i>Enter ↵</i><span>두 번째 줄</span><b></b></div></div>'},
+  'enable-preview-markdown':{title:'프리뷰 MD 문법 적용',body:'<div class="option-live-demo"><small>입력한 Markdown 문법이 바로 서식으로 바뀝니다.</small><div class="option-markdown-animation"><div class="option-demo-input"><span>**텍스트**</span><b></b></div><i>서식 적용</i><div class="option-demo-output"><strong>텍스트</strong></div></div></div>'},
+  'enable-auto-link':{title:'URL 자동 링크',body:'<div class="option-live-demo"><small>붙여넣은 주소가 클릭 가능한 링크로 바뀝니다.</small><div class="option-link-animation"><div class="option-demo-input"><span>https://example.com</span><b></b></div><i>붙여넣기</i><div class="option-demo-output"><a>https://example.com</a></div></div></div>'},
+  'enable-source-syntax-hover':{title:'문법 빠른 편집',body:'<div class="option-live-demo"><small>Preview의 문장에 마우스를 올리면 Markdown 원문을 고칠 수 있는 창이 열립니다.</small><div class="option-quick-edit-animation"><div class="option-preview-sentence"><span>중요한 문장입니다.</span><b>마우스</b></div><div class="option-source-editor"><code>**중요한 문장**입니다.</code><i>수정</i></div><div class="option-quick-edit-result"><strong>수정한 문장</strong>입니다.</div></div></div>'},
+  'enable-autocorrect':{title:'기호 공백 보정',body:'<div class="option-live-demo"><small>Markdown 기호 안에 잘못 들어간 공백을 자동으로 정리합니다.</small><div class="option-space-animation"><div><span>**김밥 </span><em> </em><span>**</span><b></b></div><i>공백 제거</i><strong>**김밥**</strong></div></div>'},
+  'enable-color-correct':{title:'색상 가독성 보정',body:'<div class="option-live-demo"><small>테마와 비슷해 잘 보이지 않는 글자색을 읽기 쉽게 바꿉니다.</small><div class="option-color-animation"><div class="option-color-scene"><span>LIGHT</span><b>문서 내용</b></div><i>테마 전환</i><div class="option-color-status">글자색 자동 보정</div></div></div>'},
+  'enable-table-filter':{title:'표 필터·정렬',body:'<div class="option-live-demo"><small>머리글을 누른 뒤 필터 조건이나 정렬 순서를 선택합니다.</small><div class="option-table-animation"><div class="option-table-head"><b>이름</b><button type="button">점수 <i>▾</i></button></div><div class="option-table-menu"><span>높은 점수순</span><span>낮은 점수순</span></div><div class="option-table-rows"><span>서준</span><span>88</span><span>민지</span><span>95</span></div></div></div>'},
+  'enable-sync-scroll':{title:'스크롤 동기화',body:`<div class="option-live-demo"><small>한쪽을 내리면 다른 쪽도 같은 위치로 이동합니다.</small><div class="option-sync-playground"><div><b>Markdown</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 문서 내용</p>`).join('')}</div></section></div><i>↔</i><div><b>Preview</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 문서 내용</p>`).join('')}</div></section></div></div></div>`},
+  'enable-line-numbers':{title:'행 번호 보기',body:'<div class="option-example-code"><i>1</i><span># 제목</span><i>2</i><span>본문 내용</span><i>3</i><span>- 목록</span></div>'},
+  'enable-swap-panes':{title:'분할 위치 바꾸기',body:'<div class="option-live-demo"><small>Markdown과 Preview의 좌우 위치가 서로 바뀝니다.</small><div class="option-swap-animation"><div class="option-swap-pane option-swap-md"><b>Markdown</b><span>**문서 내용**</span></div><i>⇄</i><div class="option-swap-pane option-swap-preview"><b>Preview</b><strong>문서 내용</strong></div></div></div>'},
+  'enable-hashtag-navigator':{title:'해시태그 탐색',body:'<div class="option-live-demo"><small>문서의 태그를 모아 보여주고, 선택한 태그가 있는 위치로 이동합니다.</small><div class="option-tag-animation"><div class="option-tag-document"><span>프로젝트 기록 <mark>#프로젝트</mark></span><span>새로운 생각 <mark>#아이디어</mark></span><span>오늘 할 일 <mark>#할일</mark></span></div><div class="option-tag-list"><b>#프로젝트</b><b>#아이디어</b><b>#할일</b></div><i>↖</i></div></div>'}
+};
+const optionPreview=document.createElement('div');
+optionPreview.className='option-example-popover';
+optionPreview.setAttribute('role','tooltip');
+optionPreview.hidden=true;
+document.body.appendChild(optionPreview);
+let optionPreviewTimer=0,optionPreviewCloseTimer=0;
+function hideOptionPreview(immediate=false){
+  clearTimeout(optionPreviewTimer);clearTimeout(optionPreviewCloseTimer);
+  if(immediate)optionPreview.hidden=true;
+  else optionPreviewCloseTimer=setTimeout(()=>{optionPreview.hidden=true},180);
+}
+function showOptionPreview(label,id){
+  const example=optionPreviewExamples[id];
+  if(!example)return;
+  clearTimeout(optionPreviewTimer);clearTimeout(optionPreviewCloseTimer);
+  optionPreviewTimer=setTimeout(()=>{
+    optionPreview.innerHTML=`<strong>${example.title}</strong><div>${example.body}</div>`;
+    optionPreview.hidden=false;
+    const rect=label.getBoundingClientRect(),panelRect=$('ac-panel').getBoundingClientRect(),width=Math.min(390,innerWidth-16),gap=12;
+    const groups=[...$('ac-panel').querySelectorAll('.ac-group')],isLeft=groups.indexOf(label.closest('.ac-group'))===0;
+    let left=isLeft?panelRect.left-width-gap:panelRect.right+gap;
+    left=Math.max(8,Math.min(innerWidth-width-8,left));
+    optionPreview.style.left=`${left}px`;
+    let top=rect.bottom+gap;
+    if(top+optionPreview.offsetHeight>innerHeight-8)top=rect.top-optionPreview.offsetHeight-gap;
+    optionPreview.style.top=`${Math.max(8,top)}px`;
+  },280);
+}
+optionPreview.addEventListener('mouseenter',()=>clearTimeout(optionPreviewCloseTimer));
+optionPreview.addEventListener('mouseleave',()=>hideOptionPreview());
+Object.keys(optionPreviewExamples).forEach(id=>{
+  const input=$(id),label=input?.closest('label');
+  if(!label)return;
+  label.removeAttribute('title');
+  label.addEventListener('mouseenter',()=>showOptionPreview(label,id));
+  label.addEventListener('mouseleave',()=>hideOptionPreview());
+  label.addEventListener('focusin',()=>showOptionPreview(label,id));
+  label.addEventListener('focusout',event=>{if(!label.contains(event.relatedTarget))hideOptionPreview()});
+});
 $('autocorrect-toggle').onclick=e=>{
   e.stopPropagation();
   const open=!$('ac-panel').classList.contains('hidden');
-  open?closeAllPanels():openPanel('ac-panel','autocorrect-toggle');
+  if(open){hideOptionPreview(true);closeAllPanels()}else openPanel('ac-panel','autocorrect-toggle');
 };
 $('enable-autocorrect').checked=acEnabled;
 $('enable-color-correct').checked=colorCorrectEnabled;
@@ -10756,6 +10822,420 @@ $('syntax-menu').querySelectorAll('.ins-group-help').forEach(button=>{
     setInsertHelpVisible(button,pin);
   });
 });
+
+const FEATURE_GUIDE_ENABLED_KEY='zz-feature-guide-enabled';
+const FEATURE_GUIDE_WELCOME_KEY='zz-feature-guide-welcome-v1';
+const HOME_GUIDE_WELCOME_KEY='zz-home-guide-welcome-v1';
+const EDIT_GUIDE_WELCOME_KEY='zz-edit-guide-welcome-v1';
+const CONVERT_GUIDE_WELCOME_KEY='zz-convert-guide-welcome-v1';
+const MERGE_GUIDE_WELCOME_KEY='zz-merge-guide-welcome-v1';
+const SHORTCUT_SETTINGS_KEY='zz-shortcut-settings-v1';
+const SHORTCUT_DEFINITIONS=[
+  {id:'modeConvert',name:'변환 화면',description:'변환 화면으로 이동',defaultKey:'Ctrl+F1'},
+  {id:'modeEdit',name:'편집 화면',description:'편집 화면으로 이동',defaultKey:'Ctrl+F2'},
+  {id:'modeMerge',name:'병합 화면',description:'문서 병합 화면으로 이동',defaultKey:'Ctrl+F3'},
+  {id:'save',name:'저장',description:'현재 작업 결과 저장',defaultKey:'Ctrl+S'},
+  {id:'saveAs',name:'다른 이름으로 저장',description:'편집 문서를 새 이름으로 저장',defaultKey:'Ctrl+Shift+S'},
+  {id:'open',name:'파일 열기',description:'파일 또는 폴더 불러오기',defaultKey:'Ctrl+O'},
+  {id:'runSelection',name:'선택 작업 실행',description:'변환·병합 화면의 선택 작업 실행',defaultKey:'Ctrl+Enter'},
+  {id:'find',name:'찾기',description:'현재 화면에서 내용 찾기',defaultKey:'Ctrl+F'},
+  {id:'replace',name:'찾기 및 바꾸기',description:'편집 화면에서 내용 바꾸기',defaultKey:'Ctrl+H'},
+  {id:'print',name:'인쇄·PDF 저장',description:'현재 결과의 인쇄 창 열기',defaultKey:'Ctrl+P'},
+  {id:'undo',name:'실행 취소',description:'마지막 편집 되돌리기',defaultKey:'Ctrl+Z'},
+  {id:'redo',name:'다시 실행',description:'되돌린 편집 다시 적용',defaultKey:'Ctrl+Y'},
+  {id:'bold',name:'굵게',description:'선택한 글자를 굵게 표시',defaultKey:'Ctrl+B'},
+  {id:'italic',name:'기울임',description:'선택한 글자를 기울임꼴로 표시',defaultKey:'Ctrl+I'},
+  {id:'underline',name:'밑줄',description:'선택한 글자에 밑줄 적용',defaultKey:'Ctrl+U'},
+  {id:'link',name:'링크',description:'선택한 글자에 링크 추가',defaultKey:'Ctrl+K'},
+  {id:'customFormat',name:'사용자 지정 서식',description:'저장한 사용자 서식 열기',defaultKey:'Ctrl+Alt+S'}
+];
+const SHORTCUT_GROUPS=[
+  {id:'navigation',name:'화면 이동',description:'변환·편집·병합 화면 전환',items:['modeConvert','modeEdit','modeMerge']},
+  {id:'file',name:'파일·실행',description:'열기, 저장, 인쇄와 작업 실행',items:['save','saveAs','open','runSelection','print']},
+  {id:'editing',name:'찾기·편집 기록',description:'찾기와 실행 취소·다시 실행',items:['find','replace','undo','redo']},
+  {id:'format',name:'글자 서식',description:'선택한 글자의 모양과 링크 변경',items:['bold','italic','underline','link','customFormat']}
+];
+function loadShortcutSettings(){
+  let saved={};try{saved=JSON.parse(localStorage.getItem(SHORTCUT_SETTINGS_KEY)||'{}')||{}}catch{}
+  return Object.fromEntries(SHORTCUT_DEFINITIONS.map(item=>[item.id,typeof saved[item.id]==='string'?saved[item.id]:item.defaultKey]));
+}
+let shortcutSettings=loadShortcutSettings();
+function shortcutKeyName(key){
+  const lower=String(key||'').toLowerCase();
+  if(lower===' ')return'Space';
+  if(lower==='escape')return'Esc';
+  if(lower.startsWith('arrow'))return lower.replace('arrow','').replace(/^./,letter=>letter.toUpperCase());
+  if(lower.length===1)return lower.toUpperCase();
+  return lower.replace(/^./,letter=>letter.toUpperCase());
+}
+function shortcutFromEvent(event){
+  if(['Control','Meta','Alt','Shift'].includes(event.key))return'';
+  const parts=[];
+  if(event.ctrlKey||event.metaKey)parts.push('Ctrl');
+  if(event.altKey)parts.push('Alt');
+  if(event.shiftKey)parts.push('Shift');
+  parts.push(shortcutKeyName(event.key));
+  return parts.join('+');
+}
+function shortcutMatches(event,id){return shortcutSettings[id]&&shortcutFromEvent(event)===shortcutSettings[id]}
+function shortcutCommand(event){return SHORTCUT_DEFINITIONS.find(item=>shortcutMatches(event,item.id))?.id||''}
+function saveShortcutSettings(){localStorage.setItem(SHORTCUT_SETTINGS_KEY,JSON.stringify(shortcutSettings));refreshShortcutHints()}
+function refreshShortcutHints(){
+  const custom=$('custom-format-toggle');
+  if(custom)custom.setAttribute('aria-label',`사용자 지정 서식 (${shortcutSettings.customFormat})`);
+}
+let featureGuideEnabled=localStorage.getItem(FEATURE_GUIDE_ENABLED_KEY)!=='0';
+let featureGuidePopover=null,featureGuideOpenTimer=0,featureGuideCloseTimer=0;
+const FEATURE_GUIDES={
+  toc:{
+    title:'문서 목차',
+    description:'문서의 제목을 찾아 이동할 수 있는 목차를 현재 위치에 만듭니다.',
+    render:()=>`<div class="feature-guide-example feature-guide-syntax-demo"><code class="feature-guide-syntax-source"># 시작하기<br>## 설치<br>## 사용법</code><div class="feature-guide-toc"><b>문서 목차</b><span>1. 시작하기</span><span>　1.1 설치</span><span>　1.2 사용법</span></div></div>`
+  },
+  sync:{
+    title:'동기화 블록',
+    description:'한 블록을 수정하면 같은 ID를 사용하는 다른 블록의 내용도 함께 바뀝니다.',
+    render:()=>`<div class="feature-guide-example feature-guide-sync-demo">
+      <div class="feature-guide-sync-source"><small>profile · 첫 번째 블록</small><span>공통 안내 <em>문구</em></span><b></b></div>
+      <div class="feature-guide-sync-link"><i>↕</i><span>같은 ID로 연결</span></div>
+      <div class="feature-guide-sync-source is-copy"><small>profile · 두 번째 블록</small><span>공통 안내 <em>문구</em></span></div>
+      <div class="feature-guide-format-caption">한쪽 수정 → 같은 ID의 다른 블록도 자동 변경</div>
+    </div>`
+  },
+  docEmbed:{
+    title:'미니 문서',
+    description:'다른 문서의 전체 내용이나 선택한 범위를 현재 문서 안에 읽기 전용으로 보여줍니다.',
+    render:()=>`<div class="feature-guide-example feature-guide-syntax-demo"><code class="feature-guide-syntax-source">[[회의록!ALL]]</code><div class="feature-guide-mini-doc"><b>회의록.md</b><strong>주간 회의</strong><span>진행 상황과 다음 할 일을 정리합니다.</span></div></div>`
+  },
+  callout:{
+    title:'콜아웃',
+    description:'중요한 안내나 참고 내용을 문서에서 눈에 띄는 상자로 표시합니다.',
+    render:()=>`<div class="feature-guide-example feature-guide-syntax-demo"><code class="feature-guide-syntax-source">&gt; [!note] 참고<br>&gt; 저장 전에 확인하세요.</code><div class="feature-guide-callout"><b>참고</b><span>저장 전에 확인하세요.</span></div></div>`
+  },
+  wikilink:{
+    title:'위키 링크',
+    description:'문서 이름을 이용해 다른 문서로 바로 이동하는 링크를 만듭니다.',
+    render:()=>`<div class="feature-guide-example feature-guide-syntax-demo"><code class="feature-guide-syntax-source">[[프로젝트 계획]]</code><div class="feature-guide-inline-result">관련 문서: <a>프로젝트 계획</a></div></div>`
+  },
+  fileEmbed:{
+    title:'파일 임베드',
+    description:'이미지나 첨부 파일을 문서 본문에 바로 표시합니다.',
+    render:()=>`<div class="feature-guide-example feature-guide-syntax-demo"><code class="feature-guide-syntax-source">![[화면 구성.png]]</code><div class="feature-guide-file-embed"><span>이미지 미리보기</span><b>화면 구성.png</b></div></div>`
+  },
+  highlight:{
+    title:'하이라이트',
+    description:'문장 중 강조할 부분에 형광펜처럼 배경색을 표시합니다.',
+    render:()=>`<div class="feature-guide-example feature-guide-syntax-demo"><code class="feature-guide-syntax-source">회의는 ==오후 3시==에 시작합니다.</code><div class="feature-guide-inline-result">회의는 <mark>오후 3시</mark>에 시작합니다.</div></div>`
+  },
+  customFormat:{
+    title:'사용자 지정 서식',
+    description:'자주 쓰는 글자 크기와 색상 등의 조합을 저장해 두고, 선택한 문장에 한 번에 적용합니다.',
+    render:()=>`<div class="feature-guide-example feature-guide-format-demo">
+      <div class="feature-guide-format-document">일반 문장 사이의 <mark>선택한 문장</mark>에 저장한 서식이 적용됩니다.</div>
+      <div class="feature-guide-format-cursor">↖</div>
+      <div class="feature-guide-format-toolbar"><span>저장된 서식</span><b>강조 문구</b><i>클릭</i></div>
+      <div class="feature-guide-format-caption">선택 → 저장된 서식 클릭 → 즉시 적용</div>
+    </div>`
+  }
+};
+function setFeatureGuideEnabled(enabled){
+  featureGuideEnabled=!!enabled;
+  localStorage.setItem(FEATURE_GUIDE_ENABLED_KEY,featureGuideEnabled?'1':'0');
+  if(!featureGuideEnabled)hideFeatureGuide(true);
+}
+function ensureFeatureGuidePopover(){
+  if(featureGuidePopover)return featureGuidePopover;
+  featureGuidePopover=document.createElement('aside');
+  featureGuidePopover.className='feature-guide-popover';
+  featureGuidePopover.setAttribute('role','tooltip');
+  featureGuidePopover.hidden=true;
+  featureGuidePopover.addEventListener('mouseenter',()=>clearTimeout(featureGuideCloseTimer));
+  featureGuidePopover.addEventListener('mouseleave',()=>scheduleFeatureGuideClose());
+  document.body.appendChild(featureGuidePopover);
+  return featureGuidePopover;
+}
+function positionFeatureGuide(target){
+  const popover=ensureFeatureGuidePopover(),rect=target.getBoundingClientRect();
+  const width=popover.offsetWidth||340,height=popover.offsetHeight||260,gap=10;
+  const roomRight=window.innerWidth-rect.right;
+  let left=roomRight>=width+gap?rect.right+gap:rect.left-width-gap;
+  if(left<8)left=Math.max(8,Math.min(window.innerWidth-width-8,rect.left));
+  const top=Math.max(8,Math.min(window.innerHeight-height-8,rect.top-18));
+  popover.style.left=`${Math.round(left)}px`;
+  popover.style.top=`${Math.round(top)}px`;
+}
+function showFeatureGuide(target,key){
+  if(!featureGuideEnabled||!target?.isConnected)return;
+  const guide=FEATURE_GUIDES[key];if(!guide)return;
+  clearTimeout(featureGuideCloseTimer);
+  const popover=ensureFeatureGuidePopover();
+  popover.innerHTML=`<div class="feature-guide-popover-head"><strong>${htmlEsc(guide.title)}</strong><span>기능 가이드</span></div><p>${htmlEsc(guide.description)}</p>${guide.render()}`;
+  popover.hidden=false;
+  popover.dataset.guideKey=key;
+  positionFeatureGuide(target);
+}
+function hideFeatureGuide(immediate=false){
+  clearTimeout(featureGuideOpenTimer);clearTimeout(featureGuideCloseTimer);
+  if(!featureGuidePopover)return;
+  if(immediate)featureGuidePopover.hidden=true;
+  else featureGuideCloseTimer=setTimeout(()=>{if(featureGuidePopover)featureGuidePopover.hidden=true},150);
+}
+function scheduleFeatureGuideClose(){hideFeatureGuide(false)}
+function bindFeatureGuide(target,key){
+  if(!target)return;
+  target.dataset.featureGuide=key;
+  const open=()=>{if(!featureGuideEnabled)return;clearTimeout(featureGuideCloseTimer);clearTimeout(featureGuideOpenTimer);featureGuideOpenTimer=setTimeout(()=>showFeatureGuide(target,key),400)};
+  const close=()=>scheduleFeatureGuideClose();
+  target.addEventListener('mouseenter',open);
+  target.addEventListener('mouseleave',close);
+  target.addEventListener('focus',open);
+  target.addEventListener('blur',close);
+  target.addEventListener('click',()=>hideFeatureGuide(true));
+}
+function closeGuideModal(wrap){wrap?.remove()}
+let editGuideWelcomeTimer=0;
+function modeGuideKey(mode){return mode==='home'?HOME_GUIDE_WELCOME_KEY:mode==='convert'?CONVERT_GUIDE_WELCOME_KEY:mode==='merge'?MERGE_GUIDE_WELCOME_KEY:EDIT_GUIDE_WELCOME_KEY}
+function scheduleModeGuideWelcome(mode=state.mode,force=false){
+  clearTimeout(editGuideWelcomeTimer);
+  if(!force&&(!featureGuideEnabled||localStorage.getItem(modeGuideKey(mode))==='1'))return;
+  if(!force&&mode==='home'&&localStorage.getItem(FEATURE_GUIDE_WELCOME_KEY)!=='1')return;
+  editGuideWelcomeTimer=setTimeout(()=>{
+    const visible=mode==='home'?!els.home.classList.contains('hidden'):state.mode===mode&&els.home.classList.contains('hidden');
+    if(visible)showModeGuideWelcome(mode,force);
+  },500);
+}
+function scheduleEditGuideWelcome(force=false){scheduleModeGuideWelcome('edit',force)}
+function showEditGuideWelcome(force=false){showModeGuideWelcome('edit',force)}
+function showModeGuideWelcome(mode='edit',force=false){
+  const guideKey=modeGuideKey(mode);
+  if(!force&&(!featureGuideEnabled||localStorage.getItem(guideKey)==='1'))return;
+  document.querySelector('.edit-guide-overlay')?.remove();
+  const wrap=document.createElement('div');
+  wrap.className='edit-guide-overlay';
+  wrap.innerHTML=`<div class="edit-guide-focus-layer" aria-hidden="true"></div>
+    <section class="edit-guide-card" role="dialog" aria-modal="true" aria-labelledby="edit-guide-title">
+      <span class="feature-guide-eyebrow" data-edit-guide-count></span>
+      <h3 id="edit-guide-title" data-edit-guide-title></h3>
+      <p data-edit-guide-description></p>
+      <ul class="edit-guide-points" data-edit-guide-points></ul>
+      <div class="edit-guide-motion-demo" data-edit-guide-demo hidden aria-hidden="true"></div>
+      <div class="edit-guide-progress" data-edit-guide-progress></div>
+      <label class="feature-guide-dismiss"><input type="checkbox" data-edit-guide-never> 다시는 보지 않기</label>
+      <div class="edit-guide-actions"><div><button class="tool edit-guide-nav" type="button" data-edit-guide-prev aria-label="이전">&lt;</button><button class="tool primary edit-guide-nav" type="button" data-edit-guide-next aria-label="다음">&gt;</button></div><button class="edit-guide-skip" type="button" data-edit-guide-skip>건너뛰기</button></div>
+    </section>`;
+  const layer=wrap.querySelector('.edit-guide-focus-layer');
+  const homeSteps=[
+    {selector:'#sidebar',title:'파일과 문서 목차',description:'왼쪽 사이드바에서 작업할 파일을 선택하고 문서 구조를 살펴봅니다.',points:['파일 탭에서는 로컬 문서와 업로드한 파일을 선택합니다.','문서 탭에서는 제목이나 해시태그를 눌러 원하는 위치로 이동합니다.']},
+    {selector:'.menu',title:'작업 화면 이동',description:'할 일에 따라 변환·편집·병합 화면으로 이동합니다.',points:['변환은 PDF와 Markdown 사이의 형식을 바꿉니다.','편집은 내용을 작성하고, 병합은 여러 문서를 하나로 합칩니다.']},
+    {selector:'.toolbar',title:'문서 열기·저장',description:'문서를 만들고 불러오거나 작업 결과를 저장할 때 사용하는 도구입니다.',points:['새 문서, 열기, 파일 삽입, 닫기를 사용할 수 있습니다.','버전 기록에서 이전 상태를 확인하고 저장 버튼으로 결과를 저장합니다.']},
+    {selector:'.menu-right',title:'화면 테마',description:'작업 화면과 PDF에 사용할 색상 테마를 선택합니다.',points:['라이트와 다크 테마를 즉시 전환할 수 있습니다.','사용자 지정에서 배경색과 글자색을 직접 저장합니다.']},
+    {selector:'.home-dashboard',title:'작업 시작',description:'파일을 추가한 뒤 원하는 작업을 선택합니다.',points:['작업할 파일 영역에서는 파일을 추가하고 형식을 변환할 수 있습니다.','오른쪽에서는 편집 화면을 열거나 여러 문서를 하나로 합칠 수 있습니다.']}
+  ];
+  const editSteps=[
+    {selector:'.mode-tools[data-tools="edit"]',title:'편집 화면 보기 방식',description:'작업에 맞게 편집 영역의 표시 방법을 바꿉니다.',points:['분할은 Markdown과 Preview를 함께 보여줍니다.','편집 또는 보기를 선택하면 한쪽 영역에 집중할 수 있습니다.','옵션에서는 자동 보정과 표시 기능을 설정합니다.']},
+    {selector:'#format-tools',title:'서식과 삽입 도구',description:'선택한 글자의 모양을 바꾸거나 문서 요소를 추가합니다.',points:['제목·크기·색상·정렬을 바로 적용할 수 있습니다.','표, 이미지, 링크, 수식, 양식과 확장 문법을 삽입할 수 있습니다.']},
+    {selector:'#edit-split',title:'Preview와 Markdown',description:'같은 문서를 원문과 완성된 모습으로 나누어 보여줍니다.',points:['Markdown에서는 문법이 포함된 원문을 직접 작성합니다.','Preview에서는 적용된 서식을 확인하면서 내용을 편집할 수 있습니다.']}
+  ];
+  const convertSteps=[
+    {selector:'.mode-tools[data-tools="convert"]',title:'변환 방식과 미니 프리뷰',description:'입력 형식에 맞는 변환 방향과 미리보기 방식을 고릅니다.',points:['PDF → MD 또는 MD → PDF를 선택합니다.','미니 프리뷰를 켜면 문서 위에 마우스를 올려 내용을 먼저 확인합니다.'],demo:'hover'},
+    {selector:'#convert-grid .source-pane',title:'변환할 문서 선택',description:'여러 파일을 추가한 뒤 실제로 변환할 항목만 고릅니다.',points:['전체 선택·해제와 선택 삭제를 사용할 수 있습니다.','목록에서 파일별 선택 상태를 확인합니다.']},
+    {selector:'#convert-preview',title:'변환 결과 확인',description:'선택한 문서의 변환 결과를 오른쪽에서 확인합니다.',points:['선택한 문서 변환을 누르면 현재 선택에 맞춰 결과가 갱신됩니다.','결과를 편집 화면으로 보내거나 다른 문서와 합칠 수 있습니다.']}
+  ];
+  const mergeSteps=[
+    {selector:'.mode-tools[data-tools="merge"]',title:'미니 프리뷰',description:'파일을 선택하기 전에 내용을 빠르게 확인합니다.',points:['미니 프리뷰를 켜고 항목 위에 마우스를 올립니다.','작은 미리보기에서 문서 내용을 확인한 뒤 선택합니다.'],demo:'hover'},
+    {selector:'#merge-grid .source-pane',title:'병합할 파일 선택',description:'합칠 문서와 순서를 왼쪽 목록에서 정합니다.',points:['체크한 문서만 병합 결과에 포함됩니다.','전체 선택 버튼으로 모든 항목을 한 번에 바꿀 수 있습니다.']},
+    {selector:'#merge-result',title:'병합 결과 확인',description:'선택한 문서를 하나로 합친 결과를 오른쪽에서 확인합니다.',points:['병합 실행을 누르면 현재 선택한 문서로 결과가 갱신됩니다.','완성된 결과는 저장하거나 편집 화면에서 계속 다듬을 수 있습니다.']}
+  ];
+  const steps=mode==='home'?homeSteps:mode==='convert'?convertSteps:mode==='merge'?mergeSteps:editSteps;
+  const guideName=mode==='home'?'START GUIDE':mode==='convert'?'CONVERT GUIDE':mode==='merge'?'MERGE GUIDE':'EDITOR GUIDE';
+  let stepIndex=0;
+  const card=wrap.querySelector('.edit-guide-card');
+  const position=()=>{
+    layer.replaceChildren();
+    const step=steps[stepIndex],target=document.querySelector(step.selector);if(!target)return;
+    const rect=target.getBoundingClientRect(),mark=document.createElement('div'),gap=18;
+    const roomRight=innerWidth-rect.right,roomLeft=rect.left;
+    const labelPosition=rect.height<140?'below':roomRight>=210?'right':rect.top>=44?'above':innerHeight-rect.bottom>=44?'below':'right';
+    mark.className='edit-guide-focus';
+    mark.classList.add(`label-${labelPosition}`);
+    Object.assign(mark.style,{left:`${rect.left}px`,top:`${rect.top}px`,width:`${rect.width}px`,height:`${rect.height}px`});
+    mark.innerHTML=`<span><b>${stepIndex+1}</b>${htmlEsc(step.title)}</span>`;
+    layer.appendChild(mark);
+    const cardWidth=card.offsetWidth,cardHeight=card.offsetHeight;
+    let left,top;
+    if(rect.height<140&&rect.bottom<170){left=innerWidth-cardWidth-18;top=Math.max(rect.bottom+50,innerHeight-cardHeight-18)}
+    else if(roomRight>=cardWidth+gap){left=rect.right+gap;top=rect.top+(labelPosition==='right'?50:0)}
+    else if(roomLeft>=cardWidth+gap){left=rect.left-cardWidth-gap;top=rect.top}
+    else if(step.selector==='#edit-split'){left=rect.left+24;top=rect.top+28}
+    else{left=Math.max(12,Math.min(innerWidth-cardWidth-12,rect.left));top=rect.bottom+gap;if(top+cardHeight>innerHeight-12)top=rect.top-cardHeight-gap}
+    card.style.left=`${Math.max(12,Math.min(innerWidth-cardWidth-12,left))}px`;
+    card.style.top=`${Math.max(12,Math.min(innerHeight-cardHeight-12,top))}px`;
+    card.style.transform='none';
+  };
+  const close=()=>{
+    localStorage.setItem(guideKey,'1');
+    if(wrap.querySelector('[data-edit-guide-never]').checked)setFeatureGuideEnabled(false);
+    window.removeEventListener('resize',position);
+    wrap.remove();
+  };
+  const renderStep=()=>{
+    const step=steps[stepIndex];
+    wrap.querySelector('[data-edit-guide-count]').textContent=`${guideName} · ${stepIndex+1}/${steps.length}`;
+    wrap.querySelector('[data-edit-guide-title]').textContent=step.title;
+    wrap.querySelector('[data-edit-guide-description]').textContent=step.description;
+    wrap.querySelector('[data-edit-guide-points]').innerHTML=step.points.map(point=>`<li>${htmlEsc(point)}</li>`).join('');
+    const demo=wrap.querySelector('[data-edit-guide-demo]');
+    demo.hidden=!step.demo;
+    demo.innerHTML=step.demo==='hover'?'<div class="mode-guide-hover-row"><span>문서 항목.md</span><i>마우스</i></div><div class="mode-guide-mini-preview"><b>문서 미리보기</b><span>제목과 본문 내용을 열기 전에 확인합니다.</span></div>':'';
+    wrap.querySelector('[data-edit-guide-progress]').innerHTML=steps.map((_,index)=>`<span class="${index===stepIndex?'active':''}"></span>`).join('');
+    wrap.querySelector('[data-edit-guide-prev]').hidden=stepIndex===0;
+    const nextButton=wrap.querySelector('[data-edit-guide-next]');
+    nextButton.textContent='>';
+    nextButton.setAttribute('aria-label',stepIndex===steps.length-1?'확인':'다음');
+    requestAnimationFrame(position);
+  };
+  wrap.querySelector('[data-edit-guide-prev]').onclick=()=>{if(stepIndex>0){stepIndex--;renderStep()}};
+  wrap.querySelector('[data-edit-guide-next]').onclick=()=>{if(stepIndex<steps.length-1){stepIndex++;renderStep()}else close()};
+  wrap.querySelector('[data-edit-guide-skip]').onclick=close;
+  document.body.appendChild(wrap);
+  renderStep();
+  window.addEventListener('resize',position);
+  wrap.querySelector('[data-edit-guide-next]').focus();
+}
+function showFeatureGuideWelcome(force=false){
+  if(!force&&(!featureGuideEnabled||localStorage.getItem(FEATURE_GUIDE_WELCOME_KEY)==='1'))return;
+  document.querySelector('.feature-guide-welcome')?.remove();
+  const wrap=document.createElement('div');wrap.className='modal-backdrop feature-guide-welcome';
+  wrap.innerHTML=`<div class="modal-card feature-guide-welcome-card" role="dialog" aria-modal="true" aria-labelledby="feature-guide-welcome-title">
+    <span class="feature-guide-eyebrow">GUIDE</span><h3 id="feature-guide-welcome-title">고급 기능을 더 쉽게 확인하세요</h3>
+    <p>동기화 블록이나 사용자 지정 서식처럼 설명이 필요한 기능 위에 잠시 마우스를 올리면 사용법과 결과 예시가 나타납니다.</p>
+    <button class="feature-guide-welcome-demo" type="button" data-guide-welcome-demo><i>↔</i><span><b>동기화 블록</b><small>같은 ID의 내용 연결</small></span></button>
+    <label class="feature-guide-dismiss"><input type="checkbox" data-guide-never> 다시는 보지 않기</label>
+    <div class="modal-actions"><button class="tool primary" type="button" data-guide-welcome-close>확인</button></div>
+  </div>`;
+  const done=()=>{
+    localStorage.setItem(FEATURE_GUIDE_WELCOME_KEY,'1');
+    if(wrap.querySelector('[data-guide-never]').checked)setFeatureGuideEnabled(false);
+    hideFeatureGuide(true);
+    closeGuideModal(wrap);
+    if(featureGuideEnabled&&!els.home.classList.contains('hidden')&&localStorage.getItem(HOME_GUIDE_WELCOME_KEY)!=='1')scheduleModeGuideWelcome('home');
+  };
+  wrap.querySelector('[data-guide-welcome-close]').onclick=done;
+  wrap.addEventListener('click',event=>{if(event.target===wrap)done()});
+  document.body.appendChild(wrap);
+  bindFeatureGuide(wrap.querySelector('[data-guide-welcome-demo]'),'sync');
+  wrap.querySelector('[data-guide-welcome-close]').focus();
+}
+function replaySelectedGuide(target){
+  setFeatureGuideEnabled(true);
+  if(target==='feature'){localStorage.removeItem(FEATURE_GUIDE_WELCOME_KEY);showFeatureGuideWelcome(true);return}
+  const key=modeGuideKey(target);localStorage.removeItem(key);
+  if(target==='home'){setMode(state.mode,true);scheduleModeGuideWelcome('home',true);return}
+  setMode(target,false);scheduleModeGuideWelcome(target,true);
+}
+function showGuideReplayPicker(){
+  document.querySelector('.guide-replay-picker')?.remove();
+  const wrap=document.createElement('div');wrap.className='modal-backdrop guide-replay-picker';
+  wrap.innerHTML=`<div class="modal-card guide-replay-card" role="dialog" aria-modal="true" aria-labelledby="guide-replay-title">
+    <div class="guide-replay-head"><div><h3 id="guide-replay-title">다시 볼 가이드 선택</h3><p>확인하고 싶은 화면이나 기능을 선택하세요.</p></div><button type="button" data-guide-picker-close aria-label="닫기">×</button></div>
+    <div class="guide-replay-list">
+      <button type="button" data-guide-target="home"><span><b>홈 화면</b><small>공통 도구와 작업 시작 방법</small></span><i>→</i></button>
+      <button type="button" data-guide-target="edit"><span><b>편집</b><small>보기 방식, 서식 도구와 편집 영역</small></span><i>→</i></button>
+      <button type="button" data-guide-target="convert"><span><b>변환</b><small>변환 방식, 문서 선택과 결과 확인</small></span><i>→</i></button>
+      <button type="button" data-guide-target="merge"><span><b>병합</b><small>미니 프리뷰, 문서 선택과 병합 결과</small></span><i>→</i></button>
+    </div>
+  </div>`;
+  const close=()=>wrap.remove();
+  wrap.querySelector('[data-guide-picker-close]').onclick=close;
+  wrap.querySelectorAll('[data-guide-target]').forEach(button=>button.onclick=()=>{const target=button.dataset.guideTarget;close();replaySelectedGuide(target)});
+  wrap.addEventListener('click',event=>{if(event.target===wrap)close()});
+  document.body.appendChild(wrap);
+  wrap.querySelector('[data-guide-target]').focus();
+}
+function showAppSettings(){
+  document.querySelector('.edit-guide-overlay')?.remove();
+  document.querySelector('.feature-guide-welcome')?.remove();
+  document.querySelector('.app-settings-modal')?.remove();
+  const wrap=document.createElement('div');wrap.className='modal-backdrop app-settings-modal';
+  wrap.innerHTML=`<div class="modal-card app-settings-card" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
+    <h3 id="app-settings-title">설정</h3>
+    <section class="app-settings-group"><h4>가이드</h4>
+      <div class="app-settings-section"><div><strong>기능 가이드 표시</strong><p>설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-guide-enabled ${featureGuideEnabled?'checked':''}><span></span></label></div>
+      <button class="app-settings-replay" type="button" data-guide-picker><span>가이드 다시 보기</span><small>목록에서 다시 볼 가이드를 선택합니다.</small></button>
+    </section>
+    <section class="app-settings-group"><h4>단축키</h4>
+      <button class="app-settings-replay" type="button" data-shortcut-settings><span>단축키 설정</span><small>${SHORTCUT_DEFINITIONS.length}개 명령의 단축키를 확인하고 변경합니다.</small></button>
+    </section>
+    <div class="modal-actions"><button class="tool primary" type="button" data-settings-close>닫기</button></div>
+  </div>`;
+  wrap.querySelector('[data-guide-enabled]').onchange=event=>setFeatureGuideEnabled(event.target.checked);
+  wrap.querySelector('[data-guide-picker]').onclick=()=>{closeGuideModal(wrap);showGuideReplayPicker()};
+  wrap.querySelector('[data-shortcut-settings]').onclick=()=>{closeGuideModal(wrap);showShortcutSettings()};
+  wrap.querySelector('[data-settings-close]').onclick=()=>closeGuideModal(wrap);
+  wrap.addEventListener('click',event=>{if(event.target===wrap)closeGuideModal(wrap)});
+  document.body.appendChild(wrap);
+}
+function showShortcutSettings(){
+  document.querySelector('.shortcut-settings-modal')?.remove();
+  const wrap=document.createElement('div');wrap.className='modal-backdrop shortcut-settings-modal';
+  let activeShortcutGroup='navigation';
+  const shortcutRow=item=>{const changed=shortcutSettings[item.id]!==item.defaultKey;return`<div class="shortcut-setting-row${changed?' is-custom':''}" data-shortcut-id="${item.id}"><div><strong>${htmlEsc(item.name)}</strong><small>${htmlEsc(item.description)}</small></div><button class="shortcut-key-button" type="button" data-shortcut-record="${item.id}">${htmlEsc(shortcutSettings[item.id])}${changed?'<span>변경됨</span>':''}</button><button class="shortcut-reset-one" type="button" data-shortcut-reset="${item.id}" ${changed?'':'disabled'}>기본값</button></div>`};
+  const rows=()=>{const group=SHORTCUT_GROUPS.find(item=>item.id===activeShortcutGroup)||SHORTCUT_GROUPS[0],items=group.items.map(id=>SHORTCUT_DEFINITIONS.find(item=>item.id===id)).filter(Boolean);return`<div class="shortcut-group-tabs" role="tablist" aria-label="단축키 분류">${SHORTCUT_GROUPS.map(item=>`<button type="button" role="tab" aria-selected="${item.id===group.id}" class="${item.id===group.id?'active':''}" data-shortcut-group-tab="${item.id}">${htmlEsc(item.name)}</button>`).join('')}</div><div class="shortcut-setting-group-body">${items.map(shortcutRow).join('')}</div>`};
+  wrap.innerHTML=`<div class="modal-card shortcut-settings-card" role="dialog" aria-modal="true" aria-labelledby="shortcut-settings-title">
+    <div class="shortcut-settings-head"><div><h3 id="shortcut-settings-title">단축키 설정</h3><p>변경할 단축키를 선택한 뒤 새 키 조합을 누르세요.</p></div><button type="button" data-shortcut-close aria-label="닫기">×</button></div>
+    <div class="shortcut-settings-list">${rows()}</div>
+    <div class="shortcut-settings-footer"><button class="tool" type="button" data-shortcut-reset-all>전체 초기화</button><button class="tool primary" type="button" data-shortcut-done>완료</button></div>
+  </div>`;
+  let recordingId='',recordingButton=null;
+  const paint=()=>{
+    const list=wrap.querySelector('.shortcut-settings-list');list.innerHTML=rows();bindRows();
+  };
+  const stopRecording=()=>{recordingId='';recordingButton=null;window.removeEventListener('keydown',recordKey,true)};
+  const recordKey=event=>{
+    if(!recordingId)return;
+    event.preventDefault();event.stopImmediatePropagation();
+    if(event.key==='Escape'){recordingButton.textContent=shortcutSettings[recordingId];stopRecording();return}
+    const held=[];if(event.ctrlKey||event.metaKey)held.push('Ctrl');if(event.altKey)held.push('Alt');if(event.shiftKey)held.push('Shift');
+    const modifierOnly=['Control','Meta','Alt','Shift'].includes(event.key);
+    if(modifierOnly){recordingButton.textContent=held.length?`${held.join(' + ')} + …`:'키 조합을 누르세요';return}
+    const value=shortcutFromEvent(event);if(!value)return;
+    recordingButton.textContent=value.replaceAll('+',' + ');
+    if(!event.ctrlKey&&!event.metaKey&&!event.altKey){recordingButton.textContent='Ctrl·Alt와 함께 입력';return}
+    const conflict=SHORTCUT_DEFINITIONS.find(item=>item.id!==recordingId&&shortcutSettings[item.id]===value);
+    if(conflict){recordingButton.textContent=`${conflict.name}와 중복`;recordingButton.classList.add('is-error');return}
+    shortcutSettings[recordingId]=value;saveShortcutSettings();stopRecording();paint();
+  };
+  const bindRows=()=>{
+    wrap.querySelectorAll('[data-shortcut-group-tab]').forEach(button=>button.onclick=()=>{activeShortcutGroup=button.dataset.shortcutGroupTab;paint()});
+    wrap.querySelectorAll('[data-shortcut-record]').forEach(button=>button.onclick=()=>{
+      stopRecording();recordingId=button.dataset.shortcutRecord;recordingButton=button;button.textContent='키 조합을 누르세요';button.classList.remove('is-error');button.classList.add('is-recording');window.addEventListener('keydown',recordKey,true);button.focus();
+    });
+    wrap.querySelectorAll('[data-shortcut-reset]').forEach(button=>button.onclick=()=>{
+      const id=button.dataset.shortcutReset,item=SHORTCUT_DEFINITIONS.find(definition=>definition.id===id),oldValue=shortcutSettings[id];
+      const conflict=SHORTCUT_DEFINITIONS.find(definition=>definition.id!==id&&shortcutSettings[definition.id]===item.defaultKey);
+      if(conflict)shortcutSettings[conflict.id]=oldValue;
+      shortcutSettings[id]=item.defaultKey;saveShortcutSettings();paint();
+    });
+  };
+  const close=()=>{stopRecording();wrap.remove()};
+  bindRows();
+  wrap.querySelector('[data-shortcut-reset-all]').onclick=()=>{shortcutSettings=Object.fromEntries(SHORTCUT_DEFINITIONS.map(item=>[item.id,item.defaultKey]));saveShortcutSettings();paint()};
+  wrap.querySelector('[data-shortcut-done]').onclick=close;
+  wrap.querySelector('[data-shortcut-close]').onclick=close;
+  wrap.addEventListener('click',event=>{if(event.target===wrap)close()});
+  document.body.appendChild(wrap);
+  wrap.querySelector('[data-shortcut-done]').focus();
+}
+bindFeatureGuide($('ins-zz-toc'),'toc');
+bindFeatureGuide($('ins-zz-sync'),'sync');
+bindFeatureGuide($('ins-doc-embed'),'docEmbed');
+bindFeatureGuide($('ins-obsidian-callout'),'callout');
+bindFeatureGuide($('ins-obsidian-wikilink'),'wikilink');
+bindFeatureGuide($('ins-obsidian-embed'),'fileEmbed');
+bindFeatureGuide($('ins-obsidian-highlight'),'highlight');
+bindFeatureGuide($('custom-format-toggle'),'customFormat');
+$('document-settings').onclick=showAppSettings;
+window.addEventListener('resize',()=>{if(featureGuidePopover&&!featureGuidePopover.hidden)hideFeatureGuide(true)});
 function previewRangeContent(fallback){
   const range=previewRange();
   if(!range)return null;
@@ -11240,7 +11720,8 @@ function insertFormControl(){
       <div class="form-option-list">${lastFormInsert.options.map(optionRow).join('')}</div>
       <button class="form-option-add" type="button">+ 옵션 추가</button>
     </div>
-    <p class="custom-font-copy">미리보기에서 선택·입력할 수 있으며, 현재 값은 MD의 HTML에 함께 저장됩니다.</p>`,dialog=>{
+    <div class="form-control-preview" data-form-preview aria-live="polite"><span>추가될 모습</span><div data-form-preview-body></div></div>
+    <p class="form-control-note">삽입한 뒤에도 미리보기 화면에서 선택하거나 내용을 입력할 수 있습니다.</p>`,dialog=>{
     const type=dialog.querySelector('#zz-form-type').value;
     const rawLabel=dialog.querySelector('#zz-form-label').value.trim()||'항목';
     const options=[...dialog.querySelectorAll('.form-option-row')].map((row,index)=>({
@@ -11286,18 +11767,38 @@ function insertFormControl(){
   const typeField=panel.querySelector('#zz-form-type');
   const optionEditor=panel.querySelector('.form-option-editor');
   const optionList=panel.querySelector('.form-option-list');
+  const renderFormPreview=()=>{
+    const type=typeField.value;
+    const label=htmlEsc(panel.querySelector('#zz-form-label').value.trim()||'항목');
+    const options=[...optionList.querySelectorAll('.form-option-row')].map((row,index)=>({
+      label:htmlEsc(row.querySelector('.zz-form-option-label').value.trim()||`선택 ${index+1}`),
+      selected:row.querySelector('input[type="radio"]').checked
+    }));
+    const optionHtml=options.map(option=>`<option${option.selected?' selected':''}>${option.label}</option>`).join('');
+    const examples={
+      checkbox:`<label class="zz-form-control"><input type="checkbox"><span>${label}</span></label>`,
+      radio:`<label class="zz-form-control"><input type="radio"><span>${label}</span></label>`,
+      select:`<label class="zz-form-control"><span>${label}</span><select>${optionHtml}</select></label>`,
+      text:`<label class="zz-form-control"><span>${label}</span><input type="text" placeholder="입력"></label>`,
+      button:`<button class="zz-form-control" type="button"><span>${label}</span></button>`
+    };
+    panel.querySelector('[data-form-preview-body]').innerHTML=examples[type];
+  };
   const syncOptionIndexes=()=>{
     [...optionList.querySelectorAll('.form-option-row')].forEach((row,index)=>{
       row.querySelector('input[type="radio"]').value=index;
     });
   };
-  typeField?.addEventListener('change',()=>{optionEditor.hidden=typeField.value!=='select'});
+  typeField?.addEventListener('change',()=>{optionEditor.hidden=typeField.value!=='select';renderFormPreview()});
+  panel.addEventListener('input',renderFormPreview);
+  panel.addEventListener('change',renderFormPreview);
   panel.addEventListener('click',event=>{
     if(event.target.closest('.form-option-add')){
       const index=optionList.children.length;
       optionList.insertAdjacentHTML('beforeend',optionRow({label:`선택 ${index+1}`,value:`option-${index+1}`},index));
       syncOptionIndexes();
       optionList.lastElementChild?.querySelector('.zz-form-option-label')?.focus();
+      renderFormPreview();
       return;
     }
     const remove=event.target.closest('.form-option-remove');
@@ -11312,7 +11813,9 @@ function insertFormControl(){
     remove.closest('.form-option-row').remove();
     syncOptionIndexes();
     if(wasChecked)optionList.querySelector('input[type="radio"]').checked=true;
+    renderFormPreview();
   });
+  renderFormPreview();
 }
 async function insertDocumentEmbed(){
   const context=captureInsertionContext();
@@ -12147,28 +12650,24 @@ for(const list of [els.convertList,els.mergeList]){
 }
 document.addEventListener('keydown',e=>{
   if(e.isComposing||e.defaultPrevented)return;
-  const modifier=e.ctrlKey||e.metaKey,key=e.key.toLowerCase();
-  if(modifier&&e.altKey&&key==='s'){
+  const modifier=e.ctrlKey||e.metaKey,key=e.key.toLowerCase(),command=shortcutCommand(e);
+  if(command==='customFormat'){
     e.preventDefault();e.stopImmediatePropagation();if(e.repeat||document.querySelector('.modal-backdrop'))return;
     if(state.mode!=='edit')setMode('edit');rememberPreviewRange();toggleCustomFormatPanel(true);return;
   }
-  if(e.altKey)return;
+  if(e.altKey&&!command)return;
   const target=e.target,dialog=target.closest?.('.modal-backdrop,[role="dialog"],.find-replace-panel');
   const auxiliary=target!==els.editor&&!els.preview.contains(target)&&target.closest?.('textarea,input:not([type="checkbox"]),[contenteditable="true"]');
   const modal=document.querySelector('.modal-backdrop');
   const consume=()=>{e.preventDefault();e.stopImmediatePropagation()};
-  if(modifier&&['f1','f2','f3'].includes(key)&&!e.shiftKey){
+  if(['modeConvert','modeEdit','modeMerge'].includes(command)){
     consume();if(modal)return;
     if(state.mode==='edit'){if(state.editingPreview||previewSyncTimer)syncFromPreview();else if(state.active>=0)state.files[state.active].text=els.editor.value}
     closeAllPanels();clearPreviewTransientState();hideMergePreview(true);closeSourceSyntaxPopover();
-    setMode({f1:'convert',f2:'edit',f3:'merge'}[key]);return;
+    setMode({modeConvert:'convert',modeEdit:'edit',modeMerge:'merge'}[command]);return;
   }
   if(dialog||auxiliary||modal){
-    // Leave text-field undo/select-all native, but stop legacy document handlers.
-    if(modifier&&['z','y','a','b','i','u','s','o','p','k','h','f'].includes(key)){
-      e.stopImmediatePropagation();
-      if(['s','o','p','k','h'].includes(key))e.preventDefault();
-    }
+    if(command){e.stopImmediatePropagation();e.preventDefault()}
     return;
   }
   const list=state.mode==='convert'?els.convertList:state.mode==='merge'?els.mergeList:null;
@@ -12177,21 +12676,21 @@ document.addEventListener('keydown',e=>{
     list.querySelectorAll('input[type="checkbox"]').forEach(input=>input.checked=true);
     if(state.mode==='merge'){updateMergeToggleAll();updateMergePreview()}else updateConvertPreview();return;
   }
-  if(!modifier)return;
-  if(key==='s'){consume();if(e.repeat)return;if(e.shiftKey&&state.mode==='edit')shortcutSaveAs();else shortcutSaveResult();return}
-  if(key==='o'){consume();if(!e.repeat)pickSidebarUpload();return}
-  if(key==='enter'&&list){consume();if(!e.repeat)(state.mode==='merge'?mergeSelected():runSelectedConvert());return}
-  if(key==='f'||key==='h'){
-    consume();showFindReplaceDialog();if(key==='h')document.querySelector('[data-replace-field]')?.focus();return;
+  if(!command)return;
+  if(command==='save'||command==='saveAs'){consume();if(e.repeat)return;command==='saveAs'&&state.mode==='edit'?shortcutSaveAs():shortcutSaveResult();return}
+  if(command==='open'){consume();if(!e.repeat)pickSidebarUpload();return}
+  if(command==='runSelection'&&list){consume();if(!e.repeat)(state.mode==='merge'?mergeSelected():runSelectedConvert());return}
+  if(command==='find'||command==='replace'){
+    consume();showFindReplaceDialog();if(command==='replace')document.querySelector('[data-replace-field]')?.focus();return;
   }
-  if(key==='p'){consume();if(!e.repeat)printDocument(undefined,activeFindPreview());return}
+  if(command==='print'){consume();if(!e.repeat)printDocument(undefined,activeFindPreview());return}
   if(state.mode!=='edit')return;
-  if(key==='z'||key==='y'){consume();pushHistory(true);key==='y'||e.shiftKey?redoEdit():undoEdit();return}
-  const button={b:'fmt-bold',i:'fmt-italic',u:'fmt-underline',k:'fmt-link'}[key];
+  if(command==='undo'||command==='redo'){consume();pushHistory(true);command==='redo'?redoEdit():undoEdit();return}
+  const button={bold:'fmt-bold',italic:'fmt-italic',underline:'fmt-underline',link:'fmt-link'}[command];
   if(button){
     consume();rememberPreviewRange();
     if(target===els.editor){state.savedPreviewRange=null;state.savedSelection={start:els.editor.selectionStart,end:els.editor.selectionEnd}}
-    if(key==='k'){
+    if(command==='link'){
       const range=previewRange(),node=range&&(range.startContainer.nodeType===1?range.startContainer:range.startContainer.parentElement),link=node?.closest('a');
       if(link&&els.preview.contains(link)){editPreviewLink(link);return}
     }
@@ -12284,4 +12783,5 @@ setSidebarView('files');
 setLineNumbers($('enable-line-numbers').checked);
 setSwapPanes($('enable-swap-panes').checked);
 applyTheme(state.theme);syncCustomThemePanel();setMode('convert',true);renderAll();updateHomeConvert();state.history=[els.editor.value];state.savedText=els.editor.value;renderAllSwatches();updateUndoRedoButtons();updateLineNumbers();
-setTimeout(restoreWorkspaceSession,500);
+refreshShortcutHints();
+setTimeout(async()=>{await restoreWorkspaceSession();showFeatureGuideWelcome()},500);
