@@ -7046,7 +7046,9 @@ function previousColorHostAtCaret(range){
   return explicitColorHost(previous);
 }
 function inheritPreviewColorBeforeInput(e){
-  if(!['insertText','insertCompositionText','insertReplacementText'].includes(e.inputType))return;
+  // Never move the caret while an IME owns the composition range. Rehoming
+  // insertCompositionText cancels Korean input after its first jamo.
+  if(!['insertText','insertReplacementText'].includes(e.inputType))return;
   const selection=window.getSelection();
   if(!selection?.rangeCount)return;
   const range=selection.getRangeAt(0);
@@ -7192,6 +7194,8 @@ els.preview.addEventListener('paste',e=>{
   state.savedPreviewRange=range.cloneRange();
   insertPreviewHtml(`<a href="${htmlEsc(pasted)}">${htmlEsc(text)}</a>`);
 });
+let previewCompositionActive=false;
+els.preview.addEventListener('compositionstart',()=>{previewCompositionActive=true});
 els.preview.addEventListener('input',e=>{
   if(e.target.closest?.('.zz-source-chip-editing')){
     rememberPreviewRange();
@@ -7207,12 +7211,18 @@ els.preview.addEventListener('input',e=>{
   normalizePreviewCodeCaret();
   const editedCode=previewCodeAtSelection();
   rememberPreviewRange();
+  // Preview serialization and live Markdown conversion can replace/reparent
+  // the active text node. Wait until the browser finishes the IME composition.
+  if(e.isComposing||previewCompositionActive)return;
   scheduleSyncFromPreview();
   if(editedCode&&!e.isComposing)scheduleEditableCodeHighlight(editedCode);
   schedulePreviewMarkdownApply(e.target);
 });
 els.preview.addEventListener('compositionend',e=>{
+  previewCompositionActive=false;
   if(e.target.closest?.('.zz-source-chip-editing'))return;
+  rememberPreviewRange();
+  scheduleSyncFromPreview();
   scheduleEditableCodeHighlight(previewCodeAtSelection());
   schedulePreviewMarkdownApply(e.target);
 });
