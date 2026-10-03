@@ -4068,16 +4068,17 @@ function duplicateSidebarFile(index){
   syncFileBeforeAction(index);
   const originalName=normalizedSidebarFileName(file.name||'새 문서.md')||'새 문서.md';
   const extension=originalName.match(/\.(?:md|markdown)$/i)?.[0]||'.md';
-  const stem=originalName.slice(0,-extension.length).replace(/\s+\uBCF5\uC0AC\uBCF8(?:\s+\(\d+\))?$/,'')||'새 문서';
+  const stem=originalName.slice(0,-extension.length).replace(/\s+(?:\uBCF5\uC0AC\uBCF8|copy)(?:\s+\(\d+\))?$/i,'')||(uiLanguage==='en'?'New document':'새 문서');
   const dir=file.dir||'';
   const pathFor=name=>dir?`${dir}/${name}`:name;
   const pathExists=path=>{
     const normalized=String(path).replace(/\\/g,'/').toLowerCase();
     return state.files.some(entry=>String(entry.path||entry.name||'').replace(/\\/g,'/').toLowerCase()===normalized);
   };
-  let name=`${stem} 복사본${extension}`;
+  const copyLabel=uiLanguage==='en'?'copy':'복사본';
+  let name=`${stem} ${copyLabel}${extension}`;
   let copyNumber=2;
-  while(pathExists(pathFor(name)))name=`${stem} 복사본 (${copyNumber++})${extension}`;
+  while(pathExists(pathFor(name)))name=`${stem} ${copyLabel} (${copyNumber++})${extension}`;
   const copy={
     ...file,
     name,
@@ -4364,7 +4365,8 @@ function updateConvertPreview(){
   const job=++convertPreviewJob;
   setupLazyDocumentPreview(els.convertPreview,files,'convert',()=>job===convertPreviewJob);
 }
-function renderConvertList(skipPreview=false){if(!els.convertList)return;if(!state.files.length){els.convertList.innerHTML='';if(!skipPreview)updateConvertPreview();return}els.convertList.innerHTML='';state.files.forEach((file,i)=>{const row=document.createElement('label');row.className='convert-item';row.dataset.index=i;const status=file.convertedFromPdf?'PDF → MD 준비됨':file.convertedFromCode?`${file.codeLanguage||'text'} 코드블록 → MD 준비됨`:'MD → PDF 가능';row.innerHTML=`<input type="checkbox" value="${i}" checked><span><span class="convert-name">${htmlEsc(file.displayName||file.name)}</span><div class="convert-meta">${status} · ${htmlEsc(file.path)}</div></span>`;row.querySelector('input').addEventListener('change',updateConvertPreview);row.addEventListener('mouseenter',showMergePreview);row.addEventListener('mouseleave',scheduleHideMergePreview);row.ondblclick=()=>openFile(i);els.convertList.appendChild(row)});if(!skipPreview)updateConvertPreview()}
+function conversionDirectionFor(file){return /\.pdf$/i.test(file?.originalName||file?.name||'')||file?.convertedFromPdf?'pdf-to-md':'md-to-pdf'}
+function renderConvertList(skipPreview=false){if(!els.convertList)return;if(!state.files.length){els.convertList.innerHTML='';if(!skipPreview)updateConvertPreview();return}els.convertList.innerHTML='';state.files.forEach((file,i)=>{const row=document.createElement('label');row.className='convert-item';row.dataset.index=i;const direction=conversionDirectionFor(file);const status=direction==='pdf-to-md'?'PDF → MD 자동 선택':file.convertedFromCode?`${file.codeLanguage||'text'} 코드블록 → MD 준비됨`:'MD → PDF 자동 선택';row.innerHTML=`<input type="checkbox" value="${i}" checked><span><span class="convert-name">${htmlEsc(file.displayName||file.name)}</span><div class="convert-meta">${status} · ${htmlEsc(file.path)}</div></span>`;row.querySelector('input').addEventListener('change',updateConvertPreview);row.addEventListener('mouseenter',showMergePreview);row.addEventListener('mouseleave',scheduleHideMergePreview);row.ondblclick=()=>openFile(i);els.convertList.appendChild(row)});if(!skipPreview)updateConvertPreview()}
 function renderHomeMergeList(){if(!els.homeMergeList)return;const checkedBefore=new Set([...els.homeMergeList.querySelectorAll('input:checked')].map(i=>i.value));const hadChecks=els.homeMergeList.querySelectorAll('input').length>0;els.homeMergeList.innerHTML='';if(state.homeMergeNotice){const note=document.createElement('div');note.className='muted';note.textContent=state.homeMergeNotice;els.homeMergeList.appendChild(note)}if(!state.files.length){const empty=document.createElement('div');empty.className='muted home-merge-empty';empty.textContent='왼쪽에서 MD 파일을 추가하면 여기에 표시됩니다.';els.homeMergeList.appendChild(empty);return}state.files.forEach((file,i)=>{const row=document.createElement('label');row.className='home-merge-item';row.innerHTML=`<input type="checkbox" ${!hadChecks||checkedBefore.has(String(i))?'checked':''} value="${i}"><span>${htmlEsc(file.displayName||file.name)}</span>`;els.homeMergeList.appendChild(row)})}
 function renderAll(){const activeText=state.active>=0?(state.files[state.active]?.text||''):els.editor.value;if(state.active>=0&&els.editor.value!==activeText)els.editor.value=activeText;renderList();renderMergeList(true);renderConvertList(true);renderHomeMergeList();if(state.mode==='edit')renderMarkdown(activeText);updateHomeConvert();updateLineNumbers();const activePanel=document.querySelector('.panel.active');if(activePanel?.id==='panel-convert')scheduleModePreview('convert');else if(activePanel?.id==='panel-merge')scheduleModePreview('merge')}
 function updateHomeImageSummary(file){
@@ -4556,8 +4558,9 @@ function setSwapPanes(on){
   els.editSplit.classList.toggle('edit-swapped',!on);
 }
 function nextUntitledName(){
-  let n=1,name='새 문서.md';
-  while(state.files.some(f=>f.path===name)){n++;name=`새 문서 ${n}.md`}
+  const base=uiLanguage==='en'?'New document':'새 문서';
+  let n=1,name=`${base}.md`;
+  while(state.files.some(f=>f.path===name)){n++;name=`${base} ${n}.md`}
   return name;
 }
 function createDraftFromEditor(){
@@ -4601,6 +4604,7 @@ function setMode(mode,showHome=false){
     findReplaceButton.title=findOnly?'찾기':'찾기 및 바꾸기';
     findReplaceButton.setAttribute('aria-label',findReplaceButton.title);
   }
+  $('insert-file-toggle').hidden=showHome||mode!=='edit';
   if(showHome||previousMode!==mode){
     document.querySelector('.find-replace-panel [data-find-action="close"]')?.click();
     clearPreviewFindHighlights();
@@ -4609,9 +4613,12 @@ function setMode(mode,showHome=false){
   }
   els.app.classList.toggle('mode-merge',!showHome&&mode==='merge');
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',!showHome&&b.dataset.mode===mode));
+  $('mobile-home')?.classList.toggle('active',showHome);
   document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active',!showHome&&p.id===`panel-${mode}`));
   document.querySelectorAll('.mode-tools').forEach(g=>g.hidden=showHome||g.dataset.tools!==mode);
   $('format-tools').hidden=showHome||mode!=='edit';
+  $('ribbon-toggle').hidden=showHome||mode!=='edit';
+  $('mobile-format-toggle').hidden=showHome||mode!=='edit';
   els.home.classList.toggle('hidden',!showHome);
   if(!showHome){
     if(mode==='convert'&&els.convertList.querySelectorAll('.convert-item').length!==state.files.length)renderConvertList(true);
@@ -6685,9 +6692,9 @@ function removeSelectedConvert(){const idx=selectedConvertIndexes();if(!requireS
 const preparedPdfDocuments=new WeakMap();
 async function runSelectedConvert(){
   const idx=selectedConvertIndexes();if(!requireSelection(idx))return;
-  const files=idx.map(i=>state.files[i]),mdFiles=files.filter(f=>!f.convertedFromPdf);
+  const files=idx.map(i=>state.files[i]),mdFiles=files.filter(f=>conversionDirectionFor(f)==='md-to-pdf');
   if(mdFiles.length>1){showInfoNotice('PDF 변환','MD → PDF는 한 번에 문서 하나를 선택해 주세요.');return}
-  files.filter(f=>f.convertedFromPdf).forEach(f=>download((f.name||'converted.md').replace(/\.pdf$/i,'.md'),f.text||''));
+  files.filter(f=>conversionDirectionFor(f)==='pdf-to-md').forEach(f=>download((f.name||'converted.md').replace(/\.pdf$/i,'.md'),f.text||''));
   if(mdFiles.length){
     const file=mdFiles[0];state.active=state.files.indexOf(file);els.editor.value=file.text||'';renderMarkdown(els.editor.value);
     if(await printDocument((file.name||'converted-document').replace(/\.(md|markdown)$/i,'.pdf'),els.preview))preparedPdfDocuments.set(file,file.text);
@@ -6794,6 +6801,8 @@ document.addEventListener('drop',async e=>{
   e.preventDefault();e.stopImmediatePropagation();
   sidebarDragItem=null;clearSidebarDropMark();els.app.classList.remove('drag');
   const target=e.target,pathKey=target.closest('[data-upload-folder]')?.dataset.uploadFolder||'업로드된 파일';
+  const activeWorkPanel=target.closest('#panel-convert.panel.active,#panel-merge.panel.active');
+  if(activeWorkPanel&&!target.closest('.source-pane'))return;
   try{
   const files=await droppedSidebarFiles(e.dataTransfer,els.sidebar.contains(target)?pathKey:'업로드된 파일');
   if(canInsertCodeIntoActiveDocument()&&files.some(file=>codeLanguageFor(file.name))&&els.preview.contains(e.target)){
@@ -6804,6 +6813,32 @@ document.addEventListener('drop',async e=>{
   }catch(error){console.error('File drop failed',error);showInfoNotice('드래그 업로드 실패',`파일을 읽지 못했습니다. ${error?.message||'파일이 이 컴퓨터에 다운로드되어 있는지 확인해 주세요.'}`)}
 },true);
 els.sidebar.addEventListener('contextmenu',showSidebarBlankMenu);
+let sidebarLongPressTimer=0,sidebarLongPressTarget=null,sidebarLongPressX=0,sidebarLongPressY=0,suppressSidebarTap=false;
+const cancelSidebarLongPress=()=>{clearTimeout(sidebarLongPressTimer);sidebarLongPressTimer=0;sidebarLongPressTarget=null};
+els.list.addEventListener('pointerdown',event=>{
+  if(event.pointerType!=='touch')return;
+  const target=event.target.closest('.file-item,.folder-title');
+  if(!target)return;
+  cancelSidebarLongPress();
+  sidebarLongPressTarget=target;sidebarLongPressX=event.clientX;sidebarLongPressY=event.clientY;
+  sidebarLongPressTimer=setTimeout(()=>{
+    if(!sidebarLongPressTarget)return;
+    suppressSidebarTap=true;
+    setTimeout(()=>{suppressSidebarTap=false},800);
+    sidebarLongPressTarget.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:sidebarLongPressX,clientY:sidebarLongPressY,button:2}));
+    navigator.vibrate?.(20);
+    cancelSidebarLongPress();
+  },550);
+},{passive:true});
+els.list.addEventListener('pointermove',event=>{
+  if(!sidebarLongPressTarget)return;
+  if(Math.hypot(event.clientX-sidebarLongPressX,event.clientY-sidebarLongPressY)>10)cancelSidebarLongPress();
+},{passive:true});
+['pointerup','pointercancel','pointerleave'].forEach(type=>els.list.addEventListener(type,cancelSidebarLongPress,{passive:true}));
+els.list.addEventListener('click',event=>{
+  if(!suppressSidebarTap)return;
+  suppressSidebarTap=false;event.preventDefault();event.stopImmediatePropagation();
+},true);
 els.list.addEventListener('dragover',event=>{
   if(!sidebarDragItem||![...event.dataTransfer.types].includes('application/x-zz-sidebar'))return;event.preventDefault();event.stopPropagation();event.dataTransfer.dropEffect='move';
   clearSidebarDropMark();const destination=sidebarDropDestination(event);destination.mark.dataset.sidebarDrop=destination.position;
@@ -6818,6 +6853,7 @@ els.fileInput.onchange=e=>addFiles(e.target.files);
 els.imageInput.onchange=e=>{if(state.insertingImage){insertImageFiles(e.target.files);state.insertingImage=false}else addFiles(e.target.files)};
 $('home-convert-upload').onclick=()=>{state.stayHomeAfterConvert=true;els.fileInput.click()};
 $('pdf-drop').onclick=()=>els.pdfInput.click();
+$('merge-drop').onclick=()=>els.fileInput.click();
 els.pdfInput.onchange=e=>addFiles(e.target.files);
 document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>setMode(b.dataset.mode,false));
 document.querySelectorAll('.home [data-mode]').forEach(b=>b.onclick=e=>{
@@ -7217,8 +7253,6 @@ document.addEventListener('keydown',e=>{
   if(shortcutMatches(e,'undo')){e.preventDefault();undoEdit()}
   else if(shortcutMatches(e,'redo')){e.preventDefault();redoEdit()}
 });
-$('view-pdf-to-md').onclick=()=>els.pdfInput.click();
-$('view-md-to-pdf').onclick=runSelectedConvert;
 $('view-both').onclick=()=>setEditView('both');
 $('view-md-only').onclick=()=>setEditView('md');
 $('view-preview-only').onclick=()=>setEditView('preview');
@@ -7421,6 +7455,7 @@ function toggleEmphasis(kind){
   if(sel.placeholder)els.editor.setSelectionRange(s+mark.length,s+mark.length+core.length);
 }
 function rememberPreviewRange(){
+  if(document.activeElement===els.editor)return;
   const sel=window.getSelection();
   if(!sel||!sel.rangeCount)return;
   const range=sel.getRangeAt(0);
@@ -7478,6 +7513,7 @@ function rememberPreviewPoint(e){
   requestAnimationFrame(()=>{rememberPreviewRange();updatePreviewFontSize()});
 }
 function previewRange(){
+  if(state.lastInsertionSurface!=='preview')return null;
   const selection=window.getSelection();
   if(selection?.rangeCount){
     const live=selection.getRangeAt(0);
@@ -8349,7 +8385,7 @@ function requestCustomFormatName(title,value='',label='이름'){
 function customFormatEditor(preset=null,source=null){
   const store=loadCustomFormats();
   const initial={
-    name:preset?.name||'새 서식',
+    name:preset?.name||(uiLanguage==='en'?'New style':'새 서식'),
     folderId:preset?.folderId||'',
     previewText:preset?.previewText||source?.previewText||'미리보기 텍스트',
     fields:preset?.fields||(source?CUSTOM_FORMAT_FIELDS.filter(field=>source.available[field]):['blockTag','fontSize','color']),
@@ -9933,7 +9969,9 @@ function showMathDialog(initialLatex='',initialDisplay='inline'){
     </div>`;
     let mode=initialDisplay==='block'?'block':'inline';
     const host=wrap.querySelector('[data-math-field-wrap]');
+    const MathfieldElementClass=window.MathfieldElement||customElements.get('math-field');
     const useMathLive=!!customElements.get('math-field');
+    if(useMathLive&&MathfieldElementClass)MathfieldElementClass.locale=document.documentElement.lang==='en'?'en':'ko';
     const field=document.createElement(useMathLive?'math-field':'textarea');
     if(!useMathLive)field.className='math-latex-input';
     field.value=initialLatex;
@@ -10115,8 +10153,9 @@ document.addEventListener('keydown',event=>{
 function tableInsertHtml(rows=2,cols=3){
   const safeRows=Math.max(1,Math.min(100,Number(rows)||2));
   const safeCols=Math.max(1,Math.min(100,Number(cols)||3));
-  const headings=Array.from({length:safeCols},(_,i)=>`<th>제목 ${i+1}</th>`).join('');
-  const bodyRows=Array.from({length:Math.max(0,safeRows-1)},()=>`<tr>${'<td>내용</td>'.repeat(safeCols)}</tr>`).join('');
+  const isEnglish=document.documentElement.lang==='en';
+  const headings=Array.from({length:safeCols},(_,i)=>`<th>${isEnglish?'Heading':'제목'} ${i+1}</th>`).join('');
+  const bodyRows=Array.from({length:Math.max(0,safeRows-1)},()=>`<tr>${`<td>${isEnglish?'Content':'내용'}</td>`.repeat(safeCols)}</tr>`).join('');
   return `<table><thead><tr>${headings}</tr></thead>${bodyRows?`<tbody>${bodyRows}</tbody>`:''}</table><p><br></p>`;
 }
 function insertPreviewTable(rows=2,cols=3){
@@ -10416,9 +10455,10 @@ function insertRequestedTable(rows,cols){
   const safeCols=Math.max(1,Math.min(100,Number(cols)||3));
   closeAllPanels();
   if(insertPreviewTable(safeRows,safeCols))return;
-  const header=`| ${Array.from({length:safeCols},(_,i)=>`제목 ${i+1}`).join(' | ')} |`;
+  const isEnglish=document.documentElement.lang==='en';
+  const header=`| ${Array.from({length:safeCols},(_,i)=>`${isEnglish?'Heading':'제목'} ${i+1}`).join(' | ')} |`;
   const divider=`| ${Array(safeCols).fill('---').join(' | ')} |`;
-  const body=Array.from({length:Math.max(0,safeRows-1)},()=>`| ${Array(safeCols).fill('내용').join(' | ')} |`).join('\n');
+  const body=Array.from({length:Math.max(0,safeRows-1)},()=>`| ${Array(safeCols).fill(isEnglish?'Content':'내용').join(' | ')} |`).join('\n');
   insertBlock([header,divider,body].filter(Boolean).join('\n'));
 }
 previewTableSize();
@@ -10671,7 +10711,8 @@ function showOptionPreview(label,id){
   if(!example)return;
   clearTimeout(optionPreviewTimer);clearTimeout(optionPreviewCloseTimer);
   optionPreviewTimer=setTimeout(()=>{
-    optionPreview.innerHTML=`<strong>${example.title}</strong><div>${example.body}</div>`;
+    optionPreview.innerHTML=`<div class="option-example-head"><strong>${example.title}</strong><button type="button" aria-label="가이드 닫기">×</button></div><div>${example.body}</div>`;
+    optionPreview.querySelector('.option-example-head button').onclick=event=>{event.stopPropagation();hideOptionPreview(true)};
     optionPreview.hidden=false;
     const rect=label.getBoundingClientRect(),panelRect=$('ac-panel').getBoundingClientRect(),width=Math.min(390,innerWidth-16),gap=12;
     const groups=[...$('ac-panel').querySelectorAll('.ac-group')],isLeft=groups.indexOf(label.closest('.ac-group'))===0;
@@ -10693,6 +10734,7 @@ Object.keys(optionPreviewExamples).forEach(id=>{
   label.addEventListener('mouseleave',()=>hideOptionPreview());
   label.addEventListener('focusin',()=>showOptionPreview(label,id));
   label.addEventListener('focusout',event=>{if(!label.contains(event.relatedTarget))hideOptionPreview()});
+  label.addEventListener('click',()=>{if(window.matchMedia('(hover:none)').matches)showOptionPreview(label,id)});
 });
 $('autocorrect-toggle').onclick=e=>{
   e.stopPropagation();
@@ -10969,7 +11011,8 @@ function showFeatureGuide(target,key){
   const guide=FEATURE_GUIDES[key];if(!guide)return;
   clearTimeout(featureGuideCloseTimer);
   const popover=ensureFeatureGuidePopover();
-  popover.innerHTML=`<div class="feature-guide-popover-head"><strong>${htmlEsc(guide.title)}</strong><span>기능 가이드</span></div><p>${htmlEsc(guide.description)}</p>${guide.render()}`;
+  popover.innerHTML=`<div class="feature-guide-popover-head"><strong>${htmlEsc(guide.title)}</strong><span>기능 가이드</span><button class="feature-guide-popover-close" type="button" aria-label="가이드 닫기">×</button></div><p>${htmlEsc(guide.description)}</p>${guide.render()}`;
+  popover.querySelector('.feature-guide-popover-close').onclick=()=>hideFeatureGuide(true);
   popover.hidden=false;
   popover.dataset.guideKey=key;
   positionFeatureGuide(target);
@@ -10992,7 +11035,273 @@ function bindFeatureGuide(target,key){
   target.addEventListener('blur',close);
   target.addEventListener('click',()=>hideFeatureGuide(true));
 }
-function closeGuideModal(wrap){wrap?.remove()}
+function closeGuideModal(wrap){
+  if(!wrap)return;
+  const optionsPanel=wrap.querySelector('#ac-panel');
+  if(optionsPanel){
+    optionsPanel.classList.add('hidden');
+    optionsPanel.removeAttribute('style');
+    document.body.appendChild(optionsPanel);
+  }
+  wrap.remove();
+}
+const LANGUAGE_KEY='zz-ui-language-v1';
+let uiLanguage=localStorage.getItem(LANGUAGE_KEY)==='en'?'en':'ko';
+const EN_TEXT={
+  '홈으로 이동':'Home','설정 열기':'Settings','설정':'Settings','변환':'Convert','편집':'Edit','병합':'Merge',
+  '파일 [0]':'Files [0]','파일':'Files','문서':'Document','로컬':'Local','로컬 [0]':'Local [0]','업로드된 파일':'Uploaded files','업로드된 파일 [0]':'Uploaded files [0]',
+  '문서 작업':'Document workspace','작업할 파일':'Files to work with','작업할 파일을 여기에 놓으세요':'Drop files here',
+  '선택한 문서':'Selected document','업로드된 문서 없음':'No document uploaded','저장할 이름':'Save as',
+  '파일 형식에 맞춰 출력 형식을 자동으로 선택합니다.':'The output format is selected automatically from the file type.',
+  '옵션':'Options','변환 시작':'Start conversion','편집 화면 열기':'Open editor','문서 합치기':'Merge documents',
+  '전체 병합':'Merge all','선택 병합':'Merge selected','현재 문서를 열어 글쓰기, 표 편집, 코드 정리를 시작합니다.':'Open the current document to write, edit tables, and format code.',
+  '왼쪽에서 MD 파일을 추가하면 여기에 표시됩니다.':'Add Markdown files from the left to see them here.',
+  '변환할 문서':'Documents to convert','변환 결과':'Conversion result','병합할 파일':'Files to merge','병합 결과':'Merge result',
+  '변환 영역 너비 조절':'Resize conversion panels','병합 영역 너비 조절':'Resize merge panels',
+  'PDF, MD 또는 코드 파일을 여러 개 업로드하세요.':'Upload one or more PDF, Markdown, or code files.',
+  '코드 파일은 언어별 코드블록으로 변환합니다.':'Code files are converted into language-specific code blocks.',
+  '병합할 MD 파일을 여기에 놓거나 눌러 업로드하세요.':'Drop Markdown files here or tap to upload.',
+  '전체 선택':'Select all','전체 해제':'Clear all','선택 삭제':'Remove selected','선택한 문서 변환':'Convert selected',
+  '편집하기':'Edit','병합하기':'Merge','병합 실행':'Run merge','미니 프리뷰':'Mini preview',
+  '문서를 하나 이상 선택해 주세요.':'Select at least one document.','병합할 MD 파일이 없습니다.':'No Markdown files to merge.',
+  '병합 결과 저장':'Save merge result','병합한 문서를 저장할 위치를 선택하세요.':'Choose where to save the merged document.',
+  '다운로드':'Download','병합 파일을 기기에 저장합니다.':'Save the merged file to this device.',
+  '문서 목록에 추가':'Add to document list','현재 작업 목록에 새 문서로 추가합니다.':'Add it as a new document in the current workspace.',
+  '둘 다':'Both','다운로드하고 문서 목록에도 추가합니다.':'Download it and add it to the document list.',
+  'Markdown':'Markdown','Preview':'Preview','분할':'Split','보기':'Preview',
+  '가이드':'Guide','기능 가이드 표시':'Show feature guides','설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.':'Hover over a feature to see instructions and examples.',
+  '가이드 다시 보기':'View guides again','목록에서 다시 볼 가이드를 선택합니다.':'Choose a guide to view again.',
+  '단축키':'Shortcuts','단축키 설정':'Shortcut settings','17개 명령의 단축키를 확인하고 변경합니다.':'Review and change shortcuts for 17 commands.',
+  '편집 설정':'Editor settings','작성·보기 옵션':'Writing and view options','자동 보정과 편집 화면 표시 기능을 설정합니다.':'Configure automatic corrections and editor display options.',
+  '테마':'Theme','화면 테마':'Display theme','라이트·다크 테마를 선택하거나 사용자 지정 색상을 편집합니다.':'Choose a light or dark theme, or edit custom colors.',
+  '라이트':'Light','다크':'Dark','사용자 지정':'Custom','테마 설정':'Theme settings','화면에 사용할 테마를 선택하세요.':'Choose a theme for the interface.',
+  '사용자 지정 테마 편집':'Edit custom theme','배경색과 글자색을 직접 설정합니다.':'Set the background and text colors manually.',
+  '언어':'Language','화면에 표시할 언어를 선택합니다.':'Choose the language used in the interface.','한국어':'한국어','영어':'English',
+  '닫기':'Close','완료':'Done','취소':'Cancel','확인':'OK','복구':'Restore','작업 복구':'Restore workspace',
+  '브라우저 저장소가 지워지기 전까지 이 기록을 복구할 수 있습니다.':'This workspace can be restored until the browser storage is cleared.',
+  '작성 옵션':'Writing options','보기 옵션':'View options','Enter로 줄바꿈':'Line break with Enter','Enter를 누른 위치에서 바로 줄바꿈':'Insert a line break where Enter is pressed',
+  '프리뷰 MD 문법 적용':'Render Markdown in Preview','Preview에 입력한 Markdown 문법을 서식으로 변환':'Render Markdown syntax entered in Preview',
+  'URL 자동 링크':'Automatic URL links','붙여넣은 주소를 링크로 자동 변환':'Convert pasted URLs into links',
+  '문법 빠른 편집':'Quick syntax editing','Preview의 문장에 마우스를 올려 Markdown 원문 수정':'Hover over Preview text to edit the Markdown source',
+  '창 표시까지':'Show after','초':'sec','기호 공백 보정':'Fix syntax spacing','MD 기호 안의 불필요한 공백 제거':'Remove unnecessary spaces inside Markdown syntax',
+  '색상 가독성 보정':'Improve color readability','화면 테마에 맞춰 읽기 어려운 글자색을 자동 보정':'Adjust hard-to-read text colors for the current theme',
+  '표 필터·정렬':'Table filter and sort','표 머리글에서 행을 필터링하거나 정렬하며 원문은 유지':'Filter or sort rows from table headers without changing the source',
+  '스크롤 동기화':'Sync scrolling','Markdown과 Preview를 함께 스크롤':'Scroll Markdown and Preview together',
+  '행 번호 보기':'Show line numbers','Markdown 편집창 왼쪽에 행 번호 표시':'Show line numbers beside the Markdown editor',
+  '분할 위치 바꾸기':'Swap split panes','Preview와 Markdown의 좌우 위치 변경':'Swap the positions of Preview and Markdown',
+  '해시태그 탐색':'Hashtag navigation','문서의 #태그를 모아 빠르게 이동':'Collect document hashtags for quick navigation',
+  '새 문서':'New document','열기':'Open','파일 삽입':'Insert file','버전 기록':'Version history','저장':'Save','찾기':'Find','찾기 및 바꾸기':'Find and replace',
+  '사이드바 열기':'Open sidebar','사이드바 닫기':'Close sidebar','서식 도구 접기':'Collapse formatting tools','서식 도구 펼치기':'Expand formatting tools',
+  '새 폴더 추가':'Add folder','폴더에 파일 업로드':'Upload files to folder','폴더에 폴더 업로드':'Upload folder here','복제':'Duplicate','이름 변경':'Rename','제거':'Remove',
+  '새 폴더':'New folder','파일 업로드':'Upload files','폴더 업로드':'Upload folder','다시는 보지 않기':'Do not show again','이전':'Previous','다음':'Next','건너뛰기':'Skip',
+  '파일과 문서 목차':'Files and document outline','작업 화면 이동':'Switch workspaces','서식과 삽입 도구':'Formatting and insert tools',
+  '왼쪽 사이드바에서 작업할 파일을 선택하고 문서 구조를 살펴봅니다.':'Select files in the left sidebar and browse the document structure.',
+  '할 일에 따라 변환·편집·병합 화면으로 이동합니다.':'Switch between Convert, Edit, and Merge for the task at hand.',
+  '선택한 글자의 모양을 바꾸거나 문서 요소를 추가합니다.':'Change selected text formatting or insert document elements.',
+  '기능 가이드':'Feature guide','기능을 더 쉽게 확인하세요':'Learn features more easily',
+  '다시 볼 가이드 선택':'Choose a guide','확인하고 싶은 화면이나 기능을 선택하세요.':'Select a screen or feature to review.',
+  '홈 화면':'Home','공통 도구와 작업 시작 방법':'Common tools and how to get started',
+  '보기 방식, 서식 도구와 편집 영역':'View modes, formatting tools, and editing areas',
+  '변환 방식, 문서 선택과 결과 확인':'Conversion direction, document selection, and results',
+  '미니 프리뷰, 문서 선택과 병합 결과':'Mini preview, document selection, and merge results',
+  '파일 탭에서는 로컬 문서와 업로드한 파일을 선택합니다.':'Use the Files tab to select local and uploaded documents.',
+  '문서 탭에서는 제목이나 해시태그를 눌러 원하는 위치로 이동합니다.':'Use the Document tab to jump to a heading or hashtag.',
+  '변환은 PDF와 Markdown 사이의 형식을 바꿉니다.':'Convert changes files between PDF and Markdown.',
+  '편집은 내용을 작성하고, 병합은 여러 문서를 하나로 합칩니다.':'Edit lets you write content, while Merge combines multiple documents.',
+  '문서 열기·저장':'Open and save documents','문서를 만들고 불러오거나 작업 결과를 저장할 때 사용하는 도구입니다.':'Use these tools to create or open documents and save your work.',
+  '새 문서, 열기, 파일 삽입, 닫기를 사용할 수 있습니다.':'Create a new document, open one, insert a file, or close it.',
+  '버전 기록에서 이전 상태를 확인하고 저장 버튼으로 결과를 저장합니다.':'Review earlier states in Version history and save the result.',
+  '작업 화면과 PDF에 사용할 색상 테마를 선택합니다.':'Choose the color theme used for the workspace and PDF output.',
+  '라이트와 다크 테마를 즉시 전환할 수 있습니다.':'Switch instantly between the light and dark themes.',
+  '사용자 지정에서 배경색과 글자색을 직접 저장합니다.':'Save your own background and text colors under Custom.',
+  '작업 시작':'Get started','파일을 추가한 뒤 원하는 작업을 선택합니다.':'Add files, then choose what you want to do.',
+  '작업할 파일 영역에서는 파일을 추가하고 형식을 변환할 수 있습니다.':'Add files and convert their format in the Files to work with area.',
+  '오른쪽에서는 편집 화면을 열거나 여러 문서를 하나로 합칠 수 있습니다.':'Open the editor or combine documents from the right side.',
+  '편집 화면 보기 방식':'Editor view modes','작업에 맞게 편집 영역의 표시 방법을 바꿉니다.':'Change how the editor is displayed to suit your task.',
+  '분할은 Markdown과 Preview를 함께 보여줍니다.':'Split shows Markdown and Preview together.',
+  '편집 또는 보기를 선택하면 한쪽 영역에 집중할 수 있습니다.':'Choose Edit or Preview to focus on one pane.',
+  '옵션에서는 자동 보정과 표시 기능을 설정합니다.':'Options controls automatic corrections and display features.',
+  '제목·크기·색상·정렬을 바로 적용할 수 있습니다.':'Apply headings, size, color, and alignment directly.',
+  '표, 이미지, 링크, 수식, 양식과 확장 문법을 삽입할 수 있습니다.':'Insert tables, images, links, equations, form controls, and extended syntax.',
+  'Preview와 Markdown':'Preview and Markdown','같은 문서를 원문과 완성된 모습으로 나누어 보여줍니다.':'View the same document as source and rendered output.',
+  'Markdown에서는 문법이 포함된 원문을 직접 작성합니다.':'Write the Markdown source directly in the Markdown pane.',
+  'Preview에서는 적용된 서식을 확인하면서 내용을 편집할 수 있습니다.':'Edit content in Preview while seeing the applied formatting.',
+  '변환 방식과 미니 프리뷰':'Conversion and mini preview','입력 형식에 맞는 변환 방향과 미리보기 방식을 고릅니다.':'The conversion direction is detected from the input format, and you can choose how files are previewed.',
+  '파일 확장자에 따라 PDF → MD 또는 MD → PDF가 자동으로 선택됩니다.':'The direction is selected automatically from the file extension: PDF → MD or MD → PDF.',
+  '미니 프리뷰를 켜면 문서 위에 마우스를 올려 내용을 먼저 확인합니다.':'Turn on Mini preview and hover over a document to inspect it first.',
+  '변환할 문서 선택':'Select documents to convert','여러 파일을 추가한 뒤 실제로 변환할 항목만 고릅니다.':'Add files, then choose only the items you want to convert.',
+  '전체 선택·해제와 선택 삭제를 사용할 수 있습니다.':'Select all, clear all, or remove selected items.',
+  '목록에서 파일별 선택 상태를 확인합니다.':'Check each file’s selection state in the list.',
+  '변환 결과 확인':'Review conversion results','선택한 문서의 변환 결과를 오른쪽에서 확인합니다.':'Review the selected document’s converted output on the right.',
+  '선택한 문서 변환을 누르면 현재 선택에 맞춰 결과가 갱신됩니다.':'Select Convert selected to update the result for the current selection.',
+  '결과를 편집 화면으로 보내거나 다른 문서와 합칠 수 있습니다.':'Send the result to the editor or merge it with other documents.',
+  '파일을 선택하기 전에 내용을 빠르게 확인합니다.':'Quickly inspect content before selecting a file.',
+  '미니 프리뷰를 켜고 항목 위에 마우스를 올립니다.':'Turn on Mini preview and hover over an item.',
+  '작은 미리보기에서 문서 내용을 확인한 뒤 선택합니다.':'Review the document in the small preview before selecting it.',
+  '병합할 파일 선택':'Select files to merge','합칠 문서와 순서를 왼쪽 목록에서 정합니다.':'Choose the documents and their order in the list on the left.',
+  '체크한 문서만 병합 결과에 포함됩니다.':'Only checked documents are included in the merged result.',
+  '전체 선택 버튼으로 모든 항목을 한 번에 바꿀 수 있습니다.':'Use Select all to change every item at once.',
+  '병합 결과 확인':'Review merge results','선택한 문서를 하나로 합친 결과를 오른쪽에서 확인합니다.':'Review the combined result on the right.',
+  '병합 실행을 누르면 현재 선택한 문서로 결과가 갱신됩니다.':'Select Run merge to update the result from the current selection.',
+  '완성된 결과는 저장하거나 편집 화면에서 계속 다듬을 수 있습니다.':'Save the finished result or continue refining it in the editor.',
+  '문서 항목.md':'Document item.md','마우스':'Pointer','문서 미리보기':'Document preview','제목과 본문 내용을 열기 전에 확인합니다.':'Review the title and body before opening the document.',
+  '고급 기능을 더 쉽게 확인하세요':'Explore advanced features more easily','동기화 블록이나 사용자 지정 서식처럼 설명이 필요한 기능 위에 잠시 마우스를 올리면 사용법과 결과 예시가 나타납니다.':'Hover briefly over features such as synchronized blocks or custom formatting to see instructions and examples.',
+  '동기화 블록':'Synchronized block','같은 ID의 내용 연결':'Link content with the same ID',
+  '서식':'Style','크기':'Size','양식':'Form','구분':'Separator','문법':'Syntax',
+  'Enter를 누르면 다음 줄이 바로 만들어집니다.':'Press Enter to create the next line immediately.','첫 번째 줄':'First line','두 번째 줄':'Second line',
+  '사용자 지정 서식':'Custom formatting','새 서식':'New style','선택 서식 저장':'Save selected style','서식 검색':'Search styles','사용자 지정 서식 검색':'Search custom formatting',
+  '개별 서식':'Custom styles','저장된 서식이 없습니다.':'No saved styles.','검색 결과가 없습니다.':'No matching styles.','미리보기 텍스트':'Preview text',
+  '확장 Markdown':'Extended Markdown','문서 목차':'Table of contents','제목 이동 목록':'Heading navigation','미니 문서':'Embedded document',
+  'Obsidian 계열 문법':'Obsidian syntax','콜아웃':'Callout','위키 링크':'Wiki link','파일 임베드':'File embed','하이라이트':'Highlight','텍스트':'Text',
+  '양식 개체':'Form control','개체 종류':'Control type','표시 문구':'Label','선택 상자':'Checkbox','항목':'Item','추가될 모습':'Preview',
+  '삽입한 뒤에도 미리보기 화면에서 선택하거나 내용을 입력할 수 있습니다.':'You can select it or enter content in Preview after insertion.','삽입':'Insert',
+  '수평선':'Horizontal rule','줄바꿈':'Line break','페이지 구분':'Page break','인용':'Quote','중첩 인용':'Nested quote','각주':'Footnote','출처 인용':'Citation','참고문헌':'Bibliography','출처':'Source',
+  '인라인 코드':'Inline code','코드 블록':'Code block','순서없는 목록':'Unordered list','순서있는 목록':'Ordered list',
+  '빈 표 생성':'Create empty table','데이터로 표 만들기':'Create table from data','행·열 직접 입력...':'Enter rows and columns…',
+  '사용자 지정 테마':'Custom theme','배경색':'Background','글자색':'Text','적용':'Apply','빠른 색상':'Quick colors','최근 사용':'Recent','저장됨':'Saved','우클릭으로 삭제':'Right-click to delete','색 저장':'Save color',
+  '색 조절':'Color adjustment','저장된 색 없음':'No saved colors','사용 기록 없음':'No recent colors','기본':'Default'
+  ,'사이드바 접기':'Collapse sidebar','사이드바 보기':'Sidebar view','화면 테마 도움말':'Theme help','파일을 현재 문서에 삽입':'Insert file into the current document',
+  '사용자 지정 서식 (Ctrl+Alt+S)':'Custom formatting (Ctrl+Alt+S)','서식 목록':'Style list','글씨 크기(px)':'Font size (px)','글씨 크기 목록':'Font size list',
+  '글씨 크기 조절':'Adjust font size','글씨 크기 1px 키우기':'Increase font size by 1 px','글씨 크기 1px 줄이기':'Decrease font size by 1 px',
+  '현재 글씨색 적용':'Apply current text color','색상 팔레트':'Color palette','현재 배경색 적용':'Apply current background color',
+  '왼쪽 정렬':'Align left','가운데 정렬':'Align center','오른쪽 정렬':'Align right','기본 표 삽입':'Insert basic table','표 크기 선택':'Choose table size',
+  '이미지 삽입':'Insert image','링크 삽입':'Insert link','수식 삽입':'Insert equation','양식 개체 삽입':'Insert form control','옵션 ▾':'Options ▾'
+  ,'새 문서.md':'New document.md','폴더 추가':'Add folder','서식 글씨 크기 조절':'Adjust style font size','빠른 편집 대기 시간':'Quick-edit delay',
+  '새 사용자 지정 서식':'New custom style','왼쪽에서 서식을 만들고, 오른쪽에서 이름과 저장할 속성을 정합니다.':'Create the style on the left, then set its name and saved properties on the right.',
+  '서식 설정':'Style settings','아래 값을 바꾸면 해당 속성이 자동으로 저장 항목에 포함됩니다.':'Changing a value below automatically includes that property in the saved style.',
+  '정렬':'Alignment','없음':'None','미리보기':'Preview','문구를 직접 바꿔 저장 목록에서 보일 예시를 확인할 수 있습니다.':'Edit the text to preview how it will appear in the saved-style list.',
+  '저장 정보':'Save information','서식명':'Style name','폴더':'Folder','저장할 항목':'Properties to save','체크한 속성만 텍스트에 적용됩니다.':'Only checked properties are applied to the text.',
+  '글자 크기':'Font size','굵게':'Bold','기울임':'Italic','밑줄':'Underline',
+  '확장 Markdown 저장 지원 안내':'Extended Markdown save support','Obsidian 계열 문법 저장 지원 안내':'Obsidian syntax save support',
+  '[[문서!ALL]]':'[[Document!ALL]]','[[문서]]':'[[Document]]','![[파일]]':'![[File]]','==텍스트==':'==Text==','> 텍스트':'> Text','>> 텍스트':'>> Text','[@key]: 출처':'[@key]: Source','`코드`':'`code`','- 항목':'- Item','1. 항목':'1. Item',
+  '표 만들기 방식':'Table creation mode','행·열 직접 입력…':'Enter rows and columns…',
+  '스포이드로 화면 색 선택':'Pick a color from the screen','스포이드 · 화면에서 색 선택 (Esc로 취소)':'Eyedropper · Pick a color from the screen (Esc to cancel)',
+  '사용자 지정 테마 색상 코드':'Custom theme color code','사용자 지정 테마 색상':'Custom theme color'
+  ,'가이드 닫기':'Close guide','입력한 Markdown 문법이 바로 서식으로 바뀝니다.':'Entered Markdown syntax is formatted immediately.','**텍스트**':'**Text**','서식 적용':'Apply formatting',
+  '붙여넣은 주소가 클릭 가능한 링크로 바뀝니다.':'A pasted URL becomes a clickable link.','붙여넣기':'Paste',
+  'Preview의 문장에 마우스를 올리면 Markdown 원문을 고칠 수 있는 창이 열립니다.':'Hover over a sentence in Preview to open a window for editing its Markdown source.',
+  '중요한 문장입니다.':'This is an important sentence.','마우스':'Pointer','**중요한 문장**입니다.':'**Important sentence**.','수정':'Edit','수정한 문장':'Edited sentence','입니다.':'.',
+  'Markdown 기호 안에 잘못 들어간 공백을 자동으로 정리합니다.':'Automatically removes misplaced spaces inside Markdown syntax.','**김밥':'**Text','공백 제거':'Remove spaces','**김밥**':'**Text**',
+  '테마와 비슷해 잘 보이지 않는 글자색을 읽기 쉽게 바꿉니다.':'Adjusts text colors that are hard to read against the current theme.','문서 내용':'Document content','테마 전환':'Switch theme','글자색 자동 보정':'Automatic text color adjustment',
+  '머리글을 누른 뒤 필터 조건이나 정렬 순서를 선택합니다.':'Select a filter or sort order after choosing a table header.','이름':'Name','점수':'Score','높은 점수순':'Highest score first','낮은 점수순':'Lowest score first','서준':'Alex','민지':'Jamie',
+  '한쪽을 내리면 다른 쪽도 같은 위치로 이동합니다.':'Scrolling one pane moves the other pane to the same position.','문서 내용':'Document content',
+  '# 제목':'# Heading','본문 내용':'Body text','- 목록':'- List',
+  'Markdown과 Preview의 좌우 위치가 서로 바뀝니다.':'Swaps the left and right positions of Markdown and Preview.','**문서 내용**':'**Document content**',
+  '문서의 태그를 모아 보여주고, 선택한 태그가 있는 위치로 이동합니다.':'Collects document tags and jumps to the selected tag.','프로젝트 기록':'Project notes','#프로젝트':'#project','새로운 생각':'New idea','#아이디어':'#idea','오늘 할 일':'Today’s tasks','#할일':'#todo'
+  ,'본문':'Body','제목 1':'Heading 1','제목 2':'Heading 2','제목 3':'Heading 3','제목 4':'Heading 4','제목 5':'Heading 5','제목 6':'Heading 6',
+  '왼쪽':'Left','가운데':'Center','오른쪽':'Right','양쪽':'Justify','새 서식':'New style',
+  '자주 쓰는 글자 크기와 색상 등의 조합을 저장해 두고, 선택한 문장에 한 번에 적용합니다.':'Save frequently used combinations of font size, color, and other properties, then apply them to selected text at once.',
+  '일반 문장 사이의':'Within a regular sentence,','선택한 문장':'selected text','에 저장한 서식이 적용됩니다.':'receives the saved formatting.','저장된 서식':'Saved style','강조 문구':'Emphasis','클릭':'Click','선택 → 저장된 서식 클릭 → 즉시 적용':'Select → click a saved style → apply instantly',
+  '행':'Rows','열':'Columns','빈 표 만들기':'Create empty table','구분할 텍스트':'Delimited text','구분자 · 여러 개 선택 가능':'Delimiters · select multiple','자동 감지':'Auto detect','탭':'Tab','쉼표':'Comma','띄어쓰기':'Space','기타':'Other','기타 구분자':'Other delimiter','예: ; 또는 ::':'e.g. ; or ::',
+  '이름, 점수\n민지, 95\n서준, 88':'Name, Score\nJamie, 95\nAlex, 88',
+  '자동 감지는 탭·쉼표·띄어쓰기·/·세미콜론·| 중에서 여러 줄에 반복되고, 각 줄의 열 수가 가장 일정해지는 문자를 선택합니다.':'Auto detect chooses the character among tabs, commas, spaces, slashes, semicolons, and pipes that repeats across lines and produces the most consistent column count.',
+  '입력 예시':'Input preview','텍스트를 표로 변환':'Convert text to table',
+  '링크 수정':'Edit link','링크 삽입':'Insert link','미리보기':'Preview','표시할 텍스트':'Display text','비워두면 링크 주소를 표시':'Leave blank to display the link URL','링크 주소':'Link URL','표시 형식':'Display style','일반 링크':'Standard link','기존 밑줄 링크':'Standard underlined link','출처 칩':'Source chip','둥근 출처 표시':'Rounded source label','링크 주소를 입력해 주세요.':'Enter a link URL.',
+  '수식 입력':'Insert equation','수식은 표준 Markdown의 $...$ 또는 $$...$$ 형태로 저장됩니다.':'Equations are saved as standard Markdown using $...$ or $$...$$.','인라인':'Inline','블록':'Block','행렬':'Matrix','수식을 입력해 주세요.':'Enter an equation.','수식 문법을 확인해 주세요.':'Check the equation syntax.',
+  '라디오 단추':'Radio button','콤보 상자':'Combo box','입력 상자':'Text field','명령 단추':'Command button','기본 선택':'Default selection','표시명':'Display name','저장값':'Stored value','옵션 삭제':'Delete option','기본':'Default','옵션 추가':'Add option','입력':'Enter text'
+  ,'문서의 제목을 찾아 이동할 수 있는 목차를 현재 위치에 만듭니다.':'Creates a table of contents here for navigating to document headings.','# 시작하기':'# Getting started','## 설치':'## Installation','## 사용법':'## Usage','시작하기':'Getting started','설치':'Installation','사용법':'Usage','1. 시작하기':'1. Getting started','1.1 설치':'1.1 Installation','1.2 사용법':'1.2 Usage',
+  '한 블록을 수정하면 같은 ID를 사용하는 다른 블록의 내용도 함께 바뀝니다.':'Editing one block also updates other blocks that use the same ID.','profile · 첫 번째 블록':'profile · first block','profile · 두 번째 블록':'profile · second block','공통 안내':'Shared notice','문구':'Text','같은 ID로 연결':'Linked by the same ID','한쪽 수정 → 같은 ID의 다른 블록도 자동 변경':'Edit one → all blocks with the same ID update automatically',
+  '다른 문서의 전체 내용이나 선택한 범위를 현재 문서 안에 읽기 전용으로 보여줍니다.':'Displays all or part of another document here as read-only content.','[[회의록!ALL]]':'[[Meeting notes!ALL]]','회의록.md':'Meeting notes.md','주간 회의':'Weekly meeting','진행 상황과 다음 할 일을 정리합니다.':'Summarize progress and next steps.',
+  '중요한 안내나 참고 내용을 문서에서 눈에 띄는 상자로 표시합니다.':'Displays important notes or references in a prominent box.','참고':'Note','저장 전에 확인하세요.':'Review before saving.','> [!note] 참고':'> [!note] Note','> 저장 전에 확인하세요.':'> Review before saving.',
+  '문서 이름을 이용해 다른 문서로 바로 이동하는 링크를 만듭니다.':'Creates a link that opens another document by name.','[[프로젝트 계획]]':'[[Project plan]]','관련 문서:':'Related document:','프로젝트 계획':'Project plan',
+  '이미지나 첨부 파일을 문서 본문에 바로 표시합니다.':'Displays an image or attachment directly in the document.','![[화면 구성.png]]':'![[Layout.png]]','이미지 미리보기':'Image preview','화면 구성.png':'Layout.png',
+  '문장 중 강조할 부분에 형광펜처럼 배경색을 표시합니다.':'Highlights part of a sentence with a marker-like background.','회의는 ==오후 3시==에 시작합니다.':'The meeting starts at ==3 PM==.','회의는':'The meeting starts at','오후 3시':'3 PM','에 시작합니다.':'.',
+  '찾을 내용':'Find','바꿀 내용':'Replace with','비워두면 찾은 내용을 삭제합니다':'Leave blank to delete matches','대소문자 구분':'Match case','단어 전체':'Whole words','다음 찾기':'Find next','바꾸기':'Replace','모두 바꾸기':'Replace all','일치 항목 없음':'No matches','원문에서 바꿀 위치를 찾지 못했습니다':'Could not locate the match in the source'
+  ,'파일 열기':'Open file','폴더 열기':'Open folder','PDF 저장':'Save PDF','MD 저장':'Save MD','ZIP 저장':'Save ZIP','변경된 문서만':'Changed documents only','문서 선택…':'Select documents…','폴더 전체':'Entire folder',
+  '추가':'Add','+ 옵션 추가':'+ Add option','전용 서식 출력은 PDF 저장만 지원합니다. MD 저장에는 문법 원문이 보존됩니다.':'Rich formatting is supported only when saving as PDF. The original syntax is preserved when saving as MD.',
+  '전용 서식 출력은 PDF 저장만 지원합니다. MD 저장에는 Obsidian 문법 원문이 보존됩니다.':'Rich formatting is supported only when saving as PDF. The original Obsidian syntax is preserved when saving as MD.',
+  '문서 추가':'Add document','새 문서를 만들거나 기존 파일을 불러올 수 있습니다.':'Create a new document or open an existing file.','빈 Markdown 문서를 새로 만듭니다.':'Create a blank Markdown document.','MD, 코드, 이미지 등의 파일을 불러옵니다.':'Open Markdown, code, image, and other files.',
+  '라이트·다크·사용자 지정 테마는 PDF로 저장할 때 적용됩니다. MD 파일로 저장할 때는 배경색과 글자색이 문서 내용에 포함되지 않습니다.':'Light, dark, and custom themes are applied when saving as PDF. Background and text colors are not included in document content when saving as MD.',
+  '저장되지 않은 변경사항':'Unsaved changes','현재 문서에 저장되지 않은 수정사항이 있습니다. 계속하기 전에 어떻게 처리할까요?':'The current document has unsaved changes. What would you like to do before continuing?','저장 후 닫기':'Save and close','저장하지 않고 닫기':'Close without saving',
+  '파일 제거':'Remove file','저장하지 않고 제거':'Remove without saving','파일을 제거했습니다.':'File removed.'
+  ,'스포이드 사용 불가':'Eyedropper unavailable','현재 브라우저에서는 화면 색 선택을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 사용해 주세요.':'Screen color picking is not supported in this browser. Use the latest Chrome or Edge.','스포이드 오류':'Eyedropper error','색을 선택하지 못했습니다. 브라우저에서 화면 색 선택이 허용되는지 확인해 주세요.':'Could not pick a color. Check that the browser allows screen color selection.',
+  '직접 입력':'Enter manually','언어 적용':'Apply language','드래그해서 위치 이동':'Drag to move','코드블록 접기':'Collapse code block','코드블록 펼치기':'Expand code block','언어 없음':'No language','코드 블록 위치 이동':'Move code block','표 위치 이동':'Move table','인용 위치 이동':'Move quote','다중 보기':'Multiple views','각주·참고문헌':'Footnotes and bibliography','임베드':'Embed',
+  '출처 문구 수정':'Edit source label','이 양식만 드래그해서 이동':'Drag to move only this control','양식 위치 이동':'Move form control','클릭해서 선택 · 드래그해서 위치 이동 · 우클릭해서 변경':'Click to select · drag to move · right-click to edit','왼쪽 손잡이로 이 양식만 이동':'Use the left handle to move only this control','양식 표시 문구':'Form control label',
+  '붙여넣기 실패':'Paste failed','클립보드의 텍스트를 읽을 수 없습니다.':'Could not read text from the clipboard.','제목 없음':'Untitled','문서 맨 아래에 배치':'Place at bottom of document','문서 맨 위에 배치':'Place at top of document','이 블록 위에 배치':'Place above this block','이 글자 위치에 삽입':'Insert at this text position','고정됨':'Pinned',
+  '올바른 링크 주소를 입력해 주세요.':'Enter a valid link URL.','연결 문서 없음':'No linked documents','이 열 필터 및 정렬':'Filter and sort this column','오름차순 정렬':'Sort ascending','내림차순 정렬':'Sort descending','이 표 필터·정렬 초기화':'Reset filtering and sorting for this table','값 필터':'Value filter','값 검색':'Search values','전체 선택 / 해제':'Select / clear all','(빈 값)':'(Empty)','서식 필터':'Formatting filter',
+  '셀 합치기':'Merge cells','이미 합쳐진 셀이 포함된 범위는 먼저 셀 나누기를 해주세요.':'Split existing merged cells before merging this range.','셀 나누기':'Split cells','선택한 셀을 지정한 행과 열로 나눕니다.':'Split the selected cell into the specified rows and columns.',
+  '루트':'Root','단일문서':'Single document','폴더 이름을 입력해 주세요.':'Enter a folder name.','같은 이름의 폴더가 있습니다.':'A folder with that name already exists.','폴더 복제':'Duplicate folder','폴더 이름 변경':'Rename folder','이동할 수 없음':'Cannot move','대상 위치에 같은 이름의 파일 또는 폴더가 있습니다.':'A file or folder with the same name exists at the destination.',
+  '업로드된 MD에서 참조를 찾지 못했습니다.':'No references were found in the uploaded Markdown.','문서를 열면 제목과 문단 탐색이 표시됩니다.':'Open a document to browse its headings and paragraphs.','펼치기':'Expand','접기':'Collapse','제목 서식이 없습니다.':'No heading styles.','사용된 해시태그가 없습니다.':'No hashtags used.','해시태그 제거':'Remove hashtag',
+  '파일 이름을 입력해 주세요.':'Enter a file name.','같은 위치에 동일한 이름의 파일이 있습니다.':'A file with the same name exists in this location.','PDF → MD 자동 선택':'PDF → MD selected automatically','MD → PDF 자동 선택':'MD → PDF selected automatically','목차':'Table of contents','PDF 변환':'PDF conversion','PDF 변환 완료':'PDF conversion complete','암호가 설정된 PDF입니다. 암호를 해제한 파일을 열어 주세요.':'This PDF is password-protected. Open an unlocked copy.','PDF 파일이 손상되었거나 올바른 PDF 형식이 아닙니다.':'The PDF is damaged or invalid.','파일과 네트워크 연결을 확인해 주세요.':'Check the file and network connection.','PDF 변환 실패':'PDF conversion failed','미니 프리뷰 닫기':'Close mini preview',
+  '사용자 지정 글꼴':'Custom font','현재 지역 글꼴 확인':'Check local fonts','저장할 문서 없음':'No documents to save','조건에 맞는 마크다운 문서가 없습니다.':'No Markdown documents match the criteria.','ZIP 저장 준비 실패':'Could not prepare ZIP','ZIP 기능을 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.':'Could not load ZIP support. Check your internet connection and try again.','먼저 마크다운 문서를 열어 주세요.':'Open a Markdown document first.','선택한 문서 없음':'No documents selected','ZIP에 담을 문서를 하나 이상 선택해 주세요.':'Select at least one document for the ZIP.',
+  '페이지 분할 기능을 초기화하지 못했습니다.':'Could not initialize pagination.','페이지 분할 모듈을 불러오지 못했습니다.':'Could not load the pagination module.','페이지를 나누는 중...':'Paginating…','PDF 준비 실패':'Could not prepare PDF','인쇄 페이지를 준비하지 못했습니다.':'Could not prepare pages for printing.','MD → PDF는 한 번에 문서 하나를 선택해 주세요.':'Select one document at a time for MD → PDF.','파일 목록 펼치기':'Expand file list','파일 목록 접기':'Collapse file list','드래그 업로드 실패':'Drag upload failed','파일이 이 컴퓨터에 다운로드되어 있는지 확인해 주세요.':'Check that the file is downloaded to this computer.',
+  '혼합':'Mixed','선택한 글씨 크기가 서로 다릅니다.':'The selected text uses different font sizes.','클립보드의 텍스트를 읽을 수 없습니다. 브라우저의 클립보드 권한을 확인해 주세요.':'Could not read clipboard text. Check the browser clipboard permission.','선택 영역 전체에 적용됨':'Applied to the entire selection','적용되지 않음':'Not applied','전체에 배경색이 없음':'No background color across the selection','전체에 굵게가 적용되지 않음':'Bold is not applied across the selection','전체에 기울임이 적용되지 않음':'Italic is not applied across the selection','전체에 밑줄이 적용되지 않음':'Underline is not applied across the selection','선택 영역 전체에 동일하지 않음':'Not consistent across the selection',
+  '텍스트를 선택해 주세요':'Select text','프리뷰에서 저장하거나 서식을 적용할 텍스트를 먼저 드래그해 주세요.':'Select text in Preview before saving or applying formatting.','사용자 지정 서식 수정':'Edit custom style','선택한 텍스트에 실제로 적용된 속성만 저장 항목으로 선택했습니다.':'Only properties applied to the selected text are selected for saving.','저장할 항목을 선택해 주세요':'Select properties to save','최소 하나 이상의 서식 항목을 선택해야 합니다.':'Select at least one formatting property.','프리뷰에서 서식을 적용할 텍스트를 먼저 드래그해 주세요.':'Select text in Preview before applying formatting.','새 서식 폴더':'New style folder','폴더명':'Folder name','서식 이름 수정':'Rename style','폴더 이름 수정':'Rename folder',
+  '링크 이동':'Open link','열 수 있는 링크 주소가 아닙니다.':'This link cannot be opened.','세미콜론':'Semicolon','변환 미리보기':'Conversion preview','구분자를 확인하면 표 모양을 미리 볼 수 있습니다.':'Check the delimiter to preview the table.','표 만들기':'Create table','구분할 텍스트와 올바른 구분자를 입력해 주세요.':'Enter delimited text and a valid delimiter.',
+  '변환 화면':'Convert workspace','변환 화면으로 이동':'Go to Convert','편집 화면':'Editor workspace','편집 화면으로 이동':'Go to Editor','병합 화면':'Merge workspace','문서 병합 화면으로 이동':'Go to Merge','현재 작업 결과 저장':'Save current result','다른 이름으로 저장':'Save as','편집 문서를 새 이름으로 저장':'Save the document with a new name','파일 또는 폴더 불러오기':'Open a file or folder','선택 작업 실행':'Run selected action','변환·병합 화면의 선택 작업 실행':'Run the selected Convert or Merge action','현재 화면에서 내용 찾기':'Find content on this screen','편집 화면에서 내용 바꾸기':'Replace content in the editor','인쇄·PDF 저장':'Print / Save PDF','현재 결과의 인쇄 창 열기':'Open the print dialog for the current result','실행 취소':'Undo','마지막 편집 되돌리기':'Undo the last edit','다시 실행':'Redo','되돌린 편집 다시 적용':'Redo the reverted edit','선택한 글자를 굵게 표시':'Make selected text bold','선택한 글자를 기울임꼴로 표시':'Italicize selected text','선택한 글자에 밑줄 적용':'Underline selected text','링크':'Link','선택한 글자에 링크 추가':'Add a link to selected text','저장한 사용자 서식 열기':'Open saved custom styles',
+  '화면 이동':'Navigation','변환·편집·병합 화면 전환':'Switch between Convert, Edit, and Merge','파일·실행':'Files and actions','열기, 저장, 인쇄와 작업 실행':'Open, save, print, and run actions','찾기·편집 기록':'Find and edit history','찾기와 실행 취소·다시 실행':'Find, undo, and redo','글자 서식':'Text formatting','선택한 글자의 모양과 링크 변경':'Change selected text formatting and links','변경됨':'Changed','키 조합을 누르세요':'Press a key combination','Ctrl·Alt와 함께 입력':'Use with Ctrl or Alt',
+  '삽입할 위치를 다시 선택한 뒤 시도해 주세요.':'Select the insertion point again and retry.','먼저 문서를 업로드하거나 만들어 주세요.':'Upload or create a document first.','미니 문서 삽입':'Insert embedded document','빈 줄':'Blank line','시작 지점을 선택하세요':'Select a starting point','자동 기록':'Automatic history','저장된 버전이 없습니다.':'No saved versions.','#ZZ 전용 블록':'#ZZ-specific blocks','MD에는 원문이 보존되지만 전용 카드·시트·미니 문서 모양은 #ZZ와 PDF에서만 표시됩니다.':'The source is preserved in MD, but custom cards, sheets, and embedded-document layouts appear only in #ZZ and PDF.','Obsidian 확장 문법':'Obsidian extended syntax','지원하지 않는 Markdown 앱에서는 일반 인용문이나 원문으로 보일 수 있습니다.':'Unsupported Markdown apps may display a regular quote or the source text.','MD에는 HTML로 저장됩니다. HTML을 제한하는 앱에서는 입력 개체가 숨겨질 수 있습니다.':'Saved as HTML in MD. Apps that restrict HTML may hide form controls.','문자 서식':'Text formatting','색상·배경색·크기는 HTML 허용 여부에 따라 다르게 보입니다.':'Color, background, and size may vary depending on HTML support.',
+  '스프레드시트 삽입':'Insert spreadsheet','스프레드시트 모듈을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.':'Could not load spreadsheet support. Check your internet connection.','범위 없음':'No range','범위 오류':'Invalid range','A1:F20처럼 올바른 셀 범위를 입력해 주세요.':'Enter a valid cell range such as A1:F20.','편집할 문서를 먼저 열어 주세요.':'Open a document to edit first.','파일명':'File name','저장할 결과 없음':'No result to save','먼저 파일을 병합해 주세요.':'Merge files first.','MD → PDF는 Ctrl+Enter로 변환한 뒤 인쇄 창에서 PDF로 저장해 주세요.':'For MD → PDF, convert with Ctrl+Enter and save as PDF from the print dialog.','사이드바 펼치기':'Expand sidebar','테마 열기':'Open theme','테마 닫기':'Close theme'
+  ,'변경할 단축키를 선택한 뒤 새 키 조합을 누르세요.':'Select a shortcut, then press a new key combination.','기본값':'Default','전체 초기화':'Reset all','브라우저 기본 글꼴이 운영체제 기본값과 다르게 설정되어 있습니다.':'The browser default font differs from the operating system default.'
+  ,'파일 이름 변경':'Rename file','새 파일 이름':'New file name','변경':'Rename','개별 파일 저장':'Save file',
+  '전체 복원':'Restore all','복원':'Restore',
+  '화면 테마는 PDF에 적용됩니다.\nMD 파일에는 테마 정보가 저장되지 않습니다.':'The display theme is applied to PDF output.\nTheme information is not saved in MD files.',
+  '문서의 제목을 찾아 클릭 가능한 이동 목록을 만듭니다. 제목을 바꾸면 목차도 함께 바뀝니다.':'Creates a clickable navigation list from document headings. The table of contents updates when headings change.','포함할 제목':'Headings to include','큰 제목만 (제목 1-2)':'Major headings only (Heading 1–2)','일반 목차 (제목 2-4)':'Standard contents (Heading 2–4)','모든 제목 (제목 1-6)':'All headings (Heading 1–6)','숫자가 클수록 더 작은 하위 제목까지 포함합니다.':'Higher numbers include smaller nested headings.','항목 방향':'Item direction','세로':'Vertical','가로':'Horizontal','목차 항목이 이어지는 방향을 정합니다.':'Choose the direction in which contents items flow.','목차 모양':'Contents style','세로 목록':'Vertical list','간단한 2열':'Compact two-column','번호와 연결선':'Numbers and connector lines','문서 내용은 바뀌지 않고 목차의 모양만 달라집니다.':'Only the appearance of the contents changes; document content is unchanged.','1, 1.1처럼 번호 붙이기':'Number as 1, 1.1','현재 문서에서 보이는 항목':'Items visible in the current document','이 범위에 해당하는 제목이 없습니다.':'No headings match this range.','적용':'Apply',
+  '같은 ID를 사용한 블록은 어느 한 곳을 편집해도 함께 바뀝니다.':'Blocks using the same ID update together when any one is edited.','블록 ID':'Block ID','예: project-summary':'e.g. project-summary','블록 ID를 입력해 주세요.':'Enter a block ID.',
+  '범위':'Range','전체 문서':'Entire document','일부 선택':'Select a range','원문 미리보기':'Source preview','삽입된 내용은 편집할 수 없습니다. 블록을 선택하면 복사·붙여넣기·삭제·이동할 수 있습니다.':'Inserted content is read-only. Select the block to copy, paste, delete, or move it.'
+};
+const i18nOriginalText=new WeakMap(),i18nOriginalAttrs=new WeakMap();
+function translatedUiText(value){
+  const match=String(value).match(/^(\s*)([\s\S]*?)(\s*)$/),core=match?.[2]||'';
+  let translated=EN_TEXT[core];
+  if(!translated){
+    const count=core.match(/^파일 \[(\d+)]$/);if(count)translated=`Files [${count[1]}]`;
+    const local=core.match(/^로컬 \[(\d+)]$/);if(local)translated=`Local [${local[1]}]`;
+    const uploaded=core.match(/^업로드된 파일 \[(\d+)]$/);if(uploaded)translated=`Uploaded files [${uploaded[1]}]`;
+    const untitledDocument=core.match(/^새 문서(?: (\d+))?\.md$/);if(untitledDocument)translated=`New document${untitledDocument[1]?` ${untitledDocument[1]}`:''}.md`;
+    const copiedDocument=core.match(/^(.+) 복사본(?: \((\d+)\))?(\.(?:md|markdown))$/i);if(copiedDocument)translated=`${copiedDocument[1]} copy${copiedDocument[2]?` (${copiedDocument[2]})`:''}${copiedDocument[3]}`;
+    const recovery=core.match(/^(.+)에 자동 저장된 문서 (\d+)개가 있습니다\.$/);if(recovery)translated=`${recovery[1]}: ${recovery[2]} auto-saved document${recovery[2]==='1'?'':'s'} available.`;
+    const documentCount=core.match(/^(\d+)개 문서$/);if(documentCount)translated=`${documentCount[1]} document${documentCount[1]==='1'?'':'s'}`;
+    const tableSize=core.match(/^(\d+)행 × (\d+)열$/);if(tableSize)translated=`${tableSize[1]} rows × ${tableSize[2]} columns`;
+    const tableInsert=core.match(/^(\d+)행 (\d+)열 표 삽입$/);if(tableInsert)translated=`Insert a ${tableInsert[1]} × ${tableInsert[2]} table`;
+    const documentLine=core.match(/^(\d+)\. 문서 내용$/);if(documentLine)translated=`${documentLine[1]}. Document content`;
+    const foundCount=core.match(/^(\d+)개 찾음$/);if(foundCount)translated=`${foundCount[1]} found`;
+    const changedCount=core.match(/^(\d+)개 변경$/);if(changedCount)translated=`${changedCount[1]} replaced`;
+    const extraHeadings=core.match(/^외 (\d+)개 제목$/);if(extraHeadings)translated=`${extraHeadings[1]} more heading${extraHeadings[1]==='1'?'':'s'}`;
+    const unsavedRemoval=core.match(/^(.+)의 변경사항이 저장되지 않았습니다\. 제거하면 변경사항을 복구할 수 없습니다\.$/);if(unsavedRemoval)translated=`Changes to ${unsavedRemoval[1]} have not been saved. Removing it will permanently discard those changes.`;
+    const recoveryVersion=core.match(/^자동 복구본 · 문서 (\d+)개$/);if(recoveryVersion)translated=`Auto-recovery · ${recoveryVersion[1]} document${recoveryVersion[1]==='1'?'':'s'}`;
+    const characterCount=core.match(/^([\d,]+)자$/);if(characterCount)translated=`${characterCount[1]} characters`;
+    const versionDetail=core.match(/^(.+) · ([\d,]+)자$/);if(versionDetail)translated=`${translatedUiText(versionDetail[1])} · ${versionDetail[2]} characters`;
+    const conversionMeta=core.match(/^(PDF → MD 자동 선택|MD → PDF 자동 선택) · (.+)$/);if(conversionMeta)translated=`${translatedUiText(conversionMeta[1])} · ${conversionMeta[2]}`;
+    const codeConversionMeta=core.match(/^(.+) 코드블록 → MD 준비됨 · (.+)$/);if(codeConversionMeta)translated=`${codeConversionMeta[1]} code block → MD ready · ${codeConversionMeta[2]}`;
+    if(/[가-힣]/.test(core)&&/자동 저장된 문서/.test(core))translated=core.replace('오전','AM').replace('오후','PM').replace(/(.+)에 자동 저장된 문서 (\d+)개가 있습니다\./,(_,date,count)=>`${date}: ${count} auto-saved document${count==='1'?'':'s'} available.`);
+  }
+  return translated?`${match[1]}${translated}${match[3]}`:value;
+}
+function translateUi(root=document.body){
+  if(!root)return;
+  const elements=root.nodeType===1?[root,...root.querySelectorAll('*')]:[];
+  elements.forEach(element=>{
+    [...element.childNodes].filter(node=>node.nodeType===Node.TEXT_NODE&&node.nodeValue.trim()).forEach(node=>{
+      if(!i18nOriginalText.has(node))i18nOriginalText.set(node,node.nodeValue);
+      const original=i18nOriginalText.get(node),next=uiLanguage==='en'?translatedUiText(original):original;
+      if(node.nodeValue!==next)node.nodeValue=next;
+    });
+    const saved=i18nOriginalAttrs.get(element)||{};
+    ['title','aria-label','placeholder','data-tooltip'].forEach(attr=>{
+      if(!element.hasAttribute(attr))return;
+      const current=element.getAttribute(attr);
+      if(!(attr in saved))saved[attr]=current;
+      else{
+        const priorDisplay=uiLanguage==='en'?translatedUiText(saved[attr]):saved[attr];
+        if(current!==priorDisplay)saved[attr]=current;
+      }
+      const next=uiLanguage==='en'?translatedUiText(saved[attr]):saved[attr];
+      if(element.getAttribute(attr)!==next)element.setAttribute(attr,next);
+    });
+    i18nOriginalAttrs.set(element,saved);
+  });
+  document.documentElement.lang=uiLanguage;
+  const tableInput=$('table-delimited-text');
+  if(tableInput){
+    const korean='이름, 점수\n민지, 95\n서준, 88',english='Name, Score\nJamie, 95\nAlex, 88';
+    if(tableInput.value===korean||tableInput.value===english)tableInput.value=uiLanguage==='en'?english:korean;
+  }
+}
+function setUiLanguage(language){
+  uiLanguage=language==='en'?'en':'ko';localStorage.setItem(LANGUAGE_KEY,uiLanguage);translateUi();
+}
+new MutationObserver(records=>records.forEach(record=>{if(record.type==='characterData')translateUi(record.target.parentElement);else if(record.type==='attributes')translateUi(record.target);else record.addedNodes.forEach(node=>{if(node.nodeType===1)translateUi(node);else if(node.nodeType===Node.TEXT_NODE&&node.nodeValue.trim())translateUi(node.parentElement)})})).observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['title','aria-label','placeholder','data-tooltip']});
 let editGuideWelcomeTimer=0;
 function modeGuideKey(mode){return mode==='home'?HOME_GUIDE_WELCOME_KEY:mode==='convert'?CONVERT_GUIDE_WELCOME_KEY:mode==='merge'?MERGE_GUIDE_WELCOME_KEY:EDIT_GUIDE_WELCOME_KEY}
 function scheduleModeGuideWelcome(mode=state.mode,force=false){
@@ -11037,7 +11346,7 @@ function showModeGuideWelcome(mode='edit',force=false){
     {selector:'#edit-split',title:'Preview와 Markdown',description:'같은 문서를 원문과 완성된 모습으로 나누어 보여줍니다.',points:['Markdown에서는 문법이 포함된 원문을 직접 작성합니다.','Preview에서는 적용된 서식을 확인하면서 내용을 편집할 수 있습니다.']}
   ];
   const convertSteps=[
-    {selector:'.mode-tools[data-tools="convert"]',title:'변환 방식과 미니 프리뷰',description:'입력 형식에 맞는 변환 방향과 미리보기 방식을 고릅니다.',points:['PDF → MD 또는 MD → PDF를 선택합니다.','미니 프리뷰를 켜면 문서 위에 마우스를 올려 내용을 먼저 확인합니다.'],demo:'hover'},
+    {selector:'.mode-tools[data-tools="convert"]',title:'변환 방식과 미니 프리뷰',description:'입력 형식에 맞는 변환 방향과 미리보기 방식을 고릅니다.',points:['파일 확장자에 따라 PDF → MD 또는 MD → PDF가 자동으로 선택됩니다.','미니 프리뷰를 켜면 문서 위에 마우스를 올려 내용을 먼저 확인합니다.'],demo:'hover'},
     {selector:'#convert-grid .source-pane',title:'변환할 문서 선택',description:'여러 파일을 추가한 뒤 실제로 변환할 항목만 고릅니다.',points:['전체 선택·해제와 선택 삭제를 사용할 수 있습니다.','목록에서 파일별 선택 상태를 확인합니다.']},
     {selector:'#convert-preview',title:'변환 결과 확인',description:'선택한 문서의 변환 결과를 오른쪽에서 확인합니다.',points:['선택한 문서 변환을 누르면 현재 선택에 맞춰 결과가 갱신됩니다.','결과를 편집 화면으로 보내거나 다른 문서와 합칠 수 있습니다.']}
   ];
@@ -11155,10 +11464,17 @@ function showGuideReplayPicker(){
 function showAppSettings(){
   document.querySelector('.edit-guide-overlay')?.remove();
   document.querySelector('.feature-guide-welcome')?.remove();
-  document.querySelector('.app-settings-modal')?.remove();
+  closeGuideModal(document.querySelector('.app-settings-modal'));
   const wrap=document.createElement('div');wrap.className='modal-backdrop app-settings-modal';
   wrap.innerHTML=`<div class="modal-card app-settings-card" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
     <h3 id="app-settings-title">설정</h3>
+    <section class="app-settings-group"><h4>언어</h4>
+      <p class="app-settings-language-copy">화면에 표시할 언어를 선택합니다.</p>
+      <div class="app-settings-language" role="group" aria-label="언어">
+        <button type="button" data-ui-language="ko" class="${uiLanguage==='ko'?'active':''}">한국어</button>
+        <button type="button" data-ui-language="en" class="${uiLanguage==='en'?'active':''}">English</button>
+      </div>
+    </section>
     <section class="app-settings-group"><h4>가이드</h4>
       <div class="app-settings-section"><div><strong>기능 가이드 표시</strong><p>설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-guide-enabled ${featureGuideEnabled?'checked':''}><span></span></label></div>
       <button class="app-settings-replay" type="button" data-guide-picker><span>가이드 다시 보기</span><small>목록에서 다시 볼 가이드를 선택합니다.</small></button>
@@ -11166,12 +11482,59 @@ function showAppSettings(){
     <section class="app-settings-group"><h4>단축키</h4>
       <button class="app-settings-replay" type="button" data-shortcut-settings><span>단축키 설정</span><small>${SHORTCUT_DEFINITIONS.length}개 명령의 단축키를 확인하고 변경합니다.</small></button>
     </section>
+    <section class="app-settings-group mobile-settings-only"><h4>편집 설정</h4>
+      <button class="app-settings-replay mobile-settings-entry" type="button" data-edit-settings><span><b>작성·보기 옵션</b><small>자동 보정과 편집 화면 표시 기능을 설정합니다.</small></span><i>설정</i></button>
+    </section>
+    <section class="app-settings-group mobile-settings-only"><h4>테마</h4>
+      <button class="app-settings-replay mobile-settings-entry" type="button" data-theme-settings><span><b>화면 테마</b><small>라이트·다크 테마를 선택하거나 사용자 지정 색상을 편집합니다.</small></span><i>설정</i></button>
+    </section>
     <div class="modal-actions"><button class="tool primary" type="button" data-settings-close>닫기</button></div>
   </div>`;
   wrap.querySelector('[data-guide-enabled]').onchange=event=>setFeatureGuideEnabled(event.target.checked);
+  wrap.querySelectorAll('[data-ui-language]').forEach(button=>button.onclick=()=>{
+    setUiLanguage(button.dataset.uiLanguage);
+    wrap.querySelectorAll('[data-ui-language]').forEach(item=>item.classList.toggle('active',item===button));
+    translateUi(wrap);
+  });
   wrap.querySelector('[data-guide-picker]').onclick=()=>{closeGuideModal(wrap);showGuideReplayPicker()};
   wrap.querySelector('[data-shortcut-settings]').onclick=()=>{closeGuideModal(wrap);showShortcutSettings()};
+  wrap.querySelector('[data-edit-settings]').onclick=event=>{event.stopPropagation();closeGuideModal(wrap);showMobileEditOptions()};
+  wrap.querySelector('[data-theme-settings]').onclick=event=>{event.stopPropagation();closeGuideModal(wrap);showMobileThemeSettings()};
   wrap.querySelector('[data-settings-close]').onclick=()=>closeGuideModal(wrap);
+  wrap.addEventListener('click',event=>{if(event.target===wrap)closeGuideModal(wrap)});
+  document.body.appendChild(wrap);
+}
+function showMobileEditOptions(){
+  const panel=$('ac-panel');
+  if(!panel)return;
+  closeAllPanels();
+  const wrap=document.createElement('div');
+  wrap.className='modal-backdrop mobile-options-modal';
+  wrap.innerHTML='<div class="modal-card mobile-options-card" role="dialog" aria-modal="true" aria-labelledby="mobile-options-title"><div class="mobile-options-head"><h3 id="mobile-options-title">편집 설정</h3><button type="button" aria-label="닫기">×</button></div><div class="mobile-options-body"></div></div>';
+  wrap.querySelector('.mobile-options-body').appendChild(panel);
+  panel.classList.remove('hidden');
+  wrap.querySelector('.mobile-options-head button').onclick=()=>closeGuideModal(wrap);
+  wrap.addEventListener('click',event=>{if(event.target===wrap)closeGuideModal(wrap)});
+  document.body.appendChild(wrap);
+}
+function showMobileThemeSettings(){
+  const wrap=document.createElement('div');
+  wrap.className='modal-backdrop mobile-theme-settings-modal';
+  wrap.innerHTML=`<div class="modal-card mobile-options-card" role="dialog" aria-modal="true" aria-labelledby="mobile-theme-title"><div class="mobile-options-head"><h3 id="mobile-theme-title">테마 설정</h3><button type="button" aria-label="닫기">×</button></div><div class="mobile-options-body"><p class="mobile-theme-description">화면에 사용할 테마를 선택하세요.</p><div class="mobile-settings-theme" role="group" aria-label="화면 테마"><button type="button" data-settings-theme="light" class="${state.theme==='light'?'active':''}">라이트</button><button type="button" data-settings-theme="dark" class="${state.theme==='dark'?'active':''}">다크</button><button type="button" data-settings-theme="custom" class="${state.theme==='custom'?'active':''}">사용자 지정</button></div><button class="app-settings-replay mobile-settings-entry" type="button" data-custom-theme-settings><span><b>사용자 지정 테마 편집</b><small>배경색과 글자색을 직접 설정합니다.</small></span><i>설정</i></button></div></div>`;
+  wrap.querySelectorAll('[data-settings-theme]').forEach(button=>button.onclick=event=>{
+    event.stopPropagation();
+    const theme=button.dataset.settingsTheme;
+    applyTheme(theme);
+    if(theme==='custom'){
+      closeGuideModal(wrap);
+      els.app.classList.remove('mobile-theme-collapsed');
+      openPanel('custom-theme-panel','mobile-settings');
+      return;
+    }
+    wrap.querySelectorAll('[data-settings-theme]').forEach(item=>item.classList.toggle('active',item===button));
+  });
+  wrap.querySelector('[data-custom-theme-settings]').onclick=event=>{event.stopPropagation();closeGuideModal(wrap);els.app.classList.remove('mobile-theme-collapsed');openPanel('custom-theme-panel','mobile-settings')};
+  wrap.querySelector('.mobile-options-head button').onclick=()=>closeGuideModal(wrap);
   wrap.addEventListener('click',event=>{if(event.target===wrap)closeGuideModal(wrap)});
   document.body.appendChild(wrap);
 }
@@ -11708,13 +12071,14 @@ function insertFormControl(){
   }
   let context=captureInsertionContext();
   const selected=type=>lastFormInsert.type===type?' selected':'';
-  const optionRow=(option,index)=>`<div class="form-option-row">
+  const optionRow=(option,index)=>{const displayOptionLabel=uiLanguage==='en'&&/^선택 \d+$/.test(option.label)?`Option ${index+1}`:option.label;return `<div class="form-option-row">
     <input type="radio" name="zz-form-default" value="${index}"${index===lastFormInsert.selectedIndex?' checked':''} aria-label="기본 선택">
-    <input type="text" class="zz-form-option-label" value="${htmlEsc(option.label)}" placeholder="표시명">
+    <input type="text" class="zz-form-option-label" value="${htmlEsc(displayOptionLabel)}" placeholder="표시명">
     <input type="text" class="zz-form-option-value" value="${htmlEsc(option.value)}" placeholder="저장값">
     <button class="form-option-remove" type="button" aria-label="옵션 삭제" title="옵션 삭제">×</button>
-  </div>`;
-  const {panel}=showFormInsertPanel(`<div class="insert-config-grid"><label>개체 종류<select id="zz-form-type"><option value="checkbox"${selected('checkbox')}>선택 상자</option><option value="radio"${selected('radio')}>라디오 단추</option><option value="select"${selected('select')}>콤보 상자</option><option value="text"${selected('text')}>입력 상자</option><option value="button"${selected('button')}>명령 단추</option></select></label><label>표시 문구<input id="zz-form-label" value="${htmlEsc(lastFormInsert.label)}"></label></div>
+  </div>`};
+  const initialFormLabel=uiLanguage==='en'&&lastFormInsert.label==='항목'?'Item':lastFormInsert.label;
+  const {panel}=showFormInsertPanel(`<div class="insert-config-grid"><label>개체 종류<select id="zz-form-type"><option value="checkbox"${selected('checkbox')}>선택 상자</option><option value="radio"${selected('radio')}>라디오 단추</option><option value="select"${selected('select')}>콤보 상자</option><option value="text"${selected('text')}>입력 상자</option><option value="button"${selected('button')}>명령 단추</option></select></label><label>표시 문구<input id="zz-form-label" value="${htmlEsc(initialFormLabel)}"></label></div>
     <div class="form-option-editor"${lastFormInsert.type==='select'?'':' hidden'}>
       <div class="form-option-editor-head"><span>기본</span><span>표시명</span><span>저장값</span><span></span></div>
       <div class="form-option-list">${lastFormInsert.options.map(optionRow).join('')}</div>
@@ -12301,10 +12665,11 @@ async function showVersionHistory(){
   const snapshot=await zzStoreGet('session','latest').catch(()=>null);
   const versions=file?await zzStoreGet('versions',file.path||file.name)||[]:[];
   if(!file&&!snapshot?.files?.length){showInfoNotice('버전 기록','저장된 버전이 없습니다.');return}
+  const locale=uiLanguage==='en'?'en-US':'ko-KR';
   const recoveryItem=snapshot?.files?.length
-    ?`<div class="version-item version-recovery-item"><div><strong>${new Date(snapshot.savedAt).toLocaleString()}</strong><small>자동 복구본 · 문서 ${snapshot.files.length}개</small></div><button class="tool primary" type="button" data-recover-workspace>전체 복원</button></div>`
+    ?`<div class="version-item version-recovery-item"><div><strong>${new Date(snapshot.savedAt).toLocaleString(locale)}</strong><small>자동 복구본 · 문서 ${snapshot.files.length}개</small></div><button class="tool primary" type="button" data-recover-workspace>전체 복원</button></div>`
     :'';
-  const documentItems=versions.map((version,index)=>`<div class="version-item"><div><strong>${new Date(version.time).toLocaleString()}</strong><small>${htmlEsc(version.reason)} · ${version.text.length.toLocaleString()}자</small></div><button class="tool" type="button" data-version="${index}">복원</button></div>`).join('');
+  const documentItems=versions.map((version,index)=>`<div class="version-item"><div><strong>${new Date(version.time).toLocaleString(locale)}</strong><small>${htmlEsc(version.reason)} · ${version.text.length.toLocaleString(locale)}자</small></div><button class="tool" type="button" data-version="${index}">복원</button></div>`).join('');
   const wrap=document.createElement('div');
   wrap.className='modal-backdrop';
   wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true"><h3>버전 기록</h3>${recoveryItem||documentItems
@@ -12325,7 +12690,7 @@ async function restoreWorkspaceSession(){
   const snapshot=await zzStoreGet('session','latest').catch(()=>null);
   if(!(snapshot?.files?.length||snapshot?.sidebarFolders?.length||snapshot?.assets?.length)||state.files.length)return;
   const age=new Date(snapshot.savedAt).toLocaleString();
-  const dialog=await showInsertDialog('작업 복구',`<p class="recovery-summary">${htmlEsc(age)}에 자동 저장된 문서 ${snapshot.files.length}개가 있습니다.<br>브라우저 저장소가 지워지기 전까지 이 기록을 복구할 수 있습니다.</p>`,'복구');
+  const dialog=await showInsertDialog('작업 복구',`<p class="recovery-summary">${htmlEsc(age)}에 자동 저장된 문서 ${snapshot.files.length}개가 있습니다.<br>브라우저 저장소가 지워지기 전까지 이 기록을 복구할 수 있습니다.</p>`,'복구',wrap=>wrap.classList.add('recovery-dialog'));
   if(!dialog)return;
   applyWorkspaceSnapshot(snapshot);
 }
@@ -12510,7 +12875,7 @@ window.addEventListener('pagehide',saveWorkspaceSession);
 syncColorButtons();
 $('fmt-left').onclick=()=>applyAlign('left');$('fmt-center').onclick=()=>applyAlign('center');$('fmt-right').onclick=()=>applyAlign('right');
 $('fmt-table').addEventListener('mousedown',e=>{e.preventDefault();rememberPreviewRange()});
-$('fmt-table').onclick=()=>{if(insertPreviewTable())return;insertBlock('| 제목 1 | 제목 2 | 제목 3 |\n| --- | --- | --- |\n| 내용 | 내용 | 내용 |')};
+$('fmt-table').onclick=()=>{if(insertPreviewTable())return;insertBlock(document.documentElement.lang==='en'?'| Heading 1 | Heading 2 | Heading 3 |\n| --- | --- | --- |\n| Content | Content | Content |':'| 제목 1 | 제목 2 | 제목 3 |\n| --- | --- | --- |\n| 내용 | 내용 | 내용 |')};
 $('fmt-image').onclick=()=>{rememberPreviewRange();state.insertingImage=true;state.savedSelection={start:els.editor.selectionStart,end:els.editor.selectionEnd};els.imageInput.value='';els.imageInput.click()};
 $('fmt-link').onclick=insertLinkWithDialog;
 $('fmt-math').onclick=insertMathWithDialog;
@@ -12791,8 +13156,35 @@ $('side-resizer').addEventListener('mousedown',e=>{
   document.addEventListener('mousemove',move);
   document.addEventListener('mouseup',up);
 });
-$('ribbon-toggle').onclick=()=>els.app.classList.toggle('ribbon-collapsed');
+function syncRibbonToggle(){
+  const collapsed=els.app.classList.contains('ribbon-collapsed');
+  [$('ribbon-toggle'),$('mobile-format-toggle')].forEach(button=>{
+    button.title=collapsed?'서식 도구 펼치기':'서식 도구 접기';
+    button.setAttribute('aria-label',button.title);
+    button.setAttribute('aria-expanded',String(!collapsed));
+  });
+}
+const toggleFormatTools=()=>{els.app.classList.toggle('ribbon-collapsed');syncRibbonToggle()};
+$('ribbon-toggle').onclick=toggleFormatTools;
+$('mobile-format-toggle').onclick=toggleFormatTools;
+syncRibbonToggle();
 $('brand-home').onclick=()=>setMode(state.mode,true);
+$('mobile-home').onclick=()=>setMode(state.mode,true);
+$('mobile-settings').onclick=showAppSettings;
+function syncMobileThemeToggle(){
+  const collapsed=els.app.classList.contains('mobile-theme-collapsed'),button=$('mobile-theme-toggle');
+  button.title=collapsed?'테마 열기':'테마 닫기';
+  button.setAttribute('aria-label',button.title);
+  button.setAttribute('aria-expanded',String(!collapsed));
+  button.classList.toggle('active',!collapsed);
+}
+$('mobile-theme-toggle').onclick=()=>{
+  const closing=!els.app.classList.contains('mobile-theme-collapsed');
+  els.app.classList.toggle('mobile-theme-collapsed',closing);
+  if(closing)closeAllPanels();
+  syncMobileThemeToggle();
+};
+syncMobileThemeToggle();
 $('theme-light').onclick=()=>{closeAllPanels();applyTheme('light')};
 $('theme-dark').onclick=()=>{closeAllPanels();applyTheme('dark')};
 $('theme-custom').onclick=e=>{
@@ -12809,6 +13201,6 @@ setSidebarWidth(Number(localStorage.getItem('md-sidebar-width'))||312);
 setSidebarView('files');
 setLineNumbers($('enable-line-numbers').checked);
 setSwapPanes($('enable-swap-panes').checked);
-applyTheme(state.theme);syncCustomThemePanel();setMode('convert',true);renderAll();updateHomeConvert();state.history=[els.editor.value];state.savedText=els.editor.value;renderAllSwatches();updateUndoRedoButtons();updateLineNumbers();
+applyTheme(state.theme);syncCustomThemePanel();setMode('convert',true);renderAll();updateHomeConvert();state.history=[els.editor.value];state.savedText=els.editor.value;renderAllSwatches();updateUndoRedoButtons();updateLineNumbers();translateUi();
 refreshShortcutHints();
 setTimeout(async()=>{await restoreWorkspaceSession();showFeatureGuideWelcome()},500);
