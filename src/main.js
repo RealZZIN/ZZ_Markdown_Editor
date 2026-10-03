@@ -7828,10 +7828,13 @@ function stylePreviewSelection(styleName,value){
   if(math)return styleSelectedMath(math,styleName,value);
   const range=previewRange();
   if(!range)return false;
+  // Color/style controls require an actual selection in Preview. Creating an
+  // empty styled span at a caret makes mobile composition lose its insertion
+  // point after the first input event.
+  if(range.collapsed)return true;
   const rangeNode=range.commonAncestorContainer.nodeType===Node.ELEMENT_NODE?range.commonAncestorContainer:range.commonAncestorContainer.parentElement;
   const chipLabel=rangeNode?.closest?.('.zz-source-chip-label');
   if(chipLabel&&els.preview.contains(chipLabel)){
-    if(range.collapsed)return true;
     pushHistory(true);
     const span=document.createElement('span');
     span.style[styleName.replace(/-([a-z])/g,(_,c)=>c.toUpperCase())]=value;
