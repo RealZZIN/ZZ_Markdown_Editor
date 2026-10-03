@@ -3330,7 +3330,10 @@ function renderMarkdown(text){
   lastRenderedMarkdownText=text;
   selectedPreviewImage=null;
   const html=markdownHtml(text);
-  els.preview.innerHTML=html;
+  // Keep a stable editable block for an empty document. Moving the first text
+  // node into a newly-created paragraph during input breaks desktop and mobile
+  // native insertion/composition after the first character.
+  els.preview.innerHTML=html||'<p><br></p>';
   assignPreviewHeadingAnchors(els.preview);
   fixSpanColors(els.preview);
   runMermaid(els.preview);
@@ -9282,6 +9285,8 @@ function schedulePreviewMarkdownApply(node){
   // not fall back to an unrelated root-level inline run and move the caret.
   if(caretElement?.closest('table,pre,.code-head'))return;
   const rootCaret=caretNode===els.preview;
+  const directCaretNode=caretNode?.parentNode===els.preview;
+  if(directCaretNode)return;
   if(rootCaret){
     const offset=Math.max(0,liveRange.endOffset-1);
     caretNode=els.preview.childNodes[offset]||els.preview.childNodes[liveRange.endOffset]||null;
