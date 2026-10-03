@@ -2347,6 +2347,7 @@ els.preview.addEventListener('pointerdown',e=>{
   if(e.button!==0||e.target.closest('.block-move-handle,.form-move-handle,.zz-form-control input,.zz-form-control select,.zz-form-control button'))return;
   const range=document.caretRangeFromPoint?.(e.clientX,e.clientY);
   if(range&&els.preview.contains(range.commonAncestorContainer)){
+    state.lastInsertionSurface='preview';
     state.savedPreviewRange=range.cloneRange();
     state.savedSelection=null;
   }
@@ -7730,6 +7731,9 @@ function applyPreviewCommand(command,value=null){
   if(applySelectedMathCommand(command,value))return true;
   const range=previewRange();
   if(!range)return false;
+  // A caret is not a formatting selection. Never insert a placeholder when a
+  // mobile toolbar tap has collapsed the user's native text selection.
+  if(range.collapsed)return true;
   els.preview.focus();
   const sel=window.getSelection();
   sel.removeAllRanges();
@@ -7844,8 +7848,7 @@ function stylePreviewSelection(styleName,value){
   pushHistory(true);
   const span=document.createElement('span');
   span.style[styleName.replace(/-([a-z])/g,(_,c)=>c.toUpperCase())]=value;
-  if(range.collapsed)span.textContent='TEXT';
-  else span.appendChild(range.extractContents());
+  span.appendChild(range.extractContents());
   range.insertNode(span);
   const sel=window.getSelection();
   sel.removeAllRanges();
@@ -7895,6 +7898,11 @@ document.addEventListener('selectionchange',()=>{
   const range=selection?.rangeCount?selection.getRangeAt(0):null;
   if(range&&!range.collapsed&&range.toString()&&els.preview.contains(range.commonAncestorContainer)){
     lastTextContextRange=range.cloneRange();
+    // Mobile selection handles often report only selectionchange. Keep the
+    // selected Preview range before a toolbar tap collapses the live selection.
+    state.lastInsertionSurface='preview';
+    state.savedPreviewRange=range.cloneRange();
+    state.savedSelection=null;
   }
 });
 function restoreTextContextRange(){
@@ -9852,6 +9860,11 @@ function insertPlainPreviewParagraph(e){
     const tail=tailRange.extractContents();
     nextBlock=/^H[1-6]$/.test(block.tagName)?document.createElement('p'):block.cloneNode(false);
     nextBlock.removeAttribute('id');
+    // Paragraph-level highlighting must not spill into the paragraph created
+    // by Enter. Inline highlighted text in the extracted tail is preserved.
+    nextBlock.style.removeProperty('background-color');
+    nextBlock.style.removeProperty('background');
+    if(!nextBlock.getAttribute('style'))nextBlock.removeAttribute('style');
     nextBlock.appendChild(tail);
     block.insertAdjacentElement('afterend',nextBlock);
     if(previewBlockIsEmpty(nextBlock)){
@@ -12340,7 +12353,10 @@ function applyPickedColor(type,value){
   syncColorButtons();
   if(styleTableTextSelection(prop,value)){if(value)trackColor(type,value);return}
   if(finalizeColor(type,value)){if(value)trackColor(type,value);return}
-  if(state.savedPreviewRange&&stylePreviewSelection(prop,value)){if(value)trackColor(type,value);return}
+  if(state.lastInsertionSurface==='preview'){
+    if(stylePreviewSelection(prop,value)&&value)trackColor(type,value);
+    return;
+  }
   const saved=state.savedSelection;
   const hasEditorSelection=saved?saved.start!==saved.end:els.editor.selectionStart!==els.editor.selectionEnd;
   if(hasEditorSelection){styleSpan(prop,value);if(value)trackColor(type,value);return}
