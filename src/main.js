@@ -11272,6 +11272,10 @@ const EN_TEXT={
   '범위':'Range','전체 문서':'Entire document','일부 선택':'Select a range','원문 미리보기':'Source preview','삽입된 내용은 편집할 수 없습니다. 블록을 선택하면 복사·붙여넣기·삭제·이동할 수 있습니다.':'Inserted content is read-only. Select the block to copy, paste, delete, or move it.'
 };
 const i18nOriginalText=new WeakMap(),i18nOriginalAttrs=new WeakMap();
+function uiTranslationExcluded(node){
+  const element=node?.nodeType===Node.ELEMENT_NODE?node:node?.parentElement;
+  return !!element?.closest?.('#preview,#editor,[contenteditable="true"]');
+}
 function translatedUiText(value){
   const match=String(value).match(/^(\s*)([\s\S]*?)(\s*)$/),core=match?.[2]||'';
   let translated=EN_TEXT[core];
@@ -11303,6 +11307,9 @@ function translateUi(root=document.body){
   if(!root)return;
   const elements=root.nodeType===1?[root,...root.querySelectorAll('*')]:[];
   elements.forEach(element=>{
+    // User-authored document text is not UI copy. Remembering its first
+    // character as an i18n source makes every later keystroke revert to it.
+    if(uiTranslationExcluded(element))return;
     [...element.childNodes].filter(node=>node.nodeType===Node.TEXT_NODE&&node.nodeValue.trim()).forEach(node=>{
       if(!i18nOriginalText.has(node))i18nOriginalText.set(node,node.nodeValue);
       const original=i18nOriginalText.get(node),next=uiLanguage==='en'?translatedUiText(original):original;
@@ -11332,7 +11339,16 @@ function translateUi(root=document.body){
 function setUiLanguage(language){
   uiLanguage=language==='en'?'en':'ko';localStorage.setItem(LANGUAGE_KEY,uiLanguage);translateUi();
 }
-new MutationObserver(records=>records.forEach(record=>{if(record.type==='characterData')translateUi(record.target.parentElement);else if(record.type==='attributes')translateUi(record.target);else record.addedNodes.forEach(node=>{if(node.nodeType===1)translateUi(node);else if(node.nodeType===Node.TEXT_NODE&&node.nodeValue.trim())translateUi(node.parentElement)})})).observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['title','aria-label','placeholder','data-tooltip']});
+new MutationObserver(records=>records.forEach(record=>{
+  if(uiTranslationExcluded(record.target))return;
+  if(record.type==='characterData')translateUi(record.target.parentElement);
+  else if(record.type==='attributes')translateUi(record.target);
+  else record.addedNodes.forEach(node=>{
+    if(uiTranslationExcluded(node))return;
+    if(node.nodeType===1)translateUi(node);
+    else if(node.nodeType===Node.TEXT_NODE&&node.nodeValue.trim())translateUi(node.parentElement);
+  });
+})).observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['title','aria-label','placeholder','data-tooltip']});
 let editGuideWelcomeTimer=0;
 function modeGuideKey(mode){return mode==='home'?HOME_GUIDE_WELCOME_KEY:mode==='convert'?CONVERT_GUIDE_WELCOME_KEY:mode==='merge'?MERGE_GUIDE_WELCOME_KEY:EDIT_GUIDE_WELCOME_KEY}
 function scheduleModeGuideWelcome(mode=state.mode,force=false){
