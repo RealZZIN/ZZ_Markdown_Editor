@@ -553,6 +553,22 @@ function zzTocMarkdown(headings,numbered=true){
     return`${'  '.repeat(item.depth)}- [${label.replace(/[\[\]]/g,'\\$&')}](#${item.slug})`;
   }).join('\n');
 }
+function zzTocEmptyText(){return uiLanguage==='en'?'No headings are available to display in this document.':'문서에 표시할 제목이 없습니다.'}
+function zzTocTitleText(){return uiLanguage==='en'?'Table of contents':'목차'}
+function localizeRenderedZzTocs(root=els.preview){
+  root?.querySelectorAll?.('.zz-toc').forEach(toc=>{
+    toc.setAttribute('aria-label',zzTocTitleText());
+    const title=toc.querySelector('.zz-toc-title');
+    if(title)title.textContent=zzTocTitleText();
+    const empty=toc.querySelector('.zz-toc-link.muted');
+    if(empty)empty.textContent=zzTocEmptyText();
+    toc.querySelectorAll('.zz-toc-link[data-zz-toc-target]').forEach(link=>{
+      link.title=uiLanguage==='en'?'Click: navigate · Ctrl+drag: reorder contents':'클릭: 이동 · Ctrl+드래그: 목차 순서 변경';
+    });
+    const handle=toc.querySelector(':scope > .unique-block-move-handle');
+    if(handle)handle.title=uiLanguage==='en'?'Move table of contents':'문서 목차 위치 이동';
+  });
+}
 function normalizeZzTocMarkers(source){
   return String(source||'')
     .replace(/&lt;!--\s*zz:toc\b([\s\S]*?)--&gt;/gi,(_,attrs)=>`<!-- zz:toc${attrs} -->`)
@@ -566,7 +582,7 @@ function refreshZzTocSource(source){
     const parsed=zzDocumentHeadings(original,attrs.depth||'2-4');
     const headings=zzTocOrderedHeadings(parsed.length?parsed:zzLiveDocumentHeadings(attrs.depth||'2-4'),attrs.order);
     const numbered=/\bnumbered\b/i.test(attrsRaw)&&!/\bnumbered\s*=\s*(?:"?false"?|"?0"?)/i.test(attrsRaw);
-    const body=zzTocMarkdown(headings,numbered)||'- 문서에 표시할 제목이 없습니다.';
+    const body=zzTocMarkdown(headings,numbered)||`- ${zzTocEmptyText()}`;
     const replacement=`<!-- zz:toc${attrsRaw} -->\n${body}\n<!-- /zz:toc -->`;
     if(replacement!==match[0])edits.push({start:match.index,end:match.index+match[0].length,replacement});
   }
@@ -606,12 +622,12 @@ function renderZzToc(attrsRaw,source){
   const parsed=zzDocumentHeadings(source,attrs.depth||'2-4');
   const headings=zzTocOrderedHeadings(parsed.length?parsed:zzLiveDocumentHeadings(attrs.depth||'2-4'),attrs.order);
   const entries=zzTocEntries(headings,numbered);
-  const body=zzTocMarkdown(headings,numbered)||'- 문서에 표시할 제목이 없습니다.';
+  const body=zzTocMarkdown(headings,numbered)||`- ${zzTocEmptyText()}`;
   const raw=`<!-- zz:toc${attrsRaw||''} -->\n${body}\n<!-- /zz:toc -->`;
   const items=entries.length
-    ?entries.map(item=>`<li class="zz-toc-item" data-zz-toc-item="${htmlEsc(item.slug)}" style="--toc-depth:${item.depth};--toc-indent:${item.depth*1.25}em;--toc-compact-indent:${item.depth*.72}em"><a class="zz-toc-link" href="#${htmlEsc(item.slug)}" data-zz-toc-target="${htmlEsc(item.slug)}" title="클릭: 이동 · Ctrl+드래그: 목차 순서 변경">${numbered?`<span class="zz-toc-number">${htmlEsc(item.number)}</span>`:''}<span class="zz-toc-text">${htmlEsc(item.text)}</span></a></li>`).join('')
-    :'<li class="zz-toc-item"><span class="zz-toc-link muted">문서에 표시할 제목이 없습니다.</span></li>';
-  return `<nav class="zz-toc" data-toc-style="${htmlEsc(style)}" data-toc-layout="${htmlEsc(layout)}" data-toc-numbered="${numbered}" data-toc-source="${htmlEsc(encodeURIComponent(raw))}" aria-label="문서 목차" contenteditable="false"><div class="zz-toc-title">목차</div><ol class="zz-toc-list">${items}</ol></nav>`;
+    ?entries.map(item=>`<li class="zz-toc-item" data-zz-toc-item="${htmlEsc(item.slug)}" style="--toc-depth:${item.depth};--toc-indent:${item.depth*1.25}em;--toc-compact-indent:${item.depth*.72}em"><a class="zz-toc-link" href="#${htmlEsc(item.slug)}" data-zz-toc-target="${htmlEsc(item.slug)}" title="${uiLanguage==='en'?'Click: navigate · Ctrl+drag: reorder contents':'클릭: 이동 · Ctrl+드래그: 목차 순서 변경'}">${numbered?`<span class="zz-toc-number">${htmlEsc(item.number)}</span>`:''}<span class="zz-toc-text">${htmlEsc(item.text)}</span></a></li>`).join('')
+    :`<li class="zz-toc-item"><span class="zz-toc-link muted">${zzTocEmptyText()}</span></li>`;
+  return `<nav class="zz-toc" data-toc-style="${htmlEsc(style)}" data-toc-layout="${htmlEsc(layout)}" data-toc-numbered="${numbered}" data-toc-source="${htmlEsc(encodeURIComponent(raw))}" aria-label="${zzTocTitleText()}" contenteditable="false"><div class="zz-toc-title">${zzTocTitleText()}</div><ol class="zz-toc-list">${items}</ol></nav>`;
 }
 function renderMathHtml(latex,displayMode=false){
   const clean=String(latex||'').trim();
@@ -1155,7 +1171,7 @@ function addMovableElements(root){
   root.querySelectorAll('.zz-lens,.obsidian-callout,.zz-sync-block,.zz-toc,.zz-sheet,.zz-html-embed,.zz-doc-embed,.reference-list').forEach(block=>{
     if(block.querySelector(':scope > .unique-block-move-handle'))return;
     const label=block.matches('.zz-lens')?'다중 보기':block.matches('.zz-sync-block')?'동기화 블록':block.matches('.zz-toc')?'문서 목차':block.matches('.obsidian-callout')?'콜아웃':block.matches('.reference-list')?'각주·참고문헌':'임베드';
-    const handle=makeMoveHandle(`${label} 위치 이동`);
+    const handle=makeMoveHandle(block.matches('.zz-toc')&&uiLanguage==='en'?'Move table of contents':`${label} 위치 이동`);
     handle.classList.add('unique-block-move-handle');
     block.appendChild(handle);
   });
@@ -6927,6 +6943,25 @@ function autoCorrectMd(text){
   text=text.replace(/^(#{1,6}) {2,}/gm,(_,h)=>`${h} `);
   return text;
 }
+function autoCorrectPreviewAtSelection(){
+  if(!acEnabled)return null;
+  const selection=window.getSelection();
+  if(!selection?.rangeCount||!selection.isCollapsed)return null;
+  const range=selection.getRangeAt(0);
+  if(!els.preview.contains(range.commonAncestorContainer))return null;
+  const block=previewEditBlock(range.endContainer);
+  if(!block||block.querySelector('*:not(br)'))return null;
+  const before=document.createRange();
+  before.selectNodeContents(block);
+  before.setEnd(range.endContainer,range.endOffset);
+  const text=previewBlockPlainText(block),corrected=autoCorrectMd(text);
+  if(corrected===text)return null;
+  const correctedPrefix=autoCorrectMd(text.slice(0,before.toString().length));
+  block.textContent=corrected;
+  placeCaretAtPreviewTextOffset(block,Math.min(corrected.length,correctedPrefix.length));
+  rememberPreviewRange();
+  return block;
+}
 let acEnabled=savedOption('md-option-autocorrect',true);
 let colorCorrectEnabled=savedOption('md-option-color-correct',true);
 let paragraphBreakEnabled=savedOption('md-option-paragraph-break',true);
@@ -7214,6 +7249,9 @@ els.preview.addEventListener('input',e=>{
   // Preview serialization and live Markdown conversion can replace/reparent
   // the active text node. Wait until the browser finishes the IME composition.
   if(e.isComposing||previewCompositionActive)return;
+  const closingSyntax=typeof e.data==='string'&&['*','_','`',')'].includes(e.data.slice(-1));
+  const correctedBlock=closingSyntax?autoCorrectPreviewAtSelection():null;
+  if(correctedBlock&&applyPreviewMarkdown(correctedBlock))return;
   scheduleSyncFromPreview();
   if(editedCode&&!e.isComposing)scheduleEditableCodeHighlight(editedCode);
   schedulePreviewMarkdownApply(e.target);
@@ -9249,9 +9287,26 @@ function applyPreviewMarkdown(block){
   const before=document.createRange();
   before.selectNodeContents(block);
   before.setEnd(range.endContainer,range.endOffset);
-  const text=previewBlockPlainText(block);
-  const caretOffset=Math.min(text.length,before.toString().length);
-  if(!previewMarkdownCandidate(text))return false;
+  let text=previewBlockPlainText(block);
+  let caretOffset=Math.min(text.length,before.toString().length);
+  let correctedSpacing=false;
+  // The Markdown textarea already applies this correction on closing syntax.
+  // Preview editing needs the same path before live Markdown rendering.
+  if(acEnabled&&!block.querySelector('*:not(br)')){
+    const corrected=autoCorrectMd(text);
+    if(corrected!==text){
+      const correctedPrefix=autoCorrectMd(text.slice(0,caretOffset));
+      block.textContent=corrected;
+      text=corrected;
+      caretOffset=Math.min(corrected.length,correctedPrefix.length);
+      placeCaretAtPreviewTextOffset(block,caretOffset);
+      correctedSpacing=true;
+    }
+  }
+  if(!previewMarkdownCandidate(text)){
+    if(correctedSpacing){syncFromPreview();pushHistory(true);return true}
+    return false;
+  }
   if(applyPreviewStructuralMarkdown(block,text))return true;
   if(applyPreviewBoldMarkup(block,caretOffset)){
     syncFromPreview();
@@ -11337,7 +11392,7 @@ function translateUi(root=document.body){
   }
 }
 function setUiLanguage(language){
-  uiLanguage=language==='en'?'en':'ko';localStorage.setItem(LANGUAGE_KEY,uiLanguage);translateUi();
+  uiLanguage=language==='en'?'en':'ko';localStorage.setItem(LANGUAGE_KEY,uiLanguage);translateUi();localizeRenderedZzTocs();
 }
 new MutationObserver(records=>records.forEach(record=>{
   if(uiTranslationExcluded(record.target))return;
@@ -11890,7 +11945,7 @@ async function insertZzToc(){
   if(!options)return;
   const attrs=` depth="${options.depth}" style="${options.style}" layout="${options.layout}"${options.numbered?' numbered':''}`;
   const headings=zzCurrentDocumentHeadings(options.depth);
-  const body=zzTocMarkdown(headings,options.numbered)||'- 문서에 표시할 제목이 없습니다.';
+  const body=zzTocMarkdown(headings,options.numbered)||`- ${zzTocEmptyText()}`;
   const syntax=`<!-- zz:toc${attrs} -->\n${body}\n<!-- /zz:toc -->`;
   insertMarkdownBlockAtContext(syntax,context);
 }
@@ -11909,7 +11964,7 @@ async function editZzTocBlock(block){
   const savedOrder=attrs.order?` order="${String(attrs.order).replace(/"/g,'&quot;')}"`:'';
   const nextAttrs=` depth="${options.depth}" style="${options.style}" layout="${options.layout}"${options.numbered?' numbered':''}${savedOrder}`;
   const headings=zzCurrentDocumentHeadings(options.depth);
-  const body=zzTocMarkdown(headings,options.numbered)||'- 문서에 표시할 제목이 없습니다.';
+  const body=zzTocMarkdown(headings,options.numbered)||`- ${zzTocEmptyText()}`;
   const nextSource=`<!-- zz:toc${nextAttrs} -->\n${body}\n<!-- /zz:toc -->`;
   const editorSource=els.editor.value;
   let start=editorSource.indexOf(source),length=source.length;
