@@ -3443,7 +3443,7 @@ function addImageResize(root){
   });
 }
 let lastRenderedMarkdownText=null;
-let postRenderEnhancementToken=0,postRenderEnhancementIdle=0,postRenderEnhancementFrame=0;
+let postRenderEnhancementToken=0,postRenderEnhancementIdle=0,postRenderEnhancementFrame=0,postRenderEnhancementDelay=0;
 let lazyTableResizeInstalled=false;
 function installLazyTableResize(){
   if(lazyTableResizeInstalled)return;
@@ -3462,6 +3462,8 @@ function cancelPostRenderEnhancements(){
   postRenderEnhancementFrame=0;
   if(postRenderEnhancementIdle&&'cancelIdleCallback' in window)cancelIdleCallback(postRenderEnhancementIdle);
   postRenderEnhancementIdle=0;
+  clearTimeout(postRenderEnhancementDelay);
+  postRenderEnhancementDelay=0;
 }
 function schedulePostRenderEnhancements(text){
   cancelPostRenderEnhancements();
@@ -3470,6 +3472,15 @@ function schedulePostRenderEnhancements(text){
   const enhance=()=>{
     postRenderEnhancementIdle=0;
     if(token!==postRenderEnhancementToken||lastRenderedMarkdownText!==text)return;
+    if(document.querySelector('.modal-backdrop,.edit-guide-overlay,.form-insert-panel')){
+      postRenderEnhancementDelay=setTimeout(()=>{
+        postRenderEnhancementDelay=0;
+        if(token!==postRenderEnhancementToken)return;
+        if('requestIdleCallback' in window)postRenderEnhancementIdle=requestIdleCallback(enhance,{timeout:900});
+        else setTimeout(enhance,0);
+      },240);
+      return;
+    }
     fixSpanColors(els.preview);
     runMermaid(els.preview);
     runHighlight(els.preview);
@@ -5611,9 +5622,11 @@ function showInfoNotice(title,message){
   const wrap=document.createElement('div');
   wrap.className='modal-backdrop info-notice';
   wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true"><h3>${htmlEsc(title)}</h3><p>${htmlEsc(message)}</p><div class="modal-actions"><button class="tool primary" type="button" data-info-close>확인</button></div></div>`;
-  const close=()=>{document.removeEventListener('keydown',onKey);wrap.remove()};
+  let closed=false;
+  const close=()=>{if(closed)return;closed=true;document.removeEventListener('keydown',onKey);wrap.remove()};
   const onKey=e=>{if(e.key==='Escape'||e.key==='Enter')close()};
   wrap.addEventListener('click',e=>{if(e.target===wrap||e.target.closest('[data-info-close]'))close()});
+  wrap.querySelector('[data-info-close]').addEventListener('pointerup',e=>{e.preventDefault();e.stopPropagation();close()});
   document.addEventListener('keydown',onKey);
   document.body.appendChild(wrap);
   wrap.querySelector('button').focus();
@@ -11767,18 +11780,26 @@ function showFeatureGuideWelcome(force=false){
     <label class="feature-guide-dismiss"><input type="checkbox" data-guide-never> 다시는 보지 않기</label>
     <div class="modal-actions"><button class="tool primary" type="button" data-guide-welcome-close>확인</button></div>
   </div>`;
+  let closed=false;
   const done=()=>{
+    if(closed)return;
+    closed=true;
+    document.removeEventListener('keydown',onKey,true);
     localStorage.setItem(FEATURE_GUIDE_WELCOME_KEY,'1');
     if(wrap.querySelector('[data-guide-never]').checked)setFeatureGuideEnabled(false);
     hideFeatureGuide(true);
     closeGuideModal(wrap);
     if(featureGuideEnabled&&!els.home.classList.contains('hidden')&&localStorage.getItem(HOME_GUIDE_WELCOME_KEY)!=='1')scheduleModeGuideWelcome('home');
   };
-  wrap.querySelector('[data-guide-welcome-close]').onclick=done;
+  const closeButton=wrap.querySelector('[data-guide-welcome-close]');
+  closeButton.onclick=done;
+  closeButton.addEventListener('pointerup',event=>{event.preventDefault();event.stopPropagation();done()});
   wrap.addEventListener('click',event=>{if(event.target===wrap)done()});
+  const onKey=event=>{if(event.key==='Escape'||event.key==='Enter'){event.preventDefault();document.removeEventListener('keydown',onKey,true);done()}};
+  document.addEventListener('keydown',onKey,true);
   document.body.appendChild(wrap);
   bindFeatureGuide(wrap.querySelector('[data-guide-welcome-demo]'),'sync');
-  wrap.querySelector('[data-guide-welcome-close]').focus();
+  closeButton.focus();
 }
 function replaySelectedGuide(target){
   setFeatureGuideEnabled(true);
