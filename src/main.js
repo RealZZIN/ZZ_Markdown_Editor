@@ -282,6 +282,8 @@ function notifyMissingImages(files){
 }
 async function addFiles(files){
   const arr=[...files],jobs=[];
+  const activeFileBeforeSort=state.files[state.active]||null;
+  const activePreviewNeedsAssetRefresh=state.mode==='edit'&&arr.some(file=>imageExt.test(file.name));
   const inlineCodeFiles=canInsertCodeIntoActiveDocument()?arr.filter(file=>codeLanguageFor(file.name)):[];
   if(inlineCodeFiles.length)await insertCodeFilesIntoActiveDocument(inlineCodeFiles);
   const inlineSet=new Set(inlineCodeFiles);
@@ -297,15 +299,19 @@ async function addFiles(files){
   if(!jobs.length&&inlineCodeFiles.length===arr.length)return;
   const addedDocs=(await Promise.all(jobs)).filter(Boolean);
   state.files.sort((a,b)=>a.path.localeCompare(b.path,'ko'));
+  if(activeFileBeforeSort)state.active=state.files.indexOf(activeFileBeforeSort);
   if(state.active<0&&state.files.length){
     if(state.mode==='convert'){
       state.active=0;
       els.editor.value=state.files[0]?.text||'';
       state.history=[els.editor.value];
       state.savedText=els.editor.value;
-    }else openFile(0);
+    }else{
+      activateFileState(0);
+      setMode('edit');
+    }
   }
-  renderAll();
+  renderAll({forcePreview:activePreviewNeedsAssetRefresh,deferPreview:state.mode==='edit',visibleOnly:true});
   notifyMissingImages(addedDocs.filter(file=>!file.convertedFromCode));
   if(typeof scheduleWorkspaceSave==='function')scheduleWorkspaceSave();
 }
@@ -717,7 +723,7 @@ function extractObsidianCallouts(source,replacements){
     const token=markdownToken('CALLOUT',true);
     const open=first[2]==='-'?'':' open';
     const sourceText=[firstLine,...body.map(line=>`> ${line}`)].join('\n');
-    replacements.set(token,`<details class="obsidian-callout" data-callout="${htmlEsc(type)}" data-callout-source="${htmlEsc(encodeURIComponent(sourceText))}"${open}><summary class="obsidian-callout-title" contenteditable="false"><button class="structured-collapse-toggle" type="button" aria-label="접기 또는 펼치기"></button><span class="unique-block-title" data-unique-title contenteditable="true" tabindex="0" spellcheck="true">${htmlEsc(title)}</span></summary><div class="obsidian-callout-body">${markdownHtml(body.join('\n'))}</div></details>`);
+    replacements.set(token,`<details class="obsidian-callout" data-callout="${htmlEsc(type)}" data-callout-source="${htmlEsc(encodeURIComponent(sourceText))}"${open}><summary class="obsidian-callout-title" contenteditable="false"><button class="structured-collapse-toggle" type="button" contenteditable="false" aria-label="접기 또는 펼치기"></button><span class="unique-block-title" data-unique-title contenteditable="true" role="textbox" aria-label="콜아웃 제목" tabindex="0" spellcheck="true">${htmlEsc(title)}</span></summary><div class="obsidian-callout-body">${markdownHtml(body.join('\n'))}</div></details>`);
     output.push(token);
   }
   return output.join('\n');
@@ -1623,7 +1629,19 @@ function showImageContextMenu(e,image){
   menu.style.left=Math.max(6,Math.min(e.clientX,window.innerWidth-rect.width-6))+'px';
   menu.style.top=Math.max(6,Math.min(e.clientY,window.innerHeight-rect.height-6))+'px';
 }
+function usesMobileObjectGesture(){
+  return matchMedia('(pointer:coarse)').matches||innerWidth<=680;
+}
 document.addEventListener('contextmenu',e=>{
+  const form=e.target.closest('#preview .zz-form-control');
+  if(form){
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    clearClickMove();
+    insertFormControl(form);
+    return;
+  }
   const math=e.target.closest('#preview .zz-math');
   if(math){
     showMathContextMenu(e,math);
@@ -1856,6 +1874,21 @@ els.preview.addEventListener('dragend',()=>{
 function showPointerMoveTarget(target,y,x=0){
   clearMoveMarker();
   if(!movingElement)return;
+  if(movingElement.matches?.('.zz-form-control')){
+    const controls=[...els.preview.querySelectorAll('.zz-form-control[data-movable]')].filter(control=>control!==movingElement);
+    if(!controls.length){showEmptyMoveGuide('첫 번째 양식 위치에 배치');moveDropTarget={kind:'form',anchor:null,before:false};return}
+    const anchor=controls.find(control=>{
+      const rect=control.getBoundingClientRect();
+      return y<rect.top+rect.height/2||(y<=rect.bottom&&x<rect.left+rect.width/2);
+    });
+    const dropAnchor=anchor||controls[controls.length-1];
+    const before=Boolean(anchor);
+    moveDropTarget={kind:'form',anchor:dropAnchor,before};
+    dropAnchor.classList.add(before?'move-drop-before':'move-drop-after');
+    moveMarker=dropAnchor;
+    showMoveGuide(dropAnchor,before,before?'이 양식 앞에 배치':'이 양식 뒤에 배치');
+    return;
+  }
   if(!isBlockMoveElement(movingElement)){showInlineMoveGuide(x,y);return}
   const drop=resolveBlockDrop(y);
   moveDropTarget=drop;
@@ -1868,7 +1901,13 @@ function commitPointerMove(target,x,y){
   if(!movingElement)return false;
   let moved=false;
   const sourceParent=movingElement.parentElement;
-  if(isBlockMoveElement(movingElement)){
+  if(movingElement.matches?.('.zz-form-control')&&moveDropTarget?.kind==='form'){
+    const drop=moveDropTarget;
+    if(drop.anchor){
+      drop.anchor.parentNode.insertBefore(movingElement,drop.before?drop.anchor:drop.anchor.nextSibling);
+      moved=true;
+    }
+  }else if(isBlockMoveElement(movingElement)){
     const drop=moveDropTarget?.kind==='block'?moveDropTarget:resolveBlockDrop(y);
     if(drop.anchor){
       drop.anchor.insertAdjacentElement(drop.before?'beforebegin':'afterend',movingElement);
@@ -1890,15 +1929,18 @@ function commitPointerMove(target,x,y){
   }
   return moved;
 }
-els.preview.addEventListener('mousedown',e=>{
+let suppressFormHandleClick=false;
+els.preview.addEventListener('pointerdown',e=>{
   if(e.button!==0)return;
   if(e.target.closest('.zz-source-chip-editing'))return;
   const handle=e.target.closest('.block-move-handle');
   const formHandle=e.target.closest('.form-move-handle');
+  const selectedForm=e.target.closest('.zz-form-control.move-selected[data-movable]');
   const direct=e.target.closest('img[data-movable],a[data-movable],code[data-movable],hr[data-movable],.zz-math[data-movable],mark[data-movable]')||formMoveCandidate(e);
   const candidate=handle
     ?handle.closest('.code-block,table,blockquote,.zz-lens,.obsidian-callout,.zz-sync-block,.zz-toc,.zz-sheet,.zz-html-embed,.zz-doc-embed,.reference-list')
     :formHandle?formHandle.closest('.zz-form-control')
+    :selectedForm?selectedForm
     :e.altKey?direct:null;
   if(!candidate)return;
   if(candidate.matches('img')){
@@ -1909,32 +1951,67 @@ els.preview.addEventListener('mousedown',e=>{
   if(handle||formHandle||e.altKey)e.preventDefault();
   const startX=e.clientX,startY=e.clientY;
   let active=false;
+  let originalStyleAttribute=null;
+  const pointerId=e.pointerId;
+  if(formHandle)formHandle.setPointerCapture?.(pointerId);
   function move(ev){
+    if(ev.pointerId!==pointerId)return;
     if(!active&&Math.hypot(ev.clientX-startX,ev.clientY-startY)<5)return;
     if(!active){
       active=true;
       movingElement=mathMovementElement(candidate);
       movingElement.classList.add('moving-element');
+      if(movingElement.matches?.('.zz-form-control')){
+        originalStyleAttribute=movingElement.getAttribute('style');
+        movingElement.style.zIndex='20';
+      }
       window.getSelection()?.removeAllRanges();
     }
     ev.preventDefault();
+    if(movingElement.matches?.('.zz-form-control')){
+      movingElement.style.transform=`translate3d(${Math.round(ev.clientX-startX)}px,${Math.round(ev.clientY-startY)}px,0)`;
+    }
     showPointerMoveTarget(document.elementFromPoint(ev.clientX,ev.clientY),ev.clientY,ev.clientX);
   }
   function up(ev){
-    document.removeEventListener('mousemove',move);
-    document.removeEventListener('mouseup',up);
+    if(ev.pointerId!==pointerId)return;
+    document.removeEventListener('pointermove',move);
+    document.removeEventListener('pointerup',up);
+    document.removeEventListener('pointercancel',cancel);
+    formHandle?.releasePointerCapture?.(pointerId);
     if(!active)return;
     ev.preventDefault();
     pushHistory(true);
+    if(candidate.matches?.('.zz-form-control')){
+      if(originalStyleAttribute===null)candidate.removeAttribute('style');
+      else candidate.setAttribute('style',originalStyleAttribute);
+    }
     const moved=commitPointerMove(document.elementFromPoint(ev.clientX,ev.clientY),ev.clientX,ev.clientY);
     clearMoveMarker();
     candidate.classList.remove('moving-element');
     if(!candidate.className)candidate.removeAttribute('class');
     movingElement=null;
+    suppressFormHandleClick=Boolean(formHandle);
+    if(formHandle)setTimeout(()=>{suppressFormHandleClick=false},0);
     if(moved){syncFromPreview();pushHistory(true)}
   }
-  document.addEventListener('mousemove',move);
-  document.addEventListener('mouseup',up);
+  function cancel(ev){
+    if(ev.pointerId!==pointerId)return;
+    document.removeEventListener('pointermove',move);
+    document.removeEventListener('pointerup',up);
+    document.removeEventListener('pointercancel',cancel);
+    formHandle?.releasePointerCapture?.(pointerId);
+    clearMoveMarker();
+    if(candidate.matches?.('.zz-form-control')){
+      if(originalStyleAttribute===null)candidate.removeAttribute('style');
+      else candidate.setAttribute('style',originalStyleAttribute);
+    }
+    candidate.classList.remove('moving-element');
+    movingElement=null;
+  }
+  document.addEventListener('pointermove',move,{passive:false});
+  document.addEventListener('pointerup',up);
+  document.addEventListener('pointercancel',cancel);
 });
 let clickMoveElement=null;
 let activeSourceChipEdit=null;
@@ -2281,6 +2358,9 @@ els.preview.addEventListener('click',e=>{
     e.preventDefault();
     e.stopPropagation();
     uniqueTitle.focus({preventScroll:true});
+    const selection=window.getSelection();
+    if(!selection?.rangeCount||!uniqueTitle.contains(selection.getRangeAt(0).startContainer))placeCaretAtTextEnd(uniqueTitle);
+    rememberPreviewRange();
     return;
   }
   const tab=e.target.closest('.zz-lens-tab');
@@ -2424,6 +2504,20 @@ els.preview.addEventListener('click',e=>{
   }
   if(e.target.closest('.zz-source-chip-editing'))return;
   if(isInteractiveFormTarget(e.target))return;
+  const formHandle=e.target.closest('.form-move-handle');
+  const form=formHandle?.closest('.zz-form-control[data-movable]')
+    ||e.target.closest('.zz-form-control[data-movable]');
+  if(form&&(formHandle||e.target===form)){
+    e.preventDefault();
+    e.stopPropagation();
+    if(suppressFormHandleClick)return;
+    if(clickMoveElement===form){clearClickMove();return}
+    clearClickMove();
+    clickMoveElement=form;
+    form.classList.add('move-selected');
+    form.setAttribute('aria-selected','true');
+    return;
+  }
   const image=e.target.closest('img[data-movable]');
   if(image){
     e.preventDefault();
@@ -2699,10 +2793,12 @@ function addTableResize(container){
       h.dataset.resizeCol=String(colIdx);
       h.addEventListener('mouseenter',()=>highlightColumn(colIdx,true));
       h.addEventListener('mouseleave',()=>{if(tblResizeDrag?.h!==h)highlightColumn(colIdx,false)});
-      h.addEventListener('mousedown',e=>{
+      h.addEventListener('pointerdown',e=>{
+        if(e.button!==0)return;
         e.preventDefault();e.stopPropagation();
+        h.setPointerCapture?.(e.pointerId);
         highlightColumn(colIdx,true);h.classList.add('dragging');
-        tblResizeDrag={type:'col',th:cell,h,startX:e.clientX,startW:cell.offsetWidth,startTableW:table.offsetWidth,colIdx,table,lockTableColumns,updateOuterHandles,highlightColumn,started:false};
+        tblResizeDrag={type:'col',th:cell,h,pointerId:e.pointerId,startX:e.clientX,startW:cell.offsetWidth,startTableW:table.offsetWidth,colIdx,table,lockTableColumns,updateOuterHandles,highlightColumn,started:false};
       });
       cell.appendChild(h);
     });
@@ -2710,23 +2806,27 @@ function addTableResize(container){
     resizeRows.forEach((row,rowIdx)=>{
       row.style.position='relative';
       const rowCells=Array.from(row.children).filter(cell=>cell.matches&&cell.matches('th,td'));
-      const host=rowCells[rowCells.length-1];
+      const host=rowCells[0];
       if(!host||rowIdx>=resizeRows.length-1)return;
       const h=document.createElement('span');
       h.className='tbl-row-resize-handle';
-      h.addEventListener('mousedown',e=>{
+      h.addEventListener('pointerdown',e=>{
+        if(e.button!==0)return;
         e.preventDefault();e.stopPropagation();
+        h.setPointerCapture?.(e.pointerId);
         h.classList.add('dragging');
-        tblResizeDrag={type:'row',row,rowIdx,h,startY:e.clientY,startH:row.offsetHeight,startTableH:table.offsetHeight,table,lockTableRows,updateOuterHandles,started:false};
+        tblResizeDrag={type:'row',row,rowIdx,h,pointerId:e.pointerId,startY:e.clientY,startH:row.offsetHeight,startTableH:table.offsetHeight,table,lockTableRows,updateOuterHandles,started:false};
       });
       host.appendChild(h);
     });
     const corner=document.createElement('span');
     corner.className='tbl-table-resize-handle';
-    corner.addEventListener('mousedown',e=>{
+    corner.addEventListener('pointerdown',e=>{
+      if(e.button!==0)return;
       e.preventDefault();e.stopPropagation();
+      corner.setPointerCapture?.(e.pointerId);
       corner.classList.add('dragging');
-      tblResizeDrag={type:'table',h:corner,startX:e.clientX,startY:e.clientY,startW:table.offsetWidth,startH:table.offsetHeight,table,updateOuterHandles,started:false};
+      tblResizeDrag={type:'table',h:corner,pointerId:e.pointerId,startX:e.clientX,startY:e.clientY,startW:table.offsetWidth,startH:table.offsetHeight,table,updateOuterHandles,started:false};
     });
     const tableRows=Array.from(table.querySelectorAll('tr'));
     const lastRow=tableRows[tableRows.length-1];
@@ -2751,8 +2851,9 @@ function stripReadOnlyTableResizeArtifacts(container){
     });
   });
 }
-document.addEventListener('mousemove',e=>{
-  if(!tblResizeDrag)return;
+document.addEventListener('pointermove',e=>{
+  if(!tblResizeDrag||e.pointerId!==tblResizeDrag.pointerId)return;
+  e.preventDefault();
   if(tblResizeDrag.type==='col'){
     const dx=e.clientX-tblResizeDrag.startX;
     if(!tblResizeDrag.started){
@@ -2786,30 +2887,12 @@ document.addEventListener('mousemove',e=>{
       const{heights,minHeights,tableHeight}=tblResizeDrag.lockTableRows();
       tblResizeDrag.startH=heights[tblResizeDrag.rowIdx]||tblResizeDrag.startH;
       tblResizeDrag.minH=minHeights[tblResizeDrag.rowIdx]||28;
-      tblResizeDrag.followingHeights=heights.slice(tblResizeDrag.rowIdx+1);
-      tblResizeDrag.followingMinHeights=minHeights.slice(tblResizeDrag.rowIdx+1);
       tblResizeDrag.startTableH=tableHeight||tblResizeDrag.table.offsetHeight;
       tblResizeDrag.started=true;
     }
-    const availableBelow=tblResizeDrag.followingHeights.reduce((total,height,index)=>
-      total+Math.max(0,height-tblResizeDrag.followingMinHeights[index]),0);
-    const appliedDy=Math.max(tblResizeDrag.minH-tblResizeDrag.startH,Math.min(availableBelow,dy));
-    const rows=Array.from(tblResizeDrag.table.querySelectorAll('tr'));
-    tblResizeDrag.table.style.height=tblResizeDrag.startTableH+'px';
+    const appliedDy=Math.max(tblResizeDrag.minH-tblResizeDrag.startH,dy);
+    tblResizeDrag.table.style.height=Math.max(56,tblResizeDrag.startTableH+appliedDy)+'px';
     tblResizeDrag.row.style.height=(tblResizeDrag.startH+appliedDy)+'px';
-    let remaining=appliedDy;
-    tblResizeDrag.followingHeights.forEach((height,index)=>{
-      let nextHeight=height;
-      if(remaining>0){
-        const shrink=Math.min(remaining,Math.max(0,height-tblResizeDrag.followingMinHeights[index]));
-        nextHeight-=shrink;
-        remaining-=shrink;
-      }else if(remaining<0&&index===0){
-        nextHeight-=remaining;
-        remaining=0;
-      }
-      rows[tblResizeDrag.rowIdx+1+index].style.height=nextHeight+'px';
-    });
     updateTableCellOverflow(tblResizeDrag.table);
   }else if(tblResizeDrag.type==='table'){
     const dx=e.clientX-tblResizeDrag.startX;
@@ -2833,7 +2916,9 @@ document.addEventListener('mousemove',e=>{
     updateTableCellOverflow(tblResizeDrag.table);
   }
 });
-document.addEventListener('mouseup',()=>{
+function finishTableResize(e){
+  if(!tblResizeDrag||e.pointerId!==tblResizeDrag.pointerId)return;
+  tblResizeDrag.h.releasePointerCapture?.(tblResizeDrag.pointerId);
   if(tblResizeDrag){
     if(tblResizeDrag.type==='col'){
       const{h,colIdx,highlightColumn}=tblResizeDrag;
@@ -2844,7 +2929,9 @@ document.addEventListener('mouseup',()=>{
     if(tblResizeDrag.started){syncFromPreview();pushHistory(true)}
     tblResizeDrag=null;
   }
-});
+}
+document.addEventListener('pointerup',finishTableResize);
+document.addEventListener('pointercancel',finishTableResize);
 /* ── Table context menu ── */
 (function(){
   let ctx=null,ctxTarget=null,selectedTable=null,copiedTableHtml='',cellAnchor=null,cellFocus=null,cellDragging=false;
@@ -3296,6 +3383,13 @@ function addImageResize(root){
     img.dataset.resizeReady='1';
     img.classList.add('img-resizable');
     img.draggable=false;
+    const handle=document.createElement('span');
+    handle.className='img-resize-handle';
+    handle.setAttribute('role','button');
+    handle.setAttribute('aria-label',uiLanguage==='en'?'Resize image':'이미지 크기 조절');
+    handle.title=uiLanguage==='en'?'Drag to resize image':'드래그해서 이미지 크기 조절';
+    handle.contentEditable='false';
+    img.after(handle);
     let canResize=false;
     img.addEventListener('mousemove',e=>{
       const r=img.getBoundingClientRect();
@@ -3303,16 +3397,24 @@ function addImageResize(root){
       img.style.cursor=canResize?'nwse-resize':'default';
     });
     img.addEventListener('mouseleave',()=>{img.style.cursor=''});
-    img.addEventListener('mousedown',e=>{
+    function beginResize(e,force=false){
+      if(e.button!==0)return;
       const r=img.getBoundingClientRect();
-      const nearEdge=(r.right-e.clientX<14)&&(r.bottom-e.clientY<14);
+      const edgeSize=usesMobileObjectGesture()?40:14;
+      const nearEdge=force||((r.right-e.clientX<edgeSize)&&(r.bottom-e.clientY<edgeSize));
       if(!nearEdge)return;
       e.preventDefault();
       e.stopPropagation();
+      selectPreviewImage(img);
       const startX=e.clientX,startY=e.clientY,startW=r.width,startH=r.height;
       const maxW=img.parentElement?img.parentElement.clientWidth:root.clientWidth;
+      const pointerId=e.pointerId;
+      e.currentTarget?.setPointerCapture?.(pointerId);
+      pushHistory(true);
       img.classList.add('img-resizing');
       function move(ev){
+        if(ev.pointerId!==pointerId)return;
+        ev.preventDefault();
         const dx=ev.clientX-startX;
         const dy=(ev.clientY-startY)*(startW/(startH||startW));
         const delta=Math.abs(dx)>=Math.abs(dy)?dx:dy;
@@ -3320,19 +3422,76 @@ function addImageResize(root){
         img.style.width=Math.round(next)+'px';
         img.style.height='auto';
       }
-      function up(){
+      function finish(ev,save=true){
+        if(ev.pointerId!==pointerId)return;
         img.classList.remove('img-resizing');
         img.style.cursor='';
-        document.removeEventListener('mousemove',move);
-        document.removeEventListener('mouseup',up);
-        syncFromPreview();
+        e.currentTarget?.releasePointerCapture?.(pointerId);
+        document.removeEventListener('pointermove',move);
+        document.removeEventListener('pointerup',up);
+        document.removeEventListener('pointercancel',cancel);
+        if(save){syncFromPreview();pushHistory(true)}
       }
-      document.addEventListener('mousemove',move);
-      document.addEventListener('mouseup',up);
-    });
+      const up=ev=>finish(ev,true);
+      const cancel=ev=>finish(ev,false);
+      document.addEventListener('pointermove',move,{passive:false});
+      document.addEventListener('pointerup',up);
+      document.addEventListener('pointercancel',cancel);
+    }
+    img.addEventListener('pointerdown',e=>beginResize(e,false));
+    handle.addEventListener('pointerdown',e=>beginResize(e,true));
   });
 }
 let lastRenderedMarkdownText=null;
+let postRenderEnhancementToken=0,postRenderEnhancementIdle=0,postRenderEnhancementFrame=0;
+let lazyTableResizeInstalled=false;
+function installLazyTableResize(){
+  if(lazyTableResizeInstalled)return;
+  lazyTableResizeInstalled=true;
+  const prepare=event=>{
+    const table=event.target.closest?.('table');
+    if(!table||!els.preview.contains(table)||table.dataset.resizeReady)return;
+    addTableResize({querySelectorAll:selector=>selector==='table'?[table]:[]});
+  };
+  els.preview.addEventListener('pointerover',prepare,{passive:true});
+  els.preview.addEventListener('pointerdown',prepare,{passive:true});
+}
+function cancelPostRenderEnhancements(){
+  postRenderEnhancementToken++;
+  if(postRenderEnhancementFrame)cancelAnimationFrame(postRenderEnhancementFrame);
+  postRenderEnhancementFrame=0;
+  if(postRenderEnhancementIdle&&'cancelIdleCallback' in window)cancelIdleCallback(postRenderEnhancementIdle);
+  postRenderEnhancementIdle=0;
+}
+function schedulePostRenderEnhancements(text){
+  cancelPostRenderEnhancements();
+  const token=postRenderEnhancementToken;
+  els.preview.setAttribute('aria-busy','true');
+  const enhance=()=>{
+    postRenderEnhancementIdle=0;
+    if(token!==postRenderEnhancementToken||lastRenderedMarkdownText!==text)return;
+    fixSpanColors(els.preview);
+    runMermaid(els.preview);
+    runHighlight(els.preview);
+    decorateCodeBlocks(els.preview);
+    const previewTables=els.preview.querySelectorAll('table');
+    if(previewTables.length>120)installLazyTableResize();
+    else addTableResize(els.preview);
+    addImageResize(els.preview);
+    addMovableElements(els.preview);
+    renderDocumentOutline();
+    schedulePreviewLineNumbers();
+    els.preview.removeAttribute('aria-busy');
+  };
+  // Let the freshly parsed document paint before running optional decoration
+  // passes. Large restored/uploaded documents otherwise block the first frame.
+  postRenderEnhancementFrame=requestAnimationFrame(()=>{
+    postRenderEnhancementFrame=0;
+    if(token!==postRenderEnhancementToken)return;
+    if('requestIdleCallback' in window)postRenderEnhancementIdle=requestIdleCallback(enhance,{timeout:450});
+    else setTimeout(enhance,0);
+  });
+}
 function assignPreviewHeadingAnchors(root){
   const used=new Map();
   root.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(heading=>{
@@ -3351,15 +3510,7 @@ function renderMarkdown(text){
   // native insertion/composition after the first character.
   els.preview.innerHTML=html||'<p><br></p>';
   assignPreviewHeadingAnchors(els.preview);
-  fixSpanColors(els.preview);
-  runMermaid(els.preview);
-  runHighlight(els.preview);
-  decorateCodeBlocks(els.preview);
-  addTableResize(els.preview);
-  addImageResize(els.preview);
-  addMovableElements(els.preview);
-  renderDocumentOutline();
-  schedulePreviewLineNumbers();
+  schedulePostRenderEnhancements(text);
 }
 function htmlEsc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function groupName(file){if(file.source==='local')return'루트';return file.dir||'단일문서'}
@@ -3596,7 +3747,6 @@ async function uploadIntoSidebar(files,pathKey='업로드된 파일'){
   arr.forEach(file=>{sidebarUploadPaths.set(file,[base,pathOf(file)].filter(Boolean).join('/'));state.assetRoots[pathOf(file)]='업로드된 파일'});
   await addFiles(arr);
   const paths=new Set(arr.map(pathOf));state.files.filter(file=>paths.has(file.path)).forEach(file=>file.source='uploaded');
-  renderAll();scheduleWorkspaceSave();
 }
 function positionContextMenu(menu,x,y){
   const rect=menu.getBoundingClientRect();
@@ -4388,7 +4538,7 @@ function updateConvertPreview(){
 function conversionDirectionFor(file){return /\.pdf$/i.test(file?.originalName||file?.name||'')||file?.convertedFromPdf?'pdf-to-md':'md-to-pdf'}
 function renderConvertList(skipPreview=false){if(!els.convertList)return;if(!state.files.length){els.convertList.innerHTML='';if(!skipPreview)updateConvertPreview();return}els.convertList.innerHTML='';state.files.forEach((file,i)=>{const row=document.createElement('label');row.className='convert-item';row.dataset.index=i;const direction=conversionDirectionFor(file);const status=direction==='pdf-to-md'?'PDF → MD 자동 선택':file.convertedFromCode?`${file.codeLanguage||'text'} 코드블록 → MD 준비됨`:'MD → PDF 자동 선택';row.innerHTML=`<input type="checkbox" value="${i}" checked><span><span class="convert-name">${htmlEsc(file.displayName||file.name)}</span><div class="convert-meta">${status} · ${htmlEsc(file.path)}</div></span>`;row.querySelector('input').addEventListener('change',updateConvertPreview);row.addEventListener('mouseenter',showMergePreview);row.addEventListener('mouseleave',scheduleHideMergePreview);row.ondblclick=()=>openFile(i);els.convertList.appendChild(row)});if(!skipPreview)updateConvertPreview()}
 function renderHomeMergeList(){if(!els.homeMergeList)return;const checkedBefore=new Set([...els.homeMergeList.querySelectorAll('input:checked')].map(i=>i.value));const hadChecks=els.homeMergeList.querySelectorAll('input').length>0;els.homeMergeList.innerHTML='';if(state.homeMergeNotice){const note=document.createElement('div');note.className='muted';note.textContent=state.homeMergeNotice;els.homeMergeList.appendChild(note)}if(!state.files.length){const empty=document.createElement('div');empty.className='muted home-merge-empty';empty.textContent='왼쪽에서 MD 파일을 추가하면 여기에 표시됩니다.';els.homeMergeList.appendChild(empty);return}state.files.forEach((file,i)=>{const row=document.createElement('label');row.className='home-merge-item';row.innerHTML=`<input type="checkbox" ${!hadChecks||checkedBefore.has(String(i))?'checked':''} value="${i}"><span>${htmlEsc(file.displayName||file.name)}</span>`;els.homeMergeList.appendChild(row)})}
-function renderAll(){const activeText=state.active>=0?(state.files[state.active]?.text||''):els.editor.value;if(state.active>=0&&els.editor.value!==activeText)els.editor.value=activeText;renderList();renderMergeList(true);renderConvertList(true);renderHomeMergeList();if(state.mode==='edit')renderMarkdown(activeText);updateHomeConvert();updateLineNumbers();const activePanel=document.querySelector('.panel.active');if(activePanel?.id==='panel-convert')scheduleModePreview('convert');else if(activePanel?.id==='panel-merge')scheduleModePreview('merge')}
+function renderAll({forcePreview=false,deferPreview=false,visibleOnly=false}={}){const activeText=state.active>=0?(state.files[state.active]?.text||''):els.editor.value;if(state.active>=0&&els.editor.value!==activeText)els.editor.value=activeText;renderList();if(!visibleOnly||state.mode==='merge')renderMergeList(true);if(!visibleOnly||state.mode==='convert')renderConvertList(true);if(!visibleOnly||!els.home.classList.contains('hidden'))renderHomeMergeList();if(state.mode==='edit'&&(forcePreview||lastRenderedMarkdownText!==activeText)){if(deferPreview)scheduleModePreview('edit');else renderMarkdown(activeText)}if(!visibleOnly||!els.home.classList.contains('hidden'))updateHomeConvert();updateLineNumbers();const activePanel=document.querySelector('.panel.active');if(activePanel?.id==='panel-convert')scheduleModePreview('convert');else if(activePanel?.id==='panel-merge')scheduleModePreview('merge')}
 function updateHomeImageSummary(file){
   if(!els.homeImageSummary)return;
   const target=file||state.files[state.active];
@@ -4486,7 +4636,7 @@ function highlightMarkdownSource(text){
     return highlightMarkdownInline(line);
   }).join('\n');
 }
-let markdownHighlightTimer=0,pendingMarkdownHighlight='',lastMarkdownHighlightText=null;
+let markdownHighlightTimer=0,markdownHighlightIdle=0,pendingMarkdownHighlight='',lastMarkdownHighlightText=null;
 function deferredEditorDelay(text,base,max){
   return Math.min(max,base+Math.floor(String(text||'').length/12000)*12);
 }
@@ -4498,15 +4648,20 @@ function renderMarkdownHighlight(text=els.editor.value){
     return;
   }
   lastMarkdownHighlightText=source;
-  els.markdownHighlight.innerHTML=highlightMarkdownSource(source)+(source.endsWith('\n')?'\n':'')||'\u200b';
+  const highlighted=source.length>80000?htmlEsc(source):highlightMarkdownSource(source);
+  els.markdownHighlight.innerHTML=highlighted+(source.endsWith('\n')?'\n':'')||'\u200b';
   syncMarkdownHighlightScroll();
 }
 function scheduleMarkdownHighlight(text=els.editor.value){
   pendingMarkdownHighlight=text;
   clearTimeout(markdownHighlightTimer);
+  if(markdownHighlightIdle&&'cancelIdleCallback' in window)cancelIdleCallback(markdownHighlightIdle);
+  markdownHighlightIdle=0;
   markdownHighlightTimer=setTimeout(()=>{
     markdownHighlightTimer=0;
-    if(pendingMarkdownHighlight===els.editor.value)renderMarkdownHighlight(pendingMarkdownHighlight);
+    const render=()=>{markdownHighlightIdle=0;if(pendingMarkdownHighlight===els.editor.value)renderMarkdownHighlight(pendingMarkdownHighlight)};
+    if('requestIdleCallback' in window)markdownHighlightIdle=requestIdleCallback(render,{timeout:700});
+    else setTimeout(render,0);
   },deferredEditorDelay(text,70,180));
 }
 function syncMarkdownHighlightScroll(){
@@ -4514,7 +4669,7 @@ function syncMarkdownHighlightScroll(){
   els.markdownHighlight.scrollTop=els.editor.scrollTop;
   els.markdownHighlight.scrollLeft=els.editor.scrollLeft;
 }
-let previewLineNumberFrame=0;
+let previewLineNumberFrame=0,lastEditorLineNumberCount=0;
 function previewVisualLineTops(){
   if(!els.preview)return[];
   const previewRect=els.preview.getBoundingClientRect();
@@ -4561,9 +4716,12 @@ function schedulePreviewLineNumbers(){
 }
 function updateLineNumbers(){
   if(!els.lineGutter)return;
-  const count=Math.max(1,els.editor.value.split('\n').length);
-  const nums=Array.from({length:count},(_,i)=>i+1).join('\n');
-  els.lineGutter.textContent=nums;
+  let count=1;
+  for(let index=els.editor.value.indexOf('\n');index>=0;index=els.editor.value.indexOf('\n',index+1))count++;
+  if(count!==lastEditorLineNumberCount){
+    els.lineGutter.textContent=Array.from({length:count},(_,i)=>i+1).join('\n');
+    lastEditorLineNumberCount=count;
+  }
   els.lineGutter.scrollTop=els.editor.scrollTop;
   schedulePreviewLineNumbers();
   scheduleMarkdownHighlight();
@@ -4596,7 +4754,8 @@ function createDraftFromEditor(){
   renderMergeList();
   updateHomeConvert();
 }
-function openFile(index){state.active=index;collapsedOutlineHeadings.clear();const file=state.files[index];els.editor.value=file?.text||'';state.history=[els.editor.value];state.future=[];state.savedText=file&&Object.hasOwn(file,'savedText')?file.savedText:els.editor.value;state.dirty=els.editor.value!==state.savedText;state.lastInput={type:'md',name:file?.name||'document.md'};renderMarkdown(els.editor.value);renderList();updateHomeConvert();setMode('edit');updateUndoRedoButtons();updateLineNumbers()}
+function activateFileState(index){state.active=index;collapsedOutlineHeadings.clear();const file=state.files[index];els.editor.value=file?.text||'';state.history=[els.editor.value];state.future=[];state.savedText=file&&Object.hasOwn(file,'savedText')?file.savedText:els.editor.value;state.dirty=els.editor.value!==state.savedText;state.lastInput={type:'md',name:file?.name||'document.md'};updateUndoRedoButtons()}
+function openFile(index){activateFileState(index);renderMarkdown(els.editor.value);renderList();updateHomeConvert();setMode('edit');updateLineNumbers()}
 let modePreviewFrame=0,modePreviewTimer=0;
 function scheduleModePreview(mode){
   cancelAnimationFrame(modePreviewFrame);
@@ -4645,7 +4804,7 @@ function setMode(mode,showHome=false){
     if(mode==='merge'&&els.mergeList.querySelectorAll('input[type="checkbox"]').length!==state.files.length)renderMergeList(true);
     if(mode==='merge'||mode==='convert'||mode==='edit')scheduleModePreview(mode);
     if(mode==='edit'||mode==='convert'||mode==='merge')scheduleModeGuideWelcome(mode);
-  }else scheduleModeGuideWelcome('home');
+  }else{renderHomeMergeList();updateHomeConvert();scheduleModeGuideWelcome('home')}
 }
 function pushHistory(force=false){if(state.restoring)return;clearTimeout(state.historyTimer);const commit=()=>{const v=els.editor.value;if(state.history[state.history.length-1]!==v){state.history.push(v);if(state.history.length>80)state.history.shift();state.future=[]}updateUndoRedoButtons()};force?commit():state.historyTimer=setTimeout(commit,650)}
 function markDirty(){state.dirty=els.editor.value!==state.savedText}
@@ -4862,11 +5021,13 @@ function previewHasMeaningfulContent(root){
     'template[data-preview-raw-source]'
   ].join(','));
 }
-let previewSyncTimer=null;
+let previewSyncTimer=null,previewSyncIdle=0;
 let lastPreviewEnterSplit=null;
 function syncFromPreview(){
   clearTimeout(previewSyncTimer);
   previewSyncTimer=null;
+  if(previewSyncIdle&&'cancelIdleCallback' in window)cancelIdleCallback(previewSyncIdle);
+  previewSyncIdle=0;
   state.editingPreview=true;
   const clone=els.preview.cloneNode(true);
   cleanPreviewHtml(clone);
@@ -4887,7 +5048,15 @@ function syncFromPreview(){
 }
 function scheduleSyncFromPreview(){
   clearTimeout(previewSyncTimer);
-  previewSyncTimer=setTimeout(syncFromPreview,deferredEditorDelay(els.preview?.textContent,110,240));
+  if(previewSyncIdle&&'cancelIdleCallback' in window)cancelIdleCallback(previewSyncIdle);
+  previewSyncIdle=0;
+  const sourceLength=els.editor.value.length;
+  previewSyncTimer=setTimeout(()=>{
+    previewSyncTimer=null;
+    if('requestIdleCallback' in window){
+      previewSyncIdle=requestIdleCallback(()=>{previewSyncIdle=0;syncFromPreview()},{timeout:900});
+    }else syncFromPreview();
+  },deferredEditorDelay(sourceLength,140,420));
 }
 function restoreEditor(value){state.restoring=true;els.editor.value=value;if(state.active>=0)state.files[state.active].text=value;renderMarkdown(value);state.restoring=false;markDirty();updateUndoRedoButtons();updateLineNumbers()}
 function undoEdit(){if(state.history.length<2)return;state.future.push(state.history.pop());restoreEditor(state.history[state.history.length-1])}
@@ -5436,14 +5605,15 @@ async function saveCurrent(){
   await saveVersionSnapshot('MD 저장');
 }
 function showInfoNotice(title,message){
+  clearTimeout(editGuideWelcomeTimer);
+  document.querySelector('.edit-guide-overlay')?.remove();
   document.querySelector('.info-notice')?.remove();
   const wrap=document.createElement('div');
   wrap.className='modal-backdrop info-notice';
-  wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true"><h3>${htmlEsc(title)}</h3><p>${htmlEsc(message)}</p><div class="modal-actions"><button class="tool primary" type="button">확인</button></div></div>`;
+  wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true"><h3>${htmlEsc(title)}</h3><p>${htmlEsc(message)}</p><div class="modal-actions"><button class="tool primary" type="button" data-info-close>확인</button></div></div>`;
   const close=()=>{document.removeEventListener('keydown',onKey);wrap.remove()};
   const onKey=e=>{if(e.key==='Escape'||e.key==='Enter')close()};
-  wrap.querySelector('button').onclick=close;
-  wrap.addEventListener('click',e=>{if(e.target===wrap)close()});
+  wrap.addEventListener('click',e=>{if(e.target===wrap||e.target.closest('[data-info-close]'))close()});
   document.addEventListener('keydown',onKey);
   document.body.appendChild(wrap);
   wrap.querySelector('button').focus();
@@ -6829,7 +6999,7 @@ document.addEventListener('drop',async e=>{
     const range=document.caretRangeFromPoint?.(e.clientX,e.clientY);
     if(range&&els.preview.contains(range.commonAncestorContainer))state.savedPreviewRange=range.cloneRange();
   }
-  if(els.sidebar.contains(target))await uploadIntoSidebar(files,pathKey);else{await addFiles(files);renderList();scheduleWorkspaceSave()}
+  if(els.sidebar.contains(target))await uploadIntoSidebar(files,pathKey);else await addFiles(files);
   }catch(error){console.error('File drop failed',error);showInfoNotice('드래그 업로드 실패',`파일을 읽지 못했습니다. ${error?.message||'파일이 이 컴퓨터에 다운로드되어 있는지 확인해 주세요.'}`)}
 },true);
 els.sidebar.addEventListener('contextmenu',showSidebarBlankMenu);
@@ -6963,6 +7133,7 @@ function autoCorrectPreviewAtSelection(){
   return block;
 }
 let acEnabled=savedOption('md-option-autocorrect',true);
+let autoMathSyntaxEnabled=savedOption('md-option-auto-math-syntax',true);
 let colorCorrectEnabled=savedOption('md-option-color-correct',true);
 let paragraphBreakEnabled=savedOption('md-option-paragraph-break',true);
 let previewMarkdownEnabled=localStorage.getItem('md-preview-markdown')!=='0';
@@ -6970,6 +7141,30 @@ let autoLinkEnabled=localStorage.getItem('md-auto-link')!=='0';
 let sourceSyntaxHoverEnabled=localStorage.getItem('md-source-syntax-hover')!=='0';
 let sourceSyntaxHoverDelaySeconds=Math.max(1,Math.min(30,Number(localStorage.getItem('md-source-syntax-hover-delay'))||5));
 let previewMarkdownTimer=null;
+const autoMathLatexCommand=/\\(?:frac|dfrac|tfrac|sqrt|sum|prod|int|oint|lim|rightarrow|leftarrow|leftrightarrow|Rightarrow|Leftarrow|Leftrightarrow|to|mapsto|times|cdot|div|pm|mp|leq|geq|neq|approx|equiv|infty|partial|nabla|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|rho|sigma|tau|phi|psi|omega|Gamma|Delta|Theta|Lambda|Pi|Sigma|Phi|Psi|Omega|mathbf|mathrm|mathit|text|overline|underline|vec|hat|begin|end)\b/;
+function autoConvertPreviewMathAtSelection(){
+  if(!autoMathSyntaxEnabled)return false;
+  const selection=window.getSelection();
+  if(!selection?.rangeCount||!selection.isCollapsed)return false;
+  const caret=selection.getRangeAt(0),node=caret.endContainer;
+  if(node.nodeType!==Node.TEXT_NODE||node.parentElement?.closest('pre,code,.zz-math,[contenteditable="false"]'))return false;
+  const before=node.data.slice(0,caret.endOffset);
+  const match=before.match(/\(([^()\n]*\\[A-Za-z]+[^()\n]*)\)$/);
+  if(!match||!autoMathLatexCommand.test(match[0]))return false;
+  const latex=match[0],start=caret.endOffset-latex.length;
+  const holder=document.createElement('template');
+  holder.innerHTML=renderMathHtml(latex,false);
+  const math=holder.content.firstElementChild;
+  if(!math)return false;
+  const replace=document.createRange();
+  replace.setStart(node,start);replace.setEnd(node,caret.endOffset);replace.deleteContents();replace.insertNode(math);
+  const next=document.createRange();next.setStartAfter(math);next.collapse(true);selection.removeAllRanges();selection.addRange(next);
+  state.savedPreviewRange=next.cloneRange();
+  addMovableElements(els.preview);
+  syncFromPreview();
+  pushHistory(true);
+  return true;
+}
 function synchronizeEditorSyncBlocks(){
   const source=els.editor.value;
   const pattern=/(<!--\s*zz:sync\s+id\s*=\s*"([^"]+)"\s*-->\r?\n)([\s\S]*?)(\r?\n<!--\s*\/zz:sync\s*-->)/gi;
@@ -7249,6 +7444,7 @@ els.preview.addEventListener('input',e=>{
   // Preview serialization and live Markdown conversion can replace/reparent
   // the active text node. Wait until the browser finishes the IME composition.
   if(e.isComposing||previewCompositionActive)return;
+  if(typeof e.data==='string'&&e.data.endsWith(')')&&autoConvertPreviewMathAtSelection())return;
   const closingSyntax=typeof e.data==='string'&&['*','_','`',')'].includes(e.data.slice(-1));
   const correctedBlock=closingSyntax?autoCorrectPreviewAtSelection():null;
   if(correctedBlock&&applyPreviewMarkdown(correctedBlock))return;
@@ -10211,7 +10407,30 @@ function safePreviewLinkUrl(link){
 els.preview.addEventListener('click',event=>{
   if(event.target.closest('a:not(.zz-wikilink):not(.zz-toc-link)'))event.preventDefault();
 },true);
+els.preview.addEventListener('click',event=>{
+  if(!usesMobileObjectGesture()||event.detail<2)return;
+  const target=event.target.closest('table,img,.zz-doc-embed[data-embed-source],.zz-lens[data-lens-source],.obsidian-callout[data-callout-source],.zz-sync-block[data-sync-source],.zz-toc[data-toc-source]');
+  if(!target)return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  event.target.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:event.clientX,clientY:event.clientY,button:2}));
+},true);
 els.preview.addEventListener('dblclick',async event=>{
+  const table=event.target.closest('table');
+  if(table&&usesMobileObjectGesture()){
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    event.target.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:event.clientX,clientY:event.clientY,button:2}));
+    return;
+  }
+  const form=event.target.closest('.zz-form-control');
+  if(form){
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    clearClickMove();
+    insertFormControl(form);
+    return;
+  }
   const math=event.target.closest('.zz-math[data-latex]');
   if(math){
     event.preventDefault();
@@ -10221,6 +10440,21 @@ els.preview.addEventListener('dblclick',async event=>{
     closeSourceSyntaxPopover();
     await editPreviewMath(math);
     return;
+  }
+  if(usesMobileObjectGesture()){
+    const embeddedDocument=event.target.closest('.zz-doc-embed[data-embed-source]');
+    if(embeddedDocument){showUniqueBlockContextMenu(event,embeddedDocument);return}
+    const uniqueBlock=event.target.closest('.zz-lens[data-lens-source],.obsidian-callout[data-callout-source],.zz-sync-block[data-sync-source],.zz-toc[data-toc-source]');
+    if(uniqueBlock){showUniqueBlockContextMenu(event,uniqueBlock);return}
+    const image=event.target.closest('img');
+    if(image){showImageContextMenu(event,image);return}
+    const editableLink=event.target.closest('a:not(.zz-wikilink):not(.zz-toc-link)');
+    if(editableLink&&!editableLink.classList.contains('zz-source-chip-editing')&&!event.target.closest('.zz-source-chip-edit')){
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      editPreviewLink(editableLink);
+      return;
+    }
   }
   const link=event.target.closest('a:not(.zz-wikilink):not(.zz-toc-link)');
   if(!link||link.classList.contains('zz-source-chip-editing')||event.target.closest('.zz-source-chip-edit'))return;
@@ -10723,6 +10957,10 @@ const acPanelHtml=`
       <input type="checkbox" id="enable-preview-markdown" checked>
       <span><b>프리뷰 MD 문법 적용</b><div class="ac-desc">Preview에 입력한 Markdown 문법을 서식으로 변환</div></span>
     </label>
+    <label title="Preview에서 LaTeX 명령이 들어간 괄호식을 완성하면 수식으로 바꿉니다.">
+      <input type="checkbox" id="enable-auto-math-syntax" checked>
+      <span><b>수식 문법 자동 변환</b><div class="ac-desc">(X \\rightarrow y)를 입력하면 수식으로 변환</div></span>
+    </label>
     <label title="URL을 붙여넣으면 클릭할 수 있는 링크 서식으로 자동 변환합니다.">
       <input type="checkbox" id="enable-auto-link" checked>
       <span><b>URL 자동 링크</b><div class="ac-desc">붙여넣은 주소를 링크로 자동 변환</div></span>
@@ -10771,6 +11009,7 @@ PANELS.push('ac-panel');TOGGLES.push('autocorrect-toggle');
 const optionPreviewExamples={
   'enable-paragraph-break':{title:'Enter로 줄바꿈',body:'<div class="option-live-demo"><small>Enter를 누르면 다음 줄이 바로 만들어집니다.</small><div class="option-enter-animation"><span>첫 번째 줄</span><i>Enter ↵</i><span>두 번째 줄</span><b></b></div></div>'},
   'enable-preview-markdown':{title:'프리뷰 MD 문법 적용',body:'<div class="option-live-demo"><small>입력한 Markdown 문법이 바로 서식으로 바뀝니다.</small><div class="option-markdown-animation"><div class="option-demo-input"><span>**텍스트**</span><b></b></div><i>서식 적용</i><div class="option-demo-output"><strong>텍스트</strong></div></div></div>'},
+  'enable-auto-math-syntax':{title:'수식 문법 자동 변환',body:'<div class="option-live-demo"><small>LaTeX 명령이 포함된 괄호식을 완성하면 편집 가능한 수식으로 바꿉니다.</small><div class="option-example-code"><i>입력</i><span>(X \\rightarrow y)</span><i>결과</i><span>X → y</span></div></div>'},
   'enable-auto-link':{title:'URL 자동 링크',body:'<div class="option-live-demo"><small>붙여넣은 주소가 클릭 가능한 링크로 바뀝니다.</small><div class="option-link-animation"><div class="option-demo-input"><span>https://example.com</span><b></b></div><i>붙여넣기</i><div class="option-demo-output"><a>https://example.com</a></div></div></div>'},
   'enable-source-syntax-hover':{title:'문법 빠른 편집',body:'<div class="option-live-demo"><small>Preview의 문장에 마우스를 올리면 Markdown 원문을 고칠 수 있는 창이 열립니다.</small><div class="option-quick-edit-animation"><div class="option-preview-sentence"><span>중요한 문장입니다.</span><b>마우스</b></div><div class="option-source-editor"><code>**중요한 문장**입니다.</code><i>수정</i></div><div class="option-quick-edit-result"><strong>수정한 문장</strong>입니다.</div></div></div>'},
   'enable-autocorrect':{title:'기호 공백 보정',body:'<div class="option-live-demo"><small>Markdown 기호 안에 잘못 들어간 공백을 자동으로 정리합니다.</small><div class="option-space-animation"><div><span>**김밥 </span><em> </em><span>**</span><b></b></div><i>공백 제거</i><strong>**김밥**</strong></div></div>'},
@@ -10828,6 +11067,7 @@ $('autocorrect-toggle').onclick=e=>{
   if(open){hideOptionPreview(true);closeAllPanels()}else openPanel('ac-panel','autocorrect-toggle');
 };
 $('enable-autocorrect').checked=acEnabled;
+$('enable-auto-math-syntax').checked=autoMathSyntaxEnabled;
 $('enable-color-correct').checked=colorCorrectEnabled;
 $('enable-paragraph-break').checked=paragraphBreakEnabled;
 $('enable-sync-scroll').checked=syncScrollEnabled;
@@ -10837,6 +11077,7 @@ $('enable-table-filter').onchange=e=>{localStorage.setItem('md-option-table-filt
 $('enable-swap-panes').checked=savedOption('md-option-swap-panes',false);
 $('enable-hashtag-navigator').checked=hashtagNavigatorEnabled;
 $('enable-autocorrect').onchange=e=>{acEnabled=e.target.checked;localStorage.setItem('md-option-autocorrect',acEnabled?'1':'0')};
+$('enable-auto-math-syntax').onchange=e=>{autoMathSyntaxEnabled=e.target.checked;localStorage.setItem('md-option-auto-math-syntax',autoMathSyntaxEnabled?'1':'0')};
 $('enable-sync-scroll').onchange=e=>{syncScrollEnabled=e.target.checked;localStorage.setItem('md-option-sync-scroll',syncScrollEnabled?'1':'0')};
 $('enable-line-numbers').onchange=e=>{setLineNumbers(e.target.checked);localStorage.setItem('md-option-line-numbers',e.target.checked?'1':'0')};
 $('enable-swap-panes').onchange=e=>{setSwapPanes(e.target.checked);localStorage.setItem('md-option-swap-panes',e.target.checked?'1':'0')};
@@ -11167,6 +11408,7 @@ const EN_TEXT={
   '브라우저 저장소가 지워지기 전까지 이 기록을 복구할 수 있습니다.':'This workspace can be restored until the browser storage is cleared.',
   '작성 옵션':'Writing options','보기 옵션':'View options','Enter로 줄바꿈':'Line break with Enter','Enter를 누른 위치에서 바로 줄바꿈':'Insert a line break where Enter is pressed',
   '프리뷰 MD 문법 적용':'Render Markdown in Preview','Preview에 입력한 Markdown 문법을 서식으로 변환':'Render Markdown syntax entered in Preview',
+  '수식 문법 자동 변환':'Auto-convert math syntax','(X \\rightarrow y)를 입력하면 수식으로 변환':'Convert (X \\rightarrow y) into rendered math',
   'URL 자동 링크':'Automatic URL links','붙여넣은 주소를 링크로 자동 변환':'Convert pasted URLs into links',
   '문법 빠른 편집':'Quick syntax editing','Preview의 문장에 마우스를 올려 Markdown 원문 수정':'Hover over Preview text to edit the Markdown source',
   '창 표시까지':'Show after','초':'sec','기호 공백 보정':'Fix syntax spacing','MD 기호 안의 불필요한 공백 제거':'Remove unnecessary spaces inside Markdown syntax',
@@ -11239,7 +11481,7 @@ const EN_TEXT={
   '개별 서식':'Custom styles','저장된 서식이 없습니다.':'No saved styles.','검색 결과가 없습니다.':'No matching styles.','미리보기 텍스트':'Preview text',
   '확장 Markdown':'Extended Markdown','문서 목차':'Table of contents','제목 이동 목록':'Heading navigation','미니 문서':'Embedded document',
   'Obsidian 계열 문법':'Obsidian syntax','콜아웃':'Callout','위키 링크':'Wiki link','파일 임베드':'File embed','하이라이트':'Highlight','텍스트':'Text',
-  '양식 개체':'Form control','개체 종류':'Control type','표시 문구':'Label','선택 상자':'Checkbox','항목':'Item','추가될 모습':'Preview',
+  '양식 개체':'Form control','양식 개체 수정':'Edit form control','개체 종류':'Control type','표시 문구':'Label','선택 상자':'Checkbox','항목':'Item','추가될 모습':'Preview',
   '삽입한 뒤에도 미리보기 화면에서 선택하거나 내용을 입력할 수 있습니다.':'You can select it or enter content in Preview after insertion.','삽입':'Insert',
   '수평선':'Horizontal rule','줄바꿈':'Line break','페이지 구분':'Page break','인용':'Quote','중첩 인용':'Nested quote','각주':'Footnote','출처 인용':'Citation','참고문헌':'Bibliography','출처':'Source',
   '인라인 코드':'Inline code','코드 블록':'Code block','순서없는 목록':'Unordered list','순서있는 목록':'Ordered list',
@@ -11411,6 +11653,7 @@ function scheduleModeGuideWelcome(mode=state.mode,force=false){
   if(!force&&(!featureGuideEnabled||localStorage.getItem(modeGuideKey(mode))==='1'))return;
   if(!force&&mode==='home'&&localStorage.getItem(FEATURE_GUIDE_WELCOME_KEY)!=='1')return;
   editGuideWelcomeTimer=setTimeout(()=>{
+    if(document.querySelector('.modal-backdrop,.form-insert-panel'))return;
     const visible=mode==='home'?!els.home.classList.contains('hidden'):state.mode===mode&&els.home.classList.contains('hidden');
     if(visible)showModeGuideWelcome(mode,force);
   },500);
@@ -12063,7 +12306,7 @@ function showInsertDialog(title,body,confirmLabel='삽입',setup){
     wrap.querySelector('input,select,button')?.focus();
   });
 }
-function showFormInsertPanel(body,onConfirm){
+function showFormInsertPanel(body,onConfirm,{title='양식 개체',confirmLabel='삽입'}={}){
   let resolvePanel;
   const promise=new Promise(resolve=>{resolvePanel=resolve});
   const panel=document.createElement('div');
@@ -12072,14 +12315,14 @@ function showFormInsertPanel(body,onConfirm){
   panel.setAttribute('aria-modal','false');
   panel.setAttribute('aria-labelledby','form-insert-title');
   panel.innerHTML=`<div class="find-replace-head" data-form-drag>
-      <strong id="form-insert-title">양식 개체</strong>
+      <strong id="form-insert-title">${htmlEsc(title)}</strong>
       <button class="find-replace-close" type="button" data-form-action="cancel" aria-label="닫기">×</button>
     </div>
     <div class="find-replace-body">
       ${body}
       <div class="modal-actions">
         <button class="tool" type="button" data-form-action="cancel">취소</button>
-        <button class="tool primary" type="button" data-form-action="confirm">삽입</button>
+        <button class="tool primary" type="button" data-form-action="confirm">${htmlEsc(confirmLabel)}</button>
       </div>
     </div>`;
   let finished=false;
@@ -12165,25 +12408,38 @@ let lastFormInsert={
   ],
   selectedIndex:0
 };
-function insertFormControl(){
+function formControlEditorConfig(control){
+  const field=control?.querySelector?.(':scope > input,:scope > select');
+  const type=control?.tagName==='BUTTON'?'button':field?.tagName==='SELECT'?'select':(field?.type||'text').toLowerCase();
+  const label=control?.querySelector?.(':scope > .zz-form-label')?.textContent?.trim()||'항목';
+  const options=field?.tagName==='SELECT'
+    ?[...field.options].map(option=>({label:option.textContent||option.value,value:option.value}))
+    :lastFormInsert.options.map(option=>({...option}));
+  return{type:['checkbox','radio','select','text','button'].includes(type)?type:'text',label,options:options.length?options:[{label:'선택 1',value:'option-1'}],selectedIndex:field?.tagName==='SELECT'?Math.max(0,field.selectedIndex):0};
+}
+function insertFormControl(controlToEdit=null){
+  if(!(controlToEdit instanceof Element)||!controlToEdit.matches('.zz-form-control'))controlToEdit=null;
   const existing=document.querySelector('.form-insert-panel');
   if(existing){
     existing.querySelector('input,select,button')?.focus();
     return;
   }
-  let context=captureInsertionContext();
-  const selected=type=>lastFormInsert.type===type?' selected':'';
+  const editing=Boolean(controlToEdit&&els.preview.contains(controlToEdit));
+  const initial=editing?formControlEditorConfig(controlToEdit):lastFormInsert;
+  let context=editing?null:captureInsertionContext();
+  const selected=type=>initial.type===type?' selected':'';
   const optionRow=(option,index)=>{const displayOptionLabel=uiLanguage==='en'&&/^선택 \d+$/.test(option.label)?`Option ${index+1}`:option.label;return `<div class="form-option-row">
-    <input type="radio" name="zz-form-default" value="${index}"${index===lastFormInsert.selectedIndex?' checked':''} aria-label="기본 선택">
+    <input type="radio" name="zz-form-default" value="${index}"${index===initial.selectedIndex?' checked':''} aria-label="기본 선택">
     <input type="text" class="zz-form-option-label" value="${htmlEsc(displayOptionLabel)}" placeholder="표시명">
     <input type="text" class="zz-form-option-value" value="${htmlEsc(option.value)}" placeholder="저장값">
     <button class="form-option-remove" type="button" aria-label="옵션 삭제" title="옵션 삭제">×</button>
   </div>`};
-  const initialFormLabel=uiLanguage==='en'&&lastFormInsert.label==='항목'?'Item':lastFormInsert.label;
-  const {panel}=showFormInsertPanel(`<div class="insert-config-grid"><label>개체 종류<select id="zz-form-type"><option value="checkbox"${selected('checkbox')}>선택 상자</option><option value="radio"${selected('radio')}>라디오 단추</option><option value="select"${selected('select')}>콤보 상자</option><option value="text"${selected('text')}>입력 상자</option><option value="button"${selected('button')}>명령 단추</option></select></label><label>표시 문구<input id="zz-form-label" value="${htmlEsc(initialFormLabel)}"></label></div>
-    <div class="form-option-editor"${lastFormInsert.type==='select'?'':' hidden'}>
+  const initialFormLabel=uiLanguage==='en'&&initial.label==='항목'?'Item':initial.label;
+  let controller;
+  controller=showFormInsertPanel(`<div class="insert-config-grid"><label>개체 종류<select id="zz-form-type"><option value="checkbox"${selected('checkbox')}>선택 상자</option><option value="radio"${selected('radio')}>라디오 단추</option><option value="select"${selected('select')}>콤보 상자</option><option value="text"${selected('text')}>입력 상자</option><option value="button"${selected('button')}>명령 단추</option></select></label><label>표시 문구<input id="zz-form-label" value="${htmlEsc(initialFormLabel)}"></label></div>
+    <div class="form-option-editor"${initial.type==='select'?'':' hidden'}>
       <div class="form-option-editor-head"><span>기본</span><span>표시명</span><span>저장값</span><span></span></div>
-      <div class="form-option-list">${lastFormInsert.options.map(optionRow).join('')}</div>
+      <div class="form-option-list">${initial.options.map(optionRow).join('')}</div>
       <button class="form-option-add" type="button">+ 옵션 추가</button>
     </div>
     <div class="form-control-preview" data-form-preview aria-live="polite"><span>추가될 모습</span><div data-form-preview-body></div></div>
@@ -12205,6 +12461,19 @@ function insertFormControl(){
       text:`<label class="zz-form-control"><span class="zz-form-label">${label}</span><input type="text" value="" placeholder="입력"></label>`,
       button:`<button class="zz-form-control" type="button"><span class="zz-form-label">${label}</span></button>`
     };
+    if(editing){
+      const template=document.createElement('template');
+      template.innerHTML=controls[type];
+      const replacement=template.content.firstElementChild;
+      if(!replacement||!controlToEdit.isConnected)return;
+      pushHistory(true);
+      controlToEdit.replaceWith(replacement);
+      syncFromPreview();
+      renderMarkdown(els.editor.value);
+      pushHistory(true);
+      controller.close();
+      return;
+    }
     const html=`<p>${controls[type]}</p>`;
     const inserted=context.kind==='preview'
       ?insertPreviewHtmlAtContext(html,context)
@@ -12229,7 +12498,8 @@ function insertFormControl(){
       context={kind:'editor',start,end,text:els.editor.value.slice(start,end)};
     }
     state.pendingInsertionContext=null;
-  });
+  },{title:editing?'양식 개체 수정':'양식 개체',confirmLabel:editing?'수정':'삽입'});
+  const {panel}=controller;
   const typeField=panel.querySelector('#zz-form-type');
   const optionEditor=panel.querySelector('.form-option-editor');
   const optionList=panel.querySelector('.form-option-list');
@@ -12387,7 +12657,7 @@ $('ins-quote2').onclick=()=>{if(insertPreviewQuote(2))return;linePrefix('>> ')};
 $('ins-footnote').onclick=insertFootnote;
 $('ins-citation').onclick=insertCitationDefinition;
 $('ins-bibliography').onclick=insertBibliography;
-$('fmt-form').onclick=insertFormControl;
+$('fmt-form').onclick=()=>insertFormControl();
 $('ins-zz-toc').onclick=insertZzToc;
 $('ins-zz-sync').onclick=insertZzSync;
 $('ins-doc-embed').onclick=insertDocumentEmbed;
@@ -12673,7 +12943,7 @@ $('clear-bg-color').onclick=e=>{e.stopPropagation();applyPickedColor('bg','');cl
 
 /* ── Extended persistence, compatibility, inserts, and custom fonts ── */
 const ZZ_DB_NAME='zz-md-workspace',ZZ_DB_VERSION=1;
-let zzDbPromise=null,autosaveTimer=0,lastVersionSignature='';
+let zzDbPromise=null,autosaveTimer=0,autosaveIdle=0,lastVersionSignature='';
 function zzDb(){
   if(zzDbPromise)return zzDbPromise;
   zzDbPromise=new Promise((resolve,reject)=>{
@@ -12725,7 +12995,9 @@ async function saveWorkspaceSession(){
 }
 function scheduleWorkspaceSave(){
   clearTimeout(autosaveTimer);
-  autosaveTimer=setTimeout(async()=>{
+  if(autosaveIdle&&'cancelIdleCallback' in window)cancelIdleCallback(autosaveIdle);
+  autosaveIdle=0;
+  const save=async()=>{
     await saveWorkspaceSession();
     const file=state.files[state.active];
     if(!file)return;
@@ -12733,6 +13005,12 @@ function scheduleWorkspaceSave(){
     if(signature===lastVersionSignature)return;
     lastVersionSignature=signature;
     await saveVersionSnapshot('자동 기록');
+  };
+  autosaveTimer=setTimeout(()=>{
+    autosaveTimer=0;
+    if('requestIdleCallback' in window){
+      autosaveIdle=requestIdleCallback(()=>{autosaveIdle=0;save()},{timeout:2500});
+    }else setTimeout(save,0);
   },900);
 }
 async function saveVersionSnapshot(reason='자동 기록'){
@@ -12759,10 +13037,9 @@ function applyWorkspaceSnapshot(snapshot){
   state.savedText=state.files[state.active]?.savedText||'';
   state.dirty=els.editor.value!==state.savedText;
   lastVersionSignature='';
-  renderAll();
   setMode('edit',false);
+  renderAll({deferPreview:true,visibleOnly:true});
   updateUndoRedoButtons();
-  updateLineNumbers();
   return true;
 }
 async function showVersionHistory(){
@@ -13091,7 +13368,7 @@ async function saveShortcutAsFormat(format){
 }
 async function shortcutSaveResult(){
   if(state.mode==='edit'){
-    if(previewSyncTimer)syncFromPreview();
+    if(previewSyncTimer||previewSyncIdle)syncFromPreview();
     let format=localStorage.getItem(SHORTCUT_SAVE_FORMAT_KEY);
     if(format!=='md'&&format!=='pdf')format=await showShortcutSaveFormatDialog();
     if(format)return saveShortcutAsFormat(format);
@@ -13132,7 +13409,7 @@ document.addEventListener('keydown',e=>{
   const consume=()=>{e.preventDefault();e.stopImmediatePropagation()};
   if(['modeConvert','modeEdit','modeMerge'].includes(command)){
     consume();if(modal)return;
-    if(state.mode==='edit'){if(state.editingPreview||previewSyncTimer)syncFromPreview();else if(state.active>=0)state.files[state.active].text=els.editor.value}
+    if(state.mode==='edit'){if(state.editingPreview||previewSyncTimer||previewSyncIdle)syncFromPreview();else if(state.active>=0)state.files[state.active].text=els.editor.value}
     closeAllPanels();clearPreviewTransientState();hideMergePreview(true);closeSourceSyntaxPopover();
     setMode({modeConvert:'convert',modeEdit:'edit',modeMerge:'merge'}[command]);return;
   }
