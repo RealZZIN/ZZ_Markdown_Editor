@@ -7173,9 +7173,11 @@ function autoConvertPreviewMathAtSelection(){
   replace.setStart(node,start);replace.setEnd(node,caret.endOffset);replace.deleteContents();replace.insertNode(math);
   const next=document.createRange();next.setStartAfter(math);next.collapse(true);selection.removeAllRanges();selection.addRange(next);
   state.savedPreviewRange=next.cloneRange();
-  addMovableElements(els.preview);
-  syncFromPreview();
-  pushHistory(true);
+  math.dataset.movable='1';
+  math.draggable=true;
+  // Serializing the whole Preview synchronously here causes a visible pause in
+  // large documents. The normal idle sync also commits the history entry.
+  scheduleSyncFromPreview();
   return true;
 }
 function synchronizeEditorSyncBlocks(){
@@ -10970,9 +10972,9 @@ const acPanelHtml=`
       <input type="checkbox" id="enable-preview-markdown" checked>
       <span><b>프리뷰 MD 문법 적용</b><div class="ac-desc">Preview에 입력한 Markdown 문법을 서식으로 변환</div></span>
     </label>
-    <label title="Preview에서 LaTeX 명령이 들어간 괄호식을 완성하면 수식으로 바꿉니다.">
+    <label title="Preview에서 LaTeX 문법을 입력하면 편집 가능한 수식으로 자동 변환합니다.">
       <input type="checkbox" id="enable-auto-math-syntax" checked>
-      <span><b>수식 문법 자동 변환</b><div class="ac-desc">(X \\rightarrow y)를 입력하면 수식으로 변환</div></span>
+      <span><b>수식 자동 변환</b><div class="ac-desc">LaTeX 문법을 입력하면 자동으로 수식으로 바꿉니다.</div></span>
     </label>
     <label title="URL을 붙여넣으면 클릭할 수 있는 링크 서식으로 자동 변환합니다.">
       <input type="checkbox" id="enable-auto-link" checked>
@@ -11022,7 +11024,7 @@ PANELS.push('ac-panel');TOGGLES.push('autocorrect-toggle');
 const optionPreviewExamples={
   'enable-paragraph-break':{title:'Enter로 줄바꿈',body:'<div class="option-live-demo"><small>Enter를 누르면 다음 줄이 바로 만들어집니다.</small><div class="option-enter-animation"><span>첫 번째 줄</span><i>Enter ↵</i><span>두 번째 줄</span><b></b></div></div>'},
   'enable-preview-markdown':{title:'프리뷰 MD 문법 적용',body:'<div class="option-live-demo"><small>입력한 Markdown 문법이 바로 서식으로 바뀝니다.</small><div class="option-markdown-animation"><div class="option-demo-input"><span>**텍스트**</span><b></b></div><i>서식 적용</i><div class="option-demo-output"><strong>텍스트</strong></div></div></div>'},
-  'enable-auto-math-syntax':{title:'수식 문법 자동 변환',body:'<div class="option-live-demo"><small>LaTeX 명령이 포함된 괄호식을 완성하면 편집 가능한 수식으로 바꿉니다.</small><div class="option-example-code"><i>입력</i><span>(X \\rightarrow y)</span><i>결과</i><span>X → y</span></div></div>'},
+  'enable-auto-math-syntax':{title:'수식 자동 변환',body:'<div class="option-live-demo"><small>LaTeX 문법을 입력하면 편집 가능한 수식으로 자동 변환합니다.</small><div class="option-example-code"><i>입력</i><span>(X \\rightarrow y)</span><i>결과</i><span>X → y</span></div></div>'},
   'enable-auto-link':{title:'URL 자동 링크',body:'<div class="option-live-demo"><small>붙여넣은 주소가 클릭 가능한 링크로 바뀝니다.</small><div class="option-link-animation"><div class="option-demo-input"><span>https://example.com</span><b></b></div><i>붙여넣기</i><div class="option-demo-output"><a>https://example.com</a></div></div></div>'},
   'enable-source-syntax-hover':{title:'문법 빠른 편집',body:'<div class="option-live-demo"><small>Preview의 문장에 마우스를 올리면 Markdown 원문을 고칠 수 있는 창이 열립니다.</small><div class="option-quick-edit-animation"><div class="option-preview-sentence"><span>중요한 문장입니다.</span><b>마우스</b></div><div class="option-source-editor"><code>**중요한 문장**입니다.</code><i>수정</i></div><div class="option-quick-edit-result"><strong>수정한 문장</strong>입니다.</div></div></div>'},
   'enable-autocorrect':{title:'기호 공백 보정',body:'<div class="option-live-demo"><small>Markdown 기호 안에 잘못 들어간 공백을 자동으로 정리합니다.</small><div class="option-space-animation"><div><span>**김밥 </span><em> </em><span>**</span><b></b></div><i>공백 제거</i><strong>**김밥**</strong></div></div>'},
@@ -11417,11 +11419,16 @@ const EN_TEXT={
   '라이트':'Light','다크':'Dark','사용자 지정':'Custom','테마 설정':'Theme settings','화면에 사용할 테마를 선택하세요.':'Choose a theme for the interface.',
   '사용자 지정 테마 편집':'Edit custom theme','배경색과 글자색을 직접 설정합니다.':'Set the background and text colors manually.',
   '언어':'Language','화면에 표시할 언어를 선택합니다.':'Choose the language used in the interface.','한국어':'한국어','영어':'English',
+  '문서 폰트':'Document font','업로드 폰트 사용':'Use uploaded font','선택한 폰트를 Preview와 PDF 문서에 적용합니다.':'Apply the selected font to Preview and PDF documents.',
+  '문서 폰트 선택':'Select document font','폰트 업로드':'Upload font','삭제':'Delete','업로드한 폰트 없음':'No uploaded fonts',
+  'TTF, OTF, WOFF, WOFF2 파일을 업로드할 수 있습니다.':'Upload TTF, OTF, WOFF, or WOFF2 font files.',
   '닫기':'Close','완료':'Done','취소':'Cancel','확인':'OK','복구':'Restore','작업 복구':'Restore workspace',
   '브라우저 저장소가 지워지기 전까지 이 기록을 복구할 수 있습니다.':'This workspace can be restored until the browser storage is cleared.',
   '작성 옵션':'Writing options','보기 옵션':'View options','Enter로 줄바꿈':'Line break with Enter','Enter를 누른 위치에서 바로 줄바꿈':'Insert a line break where Enter is pressed',
   '프리뷰 MD 문법 적용':'Render Markdown in Preview','Preview에 입력한 Markdown 문법을 서식으로 변환':'Render Markdown syntax entered in Preview',
-  '수식 문법 자동 변환':'Auto-convert math syntax','(X \\rightarrow y)를 입력하면 수식으로 변환':'Convert (X \\rightarrow y) into rendered math',
+  '수식 자동 변환':'Automatic math conversion','LaTeX 문법을 입력하면 자동으로 수식으로 바꿉니다.':'Automatically convert LaTeX syntax into rendered math.',
+  'Preview에서 LaTeX 문법을 입력하면 편집 가능한 수식으로 자동 변환합니다.':'Enter LaTeX syntax in Preview to convert it automatically into editable math.',
+  'LaTeX 문법을 입력하면 편집 가능한 수식으로 자동 변환합니다.':'Enter LaTeX syntax to convert it automatically into editable math.',
   'URL 자동 링크':'Automatic URL links','붙여넣은 주소를 링크로 자동 변환':'Convert pasted URLs into links',
   '문법 빠른 편집':'Quick syntax editing','Preview의 문장에 마우스를 올려 Markdown 원문 수정':'Hover over Preview text to edit the Markdown source',
   '창 표시까지':'Show after','초':'sec','기호 공백 보정':'Fix syntax spacing','MD 기호 안의 불필요한 공백 제거':'Remove unnecessary spaces inside Markdown syntax',
@@ -11827,7 +11834,8 @@ function showGuideReplayPicker(){
   document.body.appendChild(wrap);
   wrap.querySelector('[data-guide-target]').focus();
 }
-function showAppSettings(){
+async function showAppSettings(){
+  await loadCustomFonts();
   document.querySelector('.edit-guide-overlay')?.remove();
   document.querySelector('.feature-guide-welcome')?.remove();
   closeGuideModal(document.querySelector('.app-settings-modal'));
@@ -11840,6 +11848,16 @@ function showAppSettings(){
         <button type="button" data-ui-language="ko" class="${uiLanguage==='ko'?'active':''}">한국어</button>
         <button type="button" data-ui-language="en" class="${uiLanguage==='en'?'active':''}">English</button>
       </div>
+    </section>
+    <section class="app-settings-group"><h4>문서 폰트</h4>
+      <div class="app-settings-section"><div><strong>업로드 폰트 사용</strong><p>선택한 폰트를 Preview와 PDF 문서에 적용합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-custom-font-enabled ${customFontEnabled&&customFonts.length?'checked':''} ${customFonts.length?'':'disabled'}><span></span></label></div>
+      <input type="file" data-custom-font-input accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" multiple hidden>
+      <div class="app-settings-font-controls">
+        <select data-custom-font-select aria-label="문서 폰트 선택" ${customFonts.length?'':'disabled'}>${customFonts.length?customFonts.map(font=>`<option value="${htmlEsc(font.id)}" ${activeCustomFont()?.id===font.id?'selected':''}>${htmlEsc(font.name)}</option>`).join(''):'<option>업로드한 폰트 없음</option>'}</select>
+        <button type="button" data-custom-font-upload>폰트 업로드</button>
+        <button type="button" data-custom-font-remove ${customFonts.length?'':'disabled'}>삭제</button>
+      </div>
+      <div class="app-settings-font-status" data-custom-font-status>${customFonts.length?`${customFonts.length}개 저장됨 · TTF, OTF, WOFF, WOFF2 지원`:'TTF, OTF, WOFF, WOFF2 파일을 업로드할 수 있습니다.'}</div>
     </section>
     <section class="app-settings-group"><h4>가이드</h4>
       <div class="app-settings-section"><div><strong>기능 가이드 표시</strong><p>설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-guide-enabled ${featureGuideEnabled?'checked':''}><span></span></label></div>
@@ -11857,6 +11875,34 @@ function showAppSettings(){
     <div class="modal-actions"><button class="tool primary" type="button" data-settings-close>닫기</button></div>
   </div>`;
   wrap.querySelector('[data-guide-enabled]').onchange=event=>setFeatureGuideEnabled(event.target.checked);
+  const fontInput=wrap.querySelector('[data-custom-font-input]');
+  const fontStatus=wrap.querySelector('[data-custom-font-status]');
+  wrap.querySelector('[data-custom-font-enabled]').onchange=event=>{
+    customFontEnabled=event.target.checked;
+    localStorage.setItem(CUSTOM_FONT_ENABLED_KEY,customFontEnabled?'1':'0');
+    applyCustomDocumentFont();
+  };
+  wrap.querySelector('[data-custom-font-select]').onchange=event=>{
+    localStorage.setItem(CUSTOM_FONT_ACTIVE_KEY,event.target.value);
+    applyCustomDocumentFont();
+  };
+  wrap.querySelector('[data-custom-font-upload]').onclick=()=>fontInput.click();
+  fontInput.onchange=async()=>{
+    if(!fontInput.files?.length)return;
+    fontStatus.textContent='폰트를 확인하고 저장하는 중...';
+    try{
+      const added=await importCustomFonts(fontInput.files);
+      closeGuideModal(wrap);await showAppSettings();
+      const next=document.querySelector('[data-custom-font-status]');
+      if(next)next.textContent=`${added.length}개 폰트를 업로드하고 문서에 적용했습니다.`;
+    }catch(error){fontStatus.textContent=error?.message||'폰트를 불러오지 못했습니다.'}
+  };
+  wrap.querySelector('[data-custom-font-remove]').onclick=async()=>{
+    const id=wrap.querySelector('[data-custom-font-select]').value;
+    if(!id)return;
+    await removeCustomFont(id);
+    closeGuideModal(wrap);await showAppSettings();
+  };
   wrap.querySelectorAll('[data-ui-language]').forEach(button=>button.onclick=()=>{
     setUiLanguage(button.dataset.uiLanguage);
     wrap.querySelectorAll('[data-ui-language]').forEach(item=>item.classList.toggle('active',item===button));
@@ -12965,6 +13011,9 @@ $('clear-bg-color').onclick=e=>{e.stopPropagation();applyPickedColor('bg','');cl
 /* ── Extended persistence, compatibility, inserts, and custom fonts ── */
 const ZZ_DB_NAME='zz-md-workspace',ZZ_DB_VERSION=1;
 let zzDbPromise=null,autosaveTimer=0,autosaveIdle=0,lastVersionSignature='';
+const CUSTOM_FONT_ENABLED_KEY='md-custom-font-enabled',CUSTOM_FONT_ACTIVE_KEY='md-custom-font-active';
+let customFontEnabled=savedOption(CUSTOM_FONT_ENABLED_KEY,false),customFonts=[],customFontsLoaded=false;
+const customFontFaces=new Map();
 function zzDb(){
   if(zzDbPromise)return zzDbPromise;
   zzDbPromise=new Promise((resolve,reject)=>{
@@ -12994,6 +13043,60 @@ async function zzStoreGet(store,key){
     request.onsuccess=()=>resolve(request.result);
     request.onerror=()=>reject(request.error);
   });
+}
+function customFontFamily(id){return `ZZUserFont_${String(id).replace(/[^a-z0-9_-]/gi,'_')}`}
+function activeCustomFont(){
+  const id=localStorage.getItem(CUSTOM_FONT_ACTIVE_KEY)||'';
+  return customFonts.find(font=>font.id===id)||customFonts[0]||null;
+}
+function applyCustomDocumentFont(){
+  const font=activeCustomFont();
+  const enabled=customFontEnabled&&!!font;
+  document.documentElement.style.setProperty('--document-font',enabled?`"${customFontFamily(font.id)}", var(--font)`:'var(--font)');
+  document.documentElement.classList.toggle('custom-document-font',enabled);
+}
+async function registerCustomFont(font){
+  if(!font?.id||!font?.data||customFontFaces.has(font.id))return;
+  const face=new FontFace(customFontFamily(font.id),font.data);
+  await face.load();
+  document.fonts.add(face);
+  customFontFaces.set(font.id,face);
+}
+async function loadCustomFonts(force=false){
+  if(customFontsLoaded&&!force)return customFonts;
+  customFonts=await zzStoreGet('fonts','library').catch(()=>[])||[];
+  for(const font of customFonts){try{await registerCustomFont(font)}catch{}}
+  customFontsLoaded=true;
+  if(!localStorage.getItem(CUSTOM_FONT_ACTIVE_KEY)&&customFonts[0])localStorage.setItem(CUSTOM_FONT_ACTIVE_KEY,customFonts[0].id);
+  applyCustomDocumentFont();
+  return customFonts;
+}
+async function importCustomFonts(files){
+  const accepted=[...files].filter(file=>/\.(?:ttf|otf|woff2?)$/i.test(file.name));
+  if(!accepted.length)throw new Error('TTF, OTF, WOFF 또는 WOFF2 폰트 파일을 선택해 주세요.');
+  const added=[];
+  for(const file of accepted){
+    const data=await file.arrayBuffer();
+    const id=`font-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
+    const name=file.name.replace(/\.(?:ttf|otf|woff2?)$/i,'').trim()||'사용자 폰트';
+    const font={id,name,fileName:file.name,type:file.type||'',data};
+    await registerCustomFont(font);
+    customFonts.push(font);added.push(font);
+  }
+  await zzStorePut('fonts','library',customFonts);
+  if(added[0])localStorage.setItem(CUSTOM_FONT_ACTIVE_KEY,added[0].id);
+  customFontEnabled=true;localStorage.setItem(CUSTOM_FONT_ENABLED_KEY,'1');
+  applyCustomDocumentFont();
+  return added;
+}
+async function removeCustomFont(id){
+  const face=customFontFaces.get(id);
+  if(face){document.fonts.delete(face);customFontFaces.delete(id)}
+  customFonts=customFonts.filter(font=>font.id!==id);
+  await zzStorePut('fonts','library',customFonts);
+  const next=customFonts[0]||null;
+  if(next)localStorage.setItem(CUSTOM_FONT_ACTIVE_KEY,next.id);else localStorage.removeItem(CUSTOM_FONT_ACTIVE_KEY);
+  applyCustomDocumentFont();
 }
 function serializableWorkspace(){
   return{
@@ -13601,6 +13704,7 @@ $('theme-custom').onclick=e=>{
 els.homeOutput.addEventListener('input',()=>els.homeOutput.dataset.touched='1');
 window.addEventListener('beforeunload',e=>{if(!state.dirty)return;e.preventDefault();e.returnValue=''});
 setSidebarWidth(Number(localStorage.getItem('md-sidebar-width'))||312);
+loadCustomFonts().catch(()=>applyCustomDocumentFont());
 setSidebarView('files');
 setLineNumbers($('enable-line-numbers').checked);
 setSwapPanes($('enable-swap-panes').checked);
