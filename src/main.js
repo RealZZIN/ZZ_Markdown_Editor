@@ -3673,12 +3673,13 @@ function showSidebarFolderMenu(event,node,pathKey,isRoot){
 function renderSidebarNode(parent,node,pathKey,isRoot=false,depth=0){
   const count=fileTreeCount(node),collapsed=!!state.collapsedSidebarGroups[pathKey],wrap=document.createElement('div');
   wrap.className='folder-group'+(isRoot?' sidebar-root-group':'')+(collapsed?' collapsed':'');
-  wrap.style.setProperty('--sidebar-sticky-top',`${depth?33+(depth-1)*30:-1}px`);
+  wrap.style.setProperty('--sidebar-sticky-top',`${depth?36+(depth-1)*30:-1}px`);
   wrap.style.setProperty('--sidebar-depth',String(depth));
   wrap.style.setProperty('--sidebar-indent-offset',`${depth*18}px`);
+  wrap.style.setProperty('--sidebar-label-indent',`${9+Math.max(0,depth-1)*14}px`);
   wrap.dataset.uploadFolder=pathKey;
   wrap.dataset.sidebarKey=pathKey;
-  wrap.innerHTML=`<button class="folder-title" type="button" title="${htmlEsc(node.name)}"><span class="sidebar-root-chevron" aria-hidden="true"></span><span class="folder-label">${htmlEsc(node.name)} <span class="folder-count">[${count}]</span></span></button><div class="folder-files"></div>`;
+  wrap.innerHTML=`<button class="folder-title" type="button" title="${htmlEsc(node.name)}"><span class="sidebar-root-chevron" aria-hidden="true"></span><span class="folder-label">${htmlEsc(node.name)}${isRoot?'':' <span class="folder-slash">/</span>'} <span class="folder-count">[${count}]</span></span></button><div class="folder-files"></div>`;
   const box=wrap.querySelector('.folder-files');
   let populated=false;
   const populate=()=>{
@@ -7721,6 +7722,20 @@ $('home-convert-run').onclick=runHomeConvert;
 $('split-resizer').addEventListener('mousedown',startSplitResize);
 $('convert-resizer').addEventListener('mousedown',e=>startSourceResize(e,'md-convert-source-width'));
 $('merge-resizer').addEventListener('mousedown',e=>startSourceResize(e,'md-merge-source-width'));
+$('split-resizer').addEventListener('dblclick',e=>{
+  if(matchMedia('(max-width: 860px)').matches)return;
+  e.preventDefault();
+  els.editSplit.style.gridTemplateColumns='';
+  savedSplitCols='';
+});
+[['convert-resizer','convert-grid','md-convert-source-width'],['merge-resizer','merge-grid','md-merge-source-width']].forEach(([resizerId,gridId,widthKey])=>{
+  $(resizerId).addEventListener('dblclick',e=>{
+    if(matchMedia('(max-width: 860px)').matches)return;
+    e.preventDefault();
+    localStorage.removeItem(widthKey);
+    $(gridId).style.gridTemplateColumns='';
+  });
+});
 setupSourcePane('convert-grid','convert-source-toggle','md-convert-source');
 setupSourcePane('merge-grid','merge-source-toggle','md-merge-source');
 function showHeadingMenu(){
@@ -13833,6 +13848,11 @@ $('side-resizer').addEventListener('mousedown',e=>{
   }
   document.addEventListener('mousemove',move);
   document.addEventListener('mouseup',up);
+});
+$('side-resizer').addEventListener('dblclick',e=>{
+  if(matchMedia('(max-width: 860px)').matches)return;
+  e.preventDefault();
+  setSidebarWidth(312,true);
 });
 function syncRibbonToggle(){
   const collapsed=els.app.classList.contains('ribbon-collapsed');

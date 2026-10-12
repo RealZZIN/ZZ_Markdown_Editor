@@ -514,11 +514,10 @@ body.dark .brand:hover { color: #fff; }
 .folder-files { display: grid; gap: 2px; margin: 0 0 6px 10px; padding-left: 8px; border-left: 1px solid var(--sbb); }
 .folder-files .folder-title { padding-top: 7px; }
 .folder-files .folder-label { font-size: 13px; font-weight: 600; }
-.file-list.sticky-subfolders-enabled .folder-group:not(.sidebar-root-group) > .folder-title { position:sticky;left:0;top:33px;z-index:calc(4 + var(--sidebar-depth,1));width:calc(100% + var(--sidebar-indent-offset,18px));min-height:30px;margin-left:calc(-1 * var(--sidebar-indent-offset,18px));padding:6px 9px;background:var(--sb);box-shadow:0 1px 0 var(--sbb); }
+.file-list.sticky-subfolders-enabled .folder-group:not(.sidebar-root-group) > .folder-title { position:sticky;left:0;top:var(--sidebar-sticky-top,36px);z-index:calc(19 - var(--sidebar-depth,1));width:calc(100% + var(--sidebar-indent-offset,18px));min-height:30px;margin-left:calc(-1 * var(--sidebar-indent-offset,18px));padding:6px 9px 6px var(--sidebar-label-indent,9px);border-bottom:1px solid var(--sbb);background:var(--sb);box-shadow:0 1px 0 color-mix(in srgb,var(--sbb) 55%,transparent); }
 .file-list.sticky-subfolders-enabled .folder-group:not(.sidebar-root-group) > .folder-title:hover { background:var(--sb2); }
 .folder-group.collapsed .folder-files { display: none; }
-.folder-group.collapsed .folder-label::before { content: '▸ '; }
-.folder-group:not(.collapsed) .folder-label::before { content: '▾ '; }
+.folder-group .folder-label::before { content:none; }
 .sidebar-root-group + .sidebar-root-group {
   margin-top: 10px;
   padding-top: 8px;
@@ -527,7 +526,7 @@ body.dark .brand:hover { color: #fff; }
 .sidebar-root-group > .folder-title {
   position: sticky;
   top: -1px;
-  z-index: 3;
+  z-index: 20;
   min-height: 34px;
   justify-content: flex-start;
   gap: 11px;
@@ -552,9 +551,12 @@ body.dark .brand:hover { color: #fff; }
   transform: rotate(45deg);
   transition: transform .14s ease;
 }
-.sidebar-root-group.collapsed > .folder-title .sidebar-root-chevron {
+.folder-group.collapsed > .folder-title .sidebar-root-chevron {
   transform: rotate(-45deg);
 }
+.folder-group:not(.sidebar-root-group) > .folder-title { color:var(--sbt2);background:var(--sb); }
+.folder-group:not(.sidebar-root-group) > .folder-title .folder-label { font-weight:700; }
+.folder-slash { margin-left:2px;color:var(--sbt3);font-weight:500; }
 .sidebar-root-group > .folder-title .folder-count {
   color: var(--sbt3);
 }
