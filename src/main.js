@@ -11991,10 +11991,10 @@ async function showAppSettings(){
   const wrap=document.createElement('div');wrap.className='modal-backdrop app-settings-modal';
   wrap.innerHTML=`<div class="modal-card app-settings-card" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
     <h3 id="app-settings-title">설정</h3>
-    <nav class="app-settings-categories" aria-label="설정 분류"><button type="button" class="active" data-settings-category="general">일반</button><button type="button" data-settings-category="document">문서</button><button type="button" data-settings-category="language">언어</button></nav>
-    <section class="app-settings-group" data-settings-panel="language" hidden><h4>언어</h4>
+    <nav class="app-settings-categories" aria-label="설정 분류"><button type="button" class="active" data-settings-category="general">일반</button><button type="button" data-settings-category="document">문서</button><button type="button" data-settings-category="language">Language</button></nav>
+    <section class="app-settings-group" data-settings-panel="language" hidden><h4>Language</h4>
       <p class="app-settings-language-copy">화면에 표시할 언어를 선택합니다.</p>
-      <div class="app-settings-language" role="group" aria-label="언어">
+      <div class="app-settings-language" role="group" aria-label="Language">
         <button type="button" data-ui-language="ko" class="${uiLanguage==='ko'?'active':''}">한국어</button>
         <button type="button" data-ui-language="en" class="${uiLanguage==='en'?'active':''}">English</button>
       </div>
