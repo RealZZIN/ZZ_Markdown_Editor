@@ -294,6 +294,8 @@ function missingImageRefs(file){
 }
 const MISSING_IMAGE_WARNING_KEY='md-missing-image-warning-enabled';
 let missingImageWarningEnabled=localStorage.getItem(MISSING_IMAGE_WARNING_KEY)!=='0';
+const STICKY_SUBFOLDER_KEY='md-sticky-subfolders-enabled';
+let stickySubfolderEnabled=localStorage.getItem(STICKY_SUBFOLDER_KEY)!=='0';
 function notifyMissingImages(files){
   if(!missingImageWarningEnabled)return;
   const missing=[...new Set(files.flatMap(missingImageRefs))];
@@ -3672,6 +3674,8 @@ function renderSidebarNode(parent,node,pathKey,isRoot=false,depth=0){
   const count=fileTreeCount(node),collapsed=!!state.collapsedSidebarGroups[pathKey],wrap=document.createElement('div');
   wrap.className='folder-group'+(isRoot?' sidebar-root-group':'')+(collapsed?' collapsed':'');
   wrap.style.setProperty('--sidebar-sticky-top',`${depth?33+(depth-1)*30:-1}px`);
+  wrap.style.setProperty('--sidebar-depth',String(depth));
+  wrap.style.setProperty('--sidebar-indent-offset',`${depth*18}px`);
   wrap.dataset.uploadFolder=pathKey;
   wrap.dataset.sidebarKey=pathKey;
   wrap.innerHTML=`<button class="folder-title" type="button" title="${htmlEsc(node.name)}"><span class="sidebar-root-chevron" aria-hidden="true"></span><span class="folder-label">${htmlEsc(node.name)} <span class="folder-count">[${count}]</span></span></button><div class="folder-files"></div>`;
@@ -3774,7 +3778,7 @@ function renderSidebarContents(parent,node,pathKey,depth=0){
     enableSidebarDrag(btn,{kind:'file',key:pathKey+'/'+name,file});parent.appendChild(btn);
   });
 }
-function renderList(){const n=state.files.length;$('sidebar-files-tab').textContent=`파일 [${n}]`;els.count.textContent='';els.count.style.display='none';els.list.innerHTML='';buildSidebarTrees().forEach(node=>renderSidebarNode(els.list,node,node.name,true));renderSidebarImages()}
+function renderList(){const n=state.files.length;$('sidebar-files-tab').textContent=`파일 [${n}]`;els.count.textContent='';els.count.style.display='none';els.list.classList.toggle('sticky-subfolders-enabled',stickySubfolderEnabled);els.list.innerHTML='';buildSidebarTrees().forEach(node=>renderSidebarNode(els.list,node,node.name,true));renderSidebarImages()}
 function rebuildSidebarImageIndex(){
   const oldUrls=new Set(Object.values(state.images));state.images={};
   state.assets.forEach((file,path)=>{sidebarUploadPaths.set(file,path);if(imageExt.test(path))addImage(file)});
@@ -3842,6 +3846,7 @@ function showSidebarImageMenu(event,path,file){
   const menu=document.createElement('div');menu.className='file-context-menu sidebar-context-menu';
   const item=(label,action,danger=false)=>{const button=document.createElement('button');button.type='button';button.textContent=label;if(danger)button.className='danger';button.onclick=()=>{menu.remove();action()};menu.appendChild(button)};
   item('다운로드',()=>downloadSidebarImage(path,file));
+  menu.appendChild(document.createElement('hr'));
   item('삭제',()=>deleteSidebarImage(path),true);
   document.body.appendChild(menu);positionContextMenu(menu,event.clientX,event.clientY);
   const close=e=>{if(!menu.contains(e.target)){menu.remove();document.removeEventListener('pointerdown',close)}};
@@ -4276,10 +4281,11 @@ function ensureFileContextMenu(){
   fileContextMenu.className='file-context-menu';
   fileContextMenu.hidden=true;
   fileContextMenu.innerHTML=`
+    <button type="button" data-file-action="save">다운로드</button>
+    <hr>
     <button type="button" data-file-action="add">추가</button>
     <button type="button" data-file-action="duplicate">복제</button>
     <button type="button" data-file-action="rename">이름 변경</button>
-    <button type="button" data-file-action="save">다운로드</button>
     <hr>
     <button type="button" class="danger" data-file-action="remove">제거</button>`;
   fileContextMenu.addEventListener('click',e=>{
@@ -11528,7 +11534,7 @@ function closeGuideModal(wrap){
 const LANGUAGE_KEY='zz-ui-language-v1';
 let uiLanguage=localStorage.getItem(LANGUAGE_KEY)==='en'?'en':'ko';
 const EN_TEXT={
-  '홈으로 이동':'Home','설정 열기':'Settings','설정':'Settings','변환':'Convert','편집':'Edit','병합':'Merge',
+  '홈으로 이동':'Home','설정 열기':'Settings','설정':'Settings','설정 분류':'Settings categories','일반':'General','변환':'Convert','편집':'Edit','병합':'Merge',
   '파일 [0]':'Files [0]','파일':'Files','문서':'Document','로컬':'Local','로컬 [0]':'Local [0]','업로드된 파일':'Uploaded files','업로드된 파일 [0]':'Uploaded files [0]',
   '문서 작업':'Document workspace','작업할 파일':'Files to work with','작업할 파일을 여기에 놓으세요':'Drop files here',
   '선택한 문서':'Selected document','업로드된 문서 없음':'No document uploaded','저장할 이름':'Save as',
@@ -11557,7 +11563,7 @@ const EN_TEXT={
   '라이트':'Light','다크':'Dark','사용자 지정':'Custom','테마 설정':'Theme settings','화면에 사용할 테마를 선택하세요.':'Choose a theme for the interface.',
   '사용자 지정 테마 편집':'Edit custom theme','배경색과 글자색을 직접 설정합니다.':'Set the background and text colors manually.',
   '언어':'Language','화면에 표시할 언어를 선택합니다.':'Choose the language used in the interface.','한국어':'한국어','영어':'English',
-  '문서 폰트':'Document font','업로드 폰트 사용':'Use uploaded font','선택한 폰트를 Preview와 PDF 문서에 적용합니다.':'Apply the selected font to Preview and PDF documents.','이미지 검사':'Image check','누락 이미지 경고':'Missing image warnings','MD에서 참조하지만 업로드되지 않은 이미지가 있으면 파일 목록에 경고를 표시합니다.':'Show a warning in the file list when an MD file references an image that has not been uploaded.','누락된 이미지':'Missing images',
+  '문서 폰트':'Document font','업로드 폰트 사용':'Use uploaded font','선택한 폰트를 Preview와 PDF 문서에 적용합니다.':'Apply the selected font to Preview and PDF documents.','이미지 검사':'Image check','누락 이미지 경고':'Missing image warnings','MD에서 참조하지만 업로드되지 않은 이미지가 있으면 파일 목록에 경고를 표시합니다.':'Show a warning in the file list when an MD file references an image that has not been uploaded.','누락된 이미지':'Missing images','파일 목록':'File list','스크롤 시 소폴더 고정':'Keep subfolder visible while scrolling','파일 목록을 스크롤할 때 현재 소폴더 이름을 위쪽에 표시합니다.':'Show the current subfolder name at the top while scrolling through the file list.',
   '문서 폰트 선택':'Select document font','폰트 업로드':'Upload font','삭제':'Delete','업로드한 폰트 없음':'No uploaded fonts',
   'TTF, OTF, WOFF, WOFF2 파일을 업로드할 수 있습니다.':'Upload TTF, OTF, WOFF, or WOFF2 font files.','폰트를 확인하고 저장하는 중...':'Checking and saving fonts...','폰트를 불러오지 못했습니다.':'Could not load the font.',
   '이미지':'Images','업로드한 이미지가 없습니다.':'No uploaded images.','이미지 정보':'Image details','파일명':'File name','확장자':'Extension','경로':'Path','파일 크기':'File size','이미지 크기':'Dimensions','확인 중...':'Checking...','확인할 수 없음':'Unavailable','사용 중인 업로드 MD':'Uploaded Markdown files using this image','업로드된 MD에서 이 이미지를 참조하지 않습니다.':'No uploaded Markdown file references this image.',
@@ -11985,14 +11991,15 @@ async function showAppSettings(){
   const wrap=document.createElement('div');wrap.className='modal-backdrop app-settings-modal';
   wrap.innerHTML=`<div class="modal-card app-settings-card" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
     <h3 id="app-settings-title">설정</h3>
-    <section class="app-settings-group"><h4>언어</h4>
+    <nav class="app-settings-categories" aria-label="설정 분류"><button type="button" class="active" data-settings-category="general">일반</button><button type="button" data-settings-category="document">문서</button><button type="button" data-settings-category="language">언어</button></nav>
+    <section class="app-settings-group" data-settings-panel="language" hidden><h4>언어</h4>
       <p class="app-settings-language-copy">화면에 표시할 언어를 선택합니다.</p>
       <div class="app-settings-language" role="group" aria-label="언어">
         <button type="button" data-ui-language="ko" class="${uiLanguage==='ko'?'active':''}">한국어</button>
         <button type="button" data-ui-language="en" class="${uiLanguage==='en'?'active':''}">English</button>
       </div>
     </section>
-    <section class="app-settings-group"><h4>문서 폰트</h4>
+    <section class="app-settings-group" data-settings-panel="document" hidden><h4>문서 폰트</h4>
       <div class="app-settings-section"><div><strong>업로드 폰트 사용</strong><p>선택한 폰트를 Preview와 PDF 문서에 적용합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-custom-font-enabled ${customFontEnabled&&customFonts.length?'checked':''} ${customFonts.length?'':'disabled'}><span></span></label></div>
       <input type="file" data-custom-font-input accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" multiple hidden>
       <div class="app-settings-font-controls">
@@ -12002,29 +12009,42 @@ async function showAppSettings(){
       </div>
       <div class="app-settings-font-status" data-custom-font-status>${customFonts.length?`${customFonts.length}개 저장됨 · TTF, OTF, WOFF, WOFF2 지원`:'TTF, OTF, WOFF, WOFF2 파일을 업로드할 수 있습니다.'}</div>
     </section>
-    <section class="app-settings-group app-settings-group-compact"><h4>이미지 검사</h4>
+    <section class="app-settings-group app-settings-group-compact" data-settings-panel="document" hidden><h4>이미지 검사</h4>
       <div class="app-settings-section"><div><strong>누락 이미지 경고</strong><p>MD에서 참조하지만 업로드되지 않은 이미지가 있으면 파일 목록에 경고를 표시합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-missing-image-warning ${missingImageWarningEnabled?'checked':''}><span></span></label></div>
     </section>
-    <section class="app-settings-group"><h4>가이드</h4>
+    <section class="app-settings-group app-settings-group-compact" data-settings-panel="document" hidden><h4>파일 목록</h4>
+      <div class="app-settings-section"><div><strong>스크롤 시 소폴더 고정</strong><p>파일 목록을 스크롤할 때 현재 소폴더 이름을 위쪽에 표시합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-sticky-subfolders ${stickySubfolderEnabled?'checked':''}><span></span></label></div>
+    </section>
+    <section class="app-settings-group" data-settings-panel="general"><h4>가이드</h4>
       <div class="app-settings-section"><div><strong>기능 가이드 표시</strong><p>설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-guide-enabled ${featureGuideEnabled?'checked':''}><span></span></label></div>
       <button class="app-settings-replay" type="button" data-guide-picker><span>가이드 다시 보기</span><small>목록에서 다시 볼 가이드를 선택합니다.</small></button>
     </section>
-    <section class="app-settings-group"><h4>단축키</h4>
+    <section class="app-settings-group app-settings-shortcuts" data-settings-panel="general"><h4>단축키</h4>
       <button class="app-settings-replay" type="button" data-shortcut-settings><span>단축키 설정</span><small>${SHORTCUT_DEFINITIONS.length}개 명령의 단축키를 확인하고 변경합니다.</small></button>
     </section>
-    <section class="app-settings-group mobile-settings-only"><h4>편집 설정</h4>
+    <section class="app-settings-group mobile-settings-only" data-settings-panel="general"><h4>편집 설정</h4>
       <button class="app-settings-replay mobile-settings-entry" type="button" data-edit-settings><span><b>작성·보기 옵션</b><small>자동 보정과 편집 화면 표시 기능을 설정합니다.</small></span><i>설정</i></button>
     </section>
-    <section class="app-settings-group mobile-settings-only"><h4>테마</h4>
+    <section class="app-settings-group mobile-settings-only" data-settings-panel="general"><h4>테마</h4>
       <button class="app-settings-replay mobile-settings-entry" type="button" data-theme-settings><span><b>화면 테마</b><small>라이트·다크 테마를 선택하거나 사용자 지정 색상을 편집합니다.</small></span><i>설정</i></button>
     </section>
     <div class="modal-actions"><button class="tool primary" type="button" data-settings-close>닫기</button></div>
   </div>`;
+  wrap.querySelectorAll('[data-settings-category]').forEach(button=>button.onclick=()=>{
+    const category=button.dataset.settingsCategory;
+    wrap.querySelectorAll('[data-settings-category]').forEach(item=>item.classList.toggle('active',item===button));
+    wrap.querySelectorAll('[data-settings-panel]').forEach(panel=>panel.hidden=panel.dataset.settingsPanel!==category);
+  });
   wrap.querySelector('[data-guide-enabled]').onchange=event=>setFeatureGuideEnabled(event.target.checked);
   wrap.querySelector('[data-missing-image-warning]').onchange=event=>{
     missingImageWarningEnabled=event.target.checked;
     localStorage.setItem(MISSING_IMAGE_WARNING_KEY,missingImageWarningEnabled?'1':'0');
     renderList();
+  };
+  wrap.querySelector('[data-sticky-subfolders]').onchange=event=>{
+    stickySubfolderEnabled=event.target.checked;
+    localStorage.setItem(STICKY_SUBFOLDER_KEY,stickySubfolderEnabled?'1':'0');
+    els.list.classList.toggle('sticky-subfolders-enabled',stickySubfolderEnabled);
   };
   const fontInput=wrap.querySelector('[data-custom-font-input]');
   const fontStatus=wrap.querySelector('[data-custom-font-status]');
