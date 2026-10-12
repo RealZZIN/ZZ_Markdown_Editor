@@ -5666,7 +5666,7 @@ function homeMergeFiles(onlyChecked=false){if(!state.files.length)return[];if(!o
 function runHomeMerge(onlyChecked=false){const selected=homeMergeFiles(onlyChecked);if(!selected.length){state.homeMergeNotice=selectionRequiredMessage;renderHomeMergeList();showSelectionNotice();return}const text=buildMerged(selected);els.mergeResult.innerHTML=markdownHtml(text);fixSpanColors(els.mergeResult);runHighlight(els.mergeResult);decorateCodeBlocks(els.mergeResult);stripReadOnlyTableResizeArtifacts(els.mergeResult);state.homeMergeNotice=`${selected.length}개 문서를 병합해서 루트 목록에 추가했습니다.`;addMerged(text);setMode(state.mode,true)}
 function mergeAllFromHome(){runHomeMerge(false)}
 function mergeSelectedFromHome(){runHomeMerge(true)}
-let hoverPreviewCache={file:null,text:null,theme:null},hoverPreviewPinned=false,hoverPreviewCtrlDown=false,hoverPreviewHideTimer=0;
+let hoverPreviewCache={file:null,text:null,theme:null},hoverPreviewPinned=false,hoverPreviewPinKeyDown=false,hoverPreviewHideTimer=0;
 function setHoverPreviewPinned(pinned){
   hoverPreviewPinned=!!pinned;
   els.hoverPreview.classList.toggle('pinned',hoverPreviewPinned);
@@ -5699,7 +5699,7 @@ function showMergePreview(e){
   }
   els.hoverPreview.style.display='block';
   positionHoverPreview(e.currentTarget);
-  if(e.ctrlKey||e.metaKey||e.getModifierState?.('Control')||hoverPreviewCtrlDown)setHoverPreviewPinned(true);
+  if(hoverPreviewPinKeyDown)setHoverPreviewPinned(true);
 }
 function positionHoverPreview(anchor){
   const anchorRect=anchor.getBoundingClientRect();
@@ -5725,13 +5725,13 @@ function scheduleHideMergePreview(){
   },180);
 }
 document.addEventListener('keydown',event=>{
-  if(event.key==='Control'||event.key==='Meta'){
-    hoverPreviewCtrlDown=true;
+  if(shortcutMatches(event,'previewPin')){
+    hoverPreviewPinKeyDown=true;
     if(els.hoverPreview.style.display==='block')setHoverPreviewPinned(true);
   }
   if(event.key==='Escape')hideMergePreview(true);
 },true);
-document.addEventListener('keyup',event=>{if(event.key==='Control'||event.key==='Meta')hoverPreviewCtrlDown=false},true);
+document.addEventListener('keyup',()=>{hoverPreviewPinKeyDown=false},true);
 els.hoverPreview.addEventListener('mouseenter',()=>clearTimeout(hoverPreviewHideTimer));
 els.hoverPreview.addEventListener('mouseleave',()=>hideMergePreview(true));
 document.addEventListener('mousedown',event=>{
@@ -11390,13 +11390,15 @@ const SHORTCUT_DEFINITIONS=[
   {id:'italic',name:'기울임',description:'선택한 글자를 기울임꼴로 표시',defaultKey:'Ctrl+I'},
   {id:'underline',name:'밑줄',description:'선택한 글자에 밑줄 적용',defaultKey:'Ctrl+U'},
   {id:'link',name:'링크',description:'선택한 글자에 링크 추가',defaultKey:'Ctrl+K'},
-  {id:'customFormat',name:'사용자 지정 서식',description:'저장한 사용자 서식 열기',defaultKey:'Ctrl+Alt+S'}
+  {id:'customFormat',name:'사용자 지정 서식',description:'저장한 사용자 서식 열기',defaultKey:'Ctrl+Alt+S'},
+  {id:'previewPin',name:'미니 프리뷰 고정',description:'변환·병합 화면의 미니 프리뷰를 고정',defaultKey:'Ctrl'}
 ];
 const SHORTCUT_GROUPS=[
   {id:'navigation',name:'화면 이동',description:'변환·편집·병합 화면 전환',items:['modeConvert','modeEdit','modeMerge']},
   {id:'file',name:'파일·실행',description:'열기, 저장, 인쇄와 작업 실행',items:['save','saveAs','open','runSelection','print']},
   {id:'editing',name:'찾기·편집 기록',description:'찾기와 실행 취소·다시 실행',items:['find','replace','undo','redo']},
-  {id:'format',name:'글자 서식',description:'선택한 글자의 모양과 링크 변경',items:['bold','italic','underline','link','customFormat']}
+  {id:'format',name:'글자 서식',description:'선택한 글자의 모양과 링크 변경',items:['bold','italic','underline','link','customFormat']},
+  {id:'preview',name:'미니 프리뷰',description:'문서 미리보기 표시와 고정',items:['previewPin']}
 ];
 function loadShortcutSettings(){
   let saved={};try{saved=JSON.parse(localStorage.getItem(SHORTCUT_SETTINGS_KEY)||'{}')||{}}catch{}
@@ -11412,7 +11414,9 @@ function shortcutKeyName(key){
   return lower.replace(/^./,letter=>letter.toUpperCase());
 }
 function shortcutFromEvent(event){
-  if(['Control','Meta','Alt','Shift'].includes(event.key))return'';
+  if(event.key==='Control'||event.key==='Meta')return'Ctrl';
+  if(event.key==='Alt')return'Alt';
+  if(event.key==='Shift')return'Shift';
   const parts=[];
   if(event.ctrlKey||event.metaKey)parts.push('Ctrl');
   if(event.altKey)parts.push('Alt');
@@ -11736,8 +11740,8 @@ const EN_TEXT={
   '혼합':'Mixed','선택한 글씨 크기가 서로 다릅니다.':'The selected text uses different font sizes.','클립보드의 텍스트를 읽을 수 없습니다. 브라우저의 클립보드 권한을 확인해 주세요.':'Could not read clipboard text. Check the browser clipboard permission.','선택 영역 전체에 적용됨':'Applied to the entire selection','적용되지 않음':'Not applied','전체에 배경색이 없음':'No background color across the selection','전체에 굵게가 적용되지 않음':'Bold is not applied across the selection','전체에 기울임이 적용되지 않음':'Italic is not applied across the selection','전체에 밑줄이 적용되지 않음':'Underline is not applied across the selection','선택 영역 전체에 동일하지 않음':'Not consistent across the selection',
   '텍스트를 선택해 주세요':'Select text','프리뷰에서 저장하거나 서식을 적용할 텍스트를 먼저 드래그해 주세요.':'Select text in Preview before saving or applying formatting.','사용자 지정 서식 수정':'Edit custom style','선택한 텍스트에 실제로 적용된 속성만 저장 항목으로 선택했습니다.':'Only properties applied to the selected text are selected for saving.','저장할 항목을 선택해 주세요':'Select properties to save','최소 하나 이상의 서식 항목을 선택해야 합니다.':'Select at least one formatting property.','프리뷰에서 서식을 적용할 텍스트를 먼저 드래그해 주세요.':'Select text in Preview before applying formatting.','새 서식 폴더':'New style folder','폴더명':'Folder name','서식 이름 수정':'Rename style','폴더 이름 수정':'Rename folder',
   '링크 이동':'Open link','열 수 있는 링크 주소가 아닙니다.':'This link cannot be opened.','세미콜론':'Semicolon','변환 미리보기':'Conversion preview','구분자를 확인하면 표 모양을 미리 볼 수 있습니다.':'Check the delimiter to preview the table.','표 만들기':'Create table','구분할 텍스트와 올바른 구분자를 입력해 주세요.':'Enter delimited text and a valid delimiter.',
-  '변환 화면':'Convert workspace','변환 화면으로 이동':'Go to Convert','편집 화면':'Editor workspace','편집 화면으로 이동':'Go to Editor','병합 화면':'Merge workspace','문서 병합 화면으로 이동':'Go to Merge','현재 작업 결과 저장':'Save current result','다른 이름으로 저장':'Save as','편집 문서를 새 이름으로 저장':'Save the document with a new name','파일 또는 폴더 불러오기':'Open a file or folder','선택 작업 실행':'Run selected action','변환·병합 화면의 선택 작업 실행':'Run the selected Convert or Merge action','현재 화면에서 내용 찾기':'Find content on this screen','편집 화면에서 내용 바꾸기':'Replace content in the editor','인쇄·PDF 저장':'Print / Save PDF','현재 결과의 인쇄 창 열기':'Open the print dialog for the current result','실행 취소':'Undo','마지막 편집 되돌리기':'Undo the last edit','다시 실행':'Redo','되돌린 편집 다시 적용':'Redo the reverted edit','선택한 글자를 굵게 표시':'Make selected text bold','선택한 글자를 기울임꼴로 표시':'Italicize selected text','선택한 글자에 밑줄 적용':'Underline selected text','링크':'Link','선택한 글자에 링크 추가':'Add a link to selected text','저장한 사용자 서식 열기':'Open saved custom styles',
-  '화면 이동':'Navigation','변환·편집·병합 화면 전환':'Switch between Convert, Edit, and Merge','파일·실행':'Files and actions','열기, 저장, 인쇄와 작업 실행':'Open, save, print, and run actions','찾기·편집 기록':'Find and edit history','찾기와 실행 취소·다시 실행':'Find, undo, and redo','글자 서식':'Text formatting','선택한 글자의 모양과 링크 변경':'Change selected text formatting and links','변경됨':'Changed','키 조합을 누르세요':'Press a key combination','Ctrl·Alt와 함께 입력':'Use with Ctrl or Alt',
+  '변환 화면':'Convert workspace','변환 화면으로 이동':'Go to Convert','편집 화면':'Editor workspace','편집 화면으로 이동':'Go to Editor','병합 화면':'Merge workspace','문서 병합 화면으로 이동':'Go to Merge','현재 작업 결과 저장':'Save current result','다른 이름으로 저장':'Save as','편집 문서를 새 이름으로 저장':'Save the document with a new name','파일 또는 폴더 불러오기':'Open a file or folder','선택 작업 실행':'Run selected action','변환·병합 화면의 선택 작업 실행':'Run the selected Convert or Merge action','현재 화면에서 내용 찾기':'Find content on this screen','편집 화면에서 내용 바꾸기':'Replace content in the editor','인쇄·PDF 저장':'Print / Save PDF','현재 결과의 인쇄 창 열기':'Open the print dialog for the current result','실행 취소':'Undo','마지막 편집 되돌리기':'Undo the last edit','다시 실행':'Redo','되돌린 편집 다시 적용':'Redo the reverted edit','선택한 글자를 굵게 표시':'Make selected text bold','선택한 글자를 기울임꼴로 표시':'Italicize selected text','선택한 글자에 밑줄 적용':'Underline selected text','링크':'Link','선택한 글자에 링크 추가':'Add a link to selected text','저장한 사용자 서식 열기':'Open saved custom styles','미니 프리뷰 고정':'Pin mini preview','변환·병합 화면의 미니 프리뷰를 고정':'Pin the mini preview in Convert and Merge',
+  '화면 이동':'Navigation','변환·편집·병합 화면 전환':'Switch between Convert, Edit, and Merge','파일·실행':'Files and actions','열기, 저장, 인쇄와 작업 실행':'Open, save, print, and run actions','찾기·편집 기록':'Find and edit history','찾기와 실행 취소·다시 실행':'Find, undo, and redo','글자 서식':'Text formatting','선택한 글자의 모양과 링크 변경':'Change selected text formatting and links','미니 프리뷰':'Mini preview','문서 미리보기 표시와 고정':'Preview display and pinning','변경됨':'Changed','키 조합을 누르세요':'Press a key combination','Ctrl·Alt와 함께 입력':'Use with Ctrl or Alt',
   '삽입할 위치를 다시 선택한 뒤 시도해 주세요.':'Select the insertion point again and retry.','먼저 문서를 업로드하거나 만들어 주세요.':'Upload or create a document first.','미니 문서 삽입':'Insert embedded document','빈 줄':'Blank line','시작 지점을 선택하세요':'Select a starting point','자동 기록':'Automatic history','저장된 버전이 없습니다.':'No saved versions.','#ZZ 전용 블록':'#ZZ-specific blocks','MD에는 원문이 보존되지만 전용 카드·시트·미니 문서 모양은 #ZZ와 PDF에서만 표시됩니다.':'The source is preserved in MD, but custom cards, sheets, and embedded-document layouts appear only in #ZZ and PDF.','Obsidian 확장 문법':'Obsidian extended syntax','지원하지 않는 Markdown 앱에서는 일반 인용문이나 원문으로 보일 수 있습니다.':'Unsupported Markdown apps may display a regular quote or the source text.','MD에는 HTML로 저장됩니다. HTML을 제한하는 앱에서는 입력 개체가 숨겨질 수 있습니다.':'Saved as HTML in MD. Apps that restrict HTML may hide form controls.','문자 서식':'Text formatting','색상·배경색·크기는 HTML 허용 여부에 따라 다르게 보입니다.':'Color, background, and size may vary depending on HTML support.',
   '스프레드시트 삽입':'Insert spreadsheet','스프레드시트 모듈을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.':'Could not load spreadsheet support. Check your internet connection.','범위 없음':'No range','범위 오류':'Invalid range','A1:F20처럼 올바른 셀 범위를 입력해 주세요.':'Enter a valid cell range such as A1:F20.','편집할 문서를 먼저 열어 주세요.':'Open a document to edit first.','파일명':'File name','저장할 결과 없음':'No result to save','먼저 파일을 병합해 주세요.':'Merge files first.','MD → PDF는 Ctrl+Enter로 변환한 뒤 인쇄 창에서 PDF로 저장해 주세요.':'For MD → PDF, convert with Ctrl+Enter and save as PDF from the print dialog.','사이드바 펼치기':'Expand sidebar','테마 열기':'Open theme','테마 닫기':'Close theme'
   ,'변경할 단축키를 선택한 뒤 새 키 조합을 누르세요.':'Select a shortcut, then press a new key combination.','기본값':'Default','전체 초기화':'Reset all','브라우저 기본 글꼴이 운영체제 기본값과 다르게 설정되어 있습니다.':'The browser default font differs from the operating system default.'
@@ -11998,7 +12002,8 @@ function showGuideReplayPicker(){
   document.body.appendChild(wrap);
   wrap.querySelector('[data-guide-target]').focus();
 }
-async function showAppSettings(){
+async function showAppSettings(initialCategory='general'){
+  const settingsCategory=['general','document','language'].includes(initialCategory)?initialCategory:'general';
   await loadCustomFonts();
   document.querySelector('.edit-guide-overlay')?.remove();
   document.querySelector('.feature-guide-welcome')?.remove();
@@ -12006,15 +12011,15 @@ async function showAppSettings(){
   const wrap=document.createElement('div');wrap.className='modal-backdrop app-settings-modal';
   wrap.innerHTML=`<div class="modal-card app-settings-card" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
     <h3 id="app-settings-title">설정</h3>
-    <nav class="app-settings-categories" aria-label="설정 분류"><button type="button" class="active" data-settings-category="general">일반</button><button type="button" data-settings-category="document">문서</button><button type="button" data-settings-category="language">Language</button></nav>
-    <section class="app-settings-group" data-settings-panel="language" hidden><h4>Language</h4>
+    <nav class="app-settings-categories" aria-label="설정 분류"><button type="button" class="${settingsCategory==='general'?'active':''}" data-settings-category="general">일반</button><button type="button" class="${settingsCategory==='document'?'active':''}" data-settings-category="document">문서</button><button type="button" class="${settingsCategory==='language'?'active':''}" data-settings-category="language">Language</button></nav>
+    <section class="app-settings-group" data-settings-panel="language" ${settingsCategory==='language'?'':'hidden'}><h4>Language</h4>
       <p class="app-settings-language-copy">화면에 표시할 언어를 선택합니다.</p>
       <div class="app-settings-language" role="group" aria-label="Language">
         <button type="button" data-ui-language="ko" class="${uiLanguage==='ko'?'active':''}">한국어</button>
         <button type="button" data-ui-language="en" class="${uiLanguage==='en'?'active':''}">English</button>
       </div>
     </section>
-    <section class="app-settings-group" data-settings-panel="document" hidden><h4>문서 폰트</h4>
+    <section class="app-settings-group" data-settings-panel="document" ${settingsCategory==='document'?'':'hidden'}><h4>문서 폰트</h4>
       <div class="app-settings-section"><div><strong>업로드 폰트 사용</strong><p>선택한 폰트를 Preview와 PDF 문서에 적용합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-custom-font-enabled ${customFontEnabled&&customFonts.length?'checked':''} ${customFonts.length?'':'disabled'}><span></span></label></div>
       <input type="file" data-custom-font-input accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" multiple hidden>
       <div class="app-settings-font-controls">
@@ -12024,23 +12029,23 @@ async function showAppSettings(){
       </div>
       <div class="app-settings-font-status" data-custom-font-status>${customFonts.length?`${customFonts.length}개 저장됨 · TTF, OTF, WOFF, WOFF2 지원`:'TTF, OTF, WOFF, WOFF2 파일을 업로드할 수 있습니다.'}</div>
     </section>
-    <section class="app-settings-group app-settings-group-compact" data-settings-panel="document" hidden><h4>이미지 검사</h4>
+    <section class="app-settings-group app-settings-group-compact" data-settings-panel="document" ${settingsCategory==='document'?'':'hidden'}><h4>이미지 검사</h4>
       <div class="app-settings-section"><div><strong>누락 이미지 경고</strong><p>MD에서 참조하지만 업로드되지 않은 이미지가 있으면 파일 목록에 경고를 표시합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-missing-image-warning ${missingImageWarningEnabled?'checked':''}><span></span></label></div>
     </section>
-    <section class="app-settings-group app-settings-group-compact" data-settings-panel="document" hidden><h4>파일 목록</h4>
+    <section class="app-settings-group app-settings-group-compact" data-settings-panel="document" ${settingsCategory==='document'?'':'hidden'}><h4>파일 목록</h4>
       <div class="app-settings-section"><div><strong>스크롤 시 소폴더 고정</strong><p>파일 목록을 스크롤할 때 현재 소폴더 이름을 위쪽에 표시합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-sticky-subfolders ${stickySubfolderEnabled?'checked':''}><span></span></label></div>
     </section>
-    <section class="app-settings-group" data-settings-panel="general"><h4>가이드</h4>
+    <section class="app-settings-group" data-settings-panel="general" ${settingsCategory==='general'?'':'hidden'}><h4>가이드</h4>
       <div class="app-settings-section"><div><strong>기능 가이드 표시</strong><p>설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-guide-enabled ${featureGuideEnabled?'checked':''}><span></span></label></div>
       <button class="app-settings-replay" type="button" data-guide-picker><span>가이드 다시 보기</span><small>목록에서 다시 볼 가이드를 선택합니다.</small></button>
     </section>
-    <section class="app-settings-group app-settings-shortcuts" data-settings-panel="general"><h4>단축키</h4>
+    <section class="app-settings-group app-settings-shortcuts" data-settings-panel="general" ${settingsCategory==='general'?'':'hidden'}><h4>단축키</h4>
       <button class="app-settings-replay" type="button" data-shortcut-settings><span>단축키 설정</span><small>${SHORTCUT_DEFINITIONS.length}개 명령의 단축키를 확인하고 변경합니다.</small></button>
     </section>
-    <section class="app-settings-group mobile-settings-only" data-settings-panel="general"><h4>편집 설정</h4>
+    <section class="app-settings-group mobile-settings-only" data-settings-panel="general" ${settingsCategory==='general'?'':'hidden'}><h4>편집 설정</h4>
       <button class="app-settings-replay mobile-settings-entry" type="button" data-edit-settings><span><b>작성·보기 옵션</b><small>자동 보정과 편집 화면 표시 기능을 설정합니다.</small></span><i>설정</i></button>
     </section>
-    <section class="app-settings-group mobile-settings-only" data-settings-panel="general"><h4>테마</h4>
+    <section class="app-settings-group mobile-settings-only" data-settings-panel="general" ${settingsCategory==='general'?'':'hidden'}><h4>테마</h4>
       <button class="app-settings-replay mobile-settings-entry" type="button" data-theme-settings><span><b>화면 테마</b><small>라이트·다크 테마를 선택하거나 사용자 지정 색상을 편집합니다.</small></span><i>설정</i></button>
     </section>
     <div class="modal-actions"><button class="tool primary" type="button" data-settings-close>닫기</button></div>
@@ -12078,7 +12083,7 @@ async function showAppSettings(){
     fontStatus.textContent='폰트를 확인하고 저장하는 중...';
     try{
       const added=await importCustomFonts(fontInput.files);
-      closeGuideModal(wrap);await showAppSettings();
+      closeGuideModal(wrap);await showAppSettings('document');
       const next=document.querySelector('[data-custom-font-status]');
       if(next)next.textContent=`${added.length}개 폰트를 업로드하고 문서에 적용했습니다.`;
     }catch(error){fontStatus.textContent=error?.message||'폰트를 불러오지 못했습니다.'}
@@ -12087,7 +12092,7 @@ async function showAppSettings(){
     const id=wrap.querySelector('[data-custom-font-select]').value;
     if(!id)return;
     await removeCustomFont(id);
-    closeGuideModal(wrap);await showAppSettings();
+    closeGuideModal(wrap);await showAppSettings('document');
   };
   wrap.querySelectorAll('[data-ui-language]').forEach(button=>button.onclick=()=>{
     setUiLanguage(button.dataset.uiLanguage);
@@ -12158,10 +12163,17 @@ function showShortcutSettings(){
     if(event.key==='Escape'){recordingButton.textContent=shortcutSettings[recordingId];stopRecording();return}
     const held=[];if(event.ctrlKey||event.metaKey)held.push('Ctrl');if(event.altKey)held.push('Alt');if(event.shiftKey)held.push('Shift');
     const modifierOnly=['Control','Meta','Alt','Shift'].includes(event.key);
-    if(modifierOnly){recordingButton.textContent=held.length?`${held.join(' + ')} + …`:'키 조합을 누르세요';return}
+    if(modifierOnly){
+      if(recordingId==='previewPin'){
+        const value=shortcutFromEvent(event),conflict=SHORTCUT_DEFINITIONS.find(item=>item.id!==recordingId&&shortcutSettings[item.id]===value);
+        if(conflict){recordingButton.textContent=`${conflict.name}와 중복`;recordingButton.classList.add('is-error');return}
+        shortcutSettings[recordingId]=value;saveShortcutSettings();stopRecording();paint();return;
+      }
+      recordingButton.textContent=held.length?`${held.join(' + ')} + …`:'키 조합을 누르세요';return
+    }
     const value=shortcutFromEvent(event);if(!value)return;
     recordingButton.textContent=value.replaceAll('+',' + ');
-    if(!event.ctrlKey&&!event.metaKey&&!event.altKey){recordingButton.textContent='Ctrl·Alt와 함께 입력';return}
+    if(recordingId!=='previewPin'&&!event.ctrlKey&&!event.metaKey&&!event.altKey){recordingButton.textContent='Ctrl·Alt와 함께 입력';return}
     const conflict=SHORTCUT_DEFINITIONS.find(item=>item.id!==recordingId&&shortcutSettings[item.id]===value);
     if(conflict){recordingButton.textContent=`${conflict.name}와 중복`;recordingButton.classList.add('is-error');return}
     shortcutSettings[recordingId]=value;saveShortcutSettings();stopRecording();paint();
@@ -13718,6 +13730,10 @@ document.addEventListener('keydown',e=>{
   const auxiliary=target!==els.editor&&!els.preview.contains(target)&&target.closest?.('textarea,input:not([type="checkbox"]),[contenteditable="true"]');
   const modal=document.querySelector('.modal-backdrop');
   const consume=()=>{e.preventDefault();e.stopImmediatePropagation()};
+  if(command==='previewPin'){
+    if(els.hoverPreview.style.display==='block'){consume();setHoverPreviewPinned(true)}
+    return;
+  }
   if(['modeConvert','modeEdit','modeMerge'].includes(command)){
     consume();if(modal)return;
     if(state.mode==='edit'){if(state.editingPreview||previewSyncTimer||previewSyncIdle)syncFromPreview();else if(state.active>=0)state.files[state.active].text=els.editor.value}
