@@ -13,6 +13,7 @@ let hashtagNavigatorEnabled=savedOption('md-option-hashtag-navigator',false);
 const collapsedOutlineSections={structure:false,tags:false};
 const collapsedOutlineHeadings=new Set();
 const imageExt=/\.(png|jpe?g|gif|webp|svg|bmp)$/i,mdExt=/\.(md|markdown)$/i;
+const IMAGE_LIBRARY_DIR='images';
 const codeLanguageByExt={
   py:'python',pyw:'python',c:'c',h:'c',cc:'cpp',cpp:'cpp',cxx:'cpp',hpp:'cpp',
   java:'java',js:'javascript',mjs:'javascript',cjs:'javascript',jsx:'jsx',
@@ -262,6 +263,23 @@ function imageKeyVariants(value){
   return [...new Set([raw,decoded,encoded,base,encodeURI(base||''),decoded.toLowerCase(),(base||'').toLowerCase()].filter(Boolean))];
 }
 function addImage(f){const path=pathOf(f),url=URL.createObjectURL(f),parts=path.split('/');[path,f.name,...parts.map((_,i)=>parts.slice(i).join('/'))].flatMap(imageKeyVariants).forEach(k=>{if(k&&!state.images[k])state.images[k]=url})}
+function uniqueImageAssetPath(name){
+  const safeName=String(name||'image').split(/[\\/]/).pop()||'image';
+  const dot=safeName.lastIndexOf('.'),stem=dot>0?safeName.slice(0,dot):safeName,extension=dot>0?safeName.slice(dot):'';
+  let candidate=`${IMAGE_LIBRARY_DIR}/${safeName}`,count=2;
+  while(state.assets.has(candidate))candidate=`${IMAGE_LIBRARY_DIR}/${stem} (${count++})${extension}`;
+  return candidate;
+}
+function storeImageAsset(file){
+  const existing=[...state.assets].find(([path,value])=>value===file&&imageExt.test(path));
+  if(existing){sidebarUploadPaths.set(file,existing[0]);addImage(file);return existing[0]}
+  const path=uniqueImageAssetPath(file.name);
+  sidebarUploadPaths.set(file,path);
+  state.assets.set(path,file);
+  state.assetRoots[path]='업로드된 파일';
+  addImage(file);
+  return path;
+}
 async function addMd(f){const path=pathOf(f),text=await readText(f),item={name:f.name,path,dir:dirOf(path),text,savedText:text,source:'uploaded'};const old=state.files.findIndex(x=>x.path===path);old>=0?state.files[old]=item:state.files.push(item);state.lastInput={type:'md',name:f.name};return item}
 function imageKeysFor(src,file){
   const clean=(()=>{try{return decodeURIComponent(src)}catch{return src}})().trim().replace(/^<|>$/g,'').replace(/^\.?\//,'').split(/[?#]/)[0];
@@ -274,7 +292,10 @@ function missingImageRefs(file){
     .filter(src=>src&&!/^(https?:|data:|blob:|#)/i.test(src));
   return [...new Set(refs.filter(src=>!imageKeysFor(src,file).some(k=>state.images[k])))];
 }
+const MISSING_IMAGE_WARNING_KEY='md-missing-image-warning-enabled';
+let missingImageWarningEnabled=localStorage.getItem(MISSING_IMAGE_WARNING_KEY)!=='0';
 function notifyMissingImages(files){
+  if(!missingImageWarningEnabled)return;
   const missing=[...new Set(files.flatMap(missingImageRefs))];
   if(!missing.length)return;
   const sample=missing.slice(0,3).join(', ');
@@ -289,12 +310,14 @@ async function addFiles(files){
   const inlineSet=new Set(inlineCodeFiles);
   arr.forEach(f=>{
     const path=pathOf(f);
-    if(path)state.assets.set(path,f);
     if(inlineSet.has(f))return;
-    if(imageExt.test(f.name))addImage(f);
-    else if(mdExt.test(f.name))jobs.push(addMd(f));
-    else if(/\.pdf$/i.test(f.name))extractPdf(f);
-    else if(codeLanguageFor(f.name))jobs.push(addCodeFile(f));
+    if(imageExt.test(f.name))storeImageAsset(f);
+    else{
+      if(path)state.assets.set(path,f);
+      if(mdExt.test(f.name))jobs.push(addMd(f));
+      else if(/\.pdf$/i.test(f.name))extractPdf(f);
+      else if(codeLanguageFor(f.name))jobs.push(addCodeFile(f));
+    }
   });
   if(!jobs.length&&inlineCodeFiles.length===arr.length)return;
   const addedDocs=(await Promise.all(jobs)).filter(Boolean);
@@ -3548,7 +3571,11 @@ function buildSidebarTrees(){
   const local={name:'로컬',children:new Map(),files:[]},uploaded={name:'업로드된 파일',children:new Map(),files:[]};
   state.files.forEach(file=>addTreeFile(file.source==='local'?local:uploaded,(file.path||file.name).replace(/\\/g,'/').split('/').slice(0,-1),file));
   state.assets.forEach((file,path)=>{
-    let node=state.assetRoots[path]==='로컬'?local:uploaded;path.split('/').slice(0,-1).forEach(name=>{if(!node.children.has(name))node.children.set(name,{name,children:new Map(),files:[]});node=node.children.get(name)});
+    if(imageExt.test(path))return;
+    const represented=state.files.some(doc=>doc.path===path||(doc.convertedFromCode&&String(doc.path||'').replace(/\.md$/i,'')===path));
+    if(represented)return;
+    const root=state.assetRoots[path]==='로컬'?local:uploaded,parts=path.split('/');
+    addTreeFile(root,parts.slice(0,-1),{name:parts.at(-1)||file.name,path,source:state.assetRoots[path]==='로컬'?'local':'uploaded',assetOnly:true,assetFile:file});
   });
   (state.sidebarFolders||[]).forEach(folder=>{
     let node=folder.root==='로컬'?local:uploaded;
@@ -3641,9 +3668,10 @@ function showSidebarFolderMenu(event,node,pathKey,isRoot){
   const close=e=>{if(!menu.contains(e.target)){menu.remove();document.removeEventListener('pointerdown',close)}};
   document.addEventListener('pointerdown',close);
 }
-function renderSidebarNode(parent,node,pathKey,isRoot=false){
+function renderSidebarNode(parent,node,pathKey,isRoot=false,depth=0){
   const count=fileTreeCount(node),collapsed=!!state.collapsedSidebarGroups[pathKey],wrap=document.createElement('div');
   wrap.className='folder-group'+(isRoot?' sidebar-root-group':'')+(collapsed?' collapsed':'');
+  wrap.style.setProperty('--sidebar-sticky-top',`${depth?33+(depth-1)*30:-1}px`);
   wrap.dataset.uploadFolder=pathKey;
   wrap.dataset.sidebarKey=pathKey;
   wrap.innerHTML=`<button class="folder-title" type="button" title="${htmlEsc(node.name)}"><span class="sidebar-root-chevron" aria-hidden="true"></span><span class="folder-label">${htmlEsc(node.name)} <span class="folder-count">[${count}]</span></span></button><div class="folder-files"></div>`;
@@ -3651,7 +3679,7 @@ function renderSidebarNode(parent,node,pathKey,isRoot=false){
   let populated=false;
   const populate=()=>{
     if(populated)return;
-    renderSidebarContents(box,node,pathKey);
+    renderSidebarContents(box,node,pathKey,depth);
     populated=true;
   };
   if(!collapsed)populate();
@@ -3727,14 +3755,22 @@ function moveSidebarItem(item,destination){
   if(state.active>=0)els.editor.value=state.files[state.active].text;
   state.collapsedSidebarGroups[destination.parent]=false;renderAll();scheduleWorkspaceSave();return true;
 }
-function renderSidebarContents(parent,node,pathKey){
+function renderSidebarContents(parent,node,pathKey,depth=0){
   const entries=[...[...node.children.values()].map(child=>({child,name:child.name})),...node.files.map(file=>({file,name:file.name}))];
   entries.sort((a,b)=>(state.sidebarOrder[pathKey+'/'+a.name]??1e9)-(state.sidebarOrder[pathKey+'/'+b.name]??1e9)||Number(!!a.file)-Number(!!b.file)||a.name.localeCompare(b.name,'ko'));
   entries.forEach(({child,file,name})=>{
-    if(child){renderSidebarNode(parent,child,pathKey+'/'+name);return}
-    const index=state.files.indexOf(file),btn=document.createElement('button');btn.className='file-item'+(index===state.active?' active':'');
-    btn.title=file.path;btn.innerHTML=`<div class="file-name">${htmlEsc(file.displayName||name)}</div>`;btn.dataset.sidebarKey=pathKey+'/'+name;
-    btn.onclick=()=>openFile(index);btn.oncontextmenu=e=>showFileContextMenu(e,index);
+    if(child){renderSidebarNode(parent,child,pathKey+'/'+name,false,depth+1);return}
+    const index=state.files.indexOf(file),btn=document.createElement('button'),missing=!file.assetOnly&&missingImageWarningEnabled&&mdExt.test(file.name||file.path)?missingImageRefs(file):[];
+    btn.className='file-item'+(index===state.active?' active':'')+(missing.length?' has-missing-images':'');
+    btn.title=file.path;btn.innerHTML=`<div class="file-name">${htmlEsc(file.displayName||name)}</div>${missing.length?`<span class="missing-image-warning" tabindex="0" aria-label="누락된 이미지: ${htmlEsc(missing.join(', '))}" data-missing-images="${htmlEsc(missing.join('\n'))}">!</span>`:''}`;btn.dataset.sidebarKey=pathKey+'/'+name;
+    const warning=btn.querySelector('.missing-image-warning');
+    if(warning){
+      const showMissing=event=>{event.preventDefault();event.stopPropagation();showInfoNotice('누락된 이미지',`이 문서에서 참조한 이미지 파일을 찾을 수 없습니다: ${missing.join(', ')}`)};
+      warning.onclick=showMissing;
+      warning.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();showMissing(event)}};
+    }
+    if(file.assetOnly){btn.onclick=()=>{};btn.oncontextmenu=e=>showSidebarAssetMenu(e,file.path,file.assetFile)}
+    else{btn.onclick=()=>openFile(index);btn.oncontextmenu=e=>showFileContextMenu(e,index)}
     enableSidebarDrag(btn,{kind:'file',key:pathKey+'/'+name,file});parent.appendChild(btn);
   });
 }
@@ -3755,7 +3791,7 @@ function pickSidebarUpload(pathKey='업로드된 파일',folder=false){
 }
 async function uploadIntoSidebar(files,pathKey='업로드된 파일'){
   const arr=[...files],base=sidebarFolderPath(pathKey);
-  arr.forEach(file=>{sidebarUploadPaths.set(file,[base,pathOf(file)].filter(Boolean).join('/'));state.assetRoots[pathOf(file)]='업로드된 파일'});
+  arr.forEach(file=>sidebarUploadPaths.set(file,[base,pathOf(file)].filter(Boolean).join('/')));
   await addFiles(arr);
   const paths=new Set(arr.map(pathOf));state.files.filter(file=>paths.has(file.path)).forEach(file=>file.source='uploaded');
 }
@@ -3780,23 +3816,89 @@ function showSidebarBlankMenu(event){
   const close=e=>{if(!menu.contains(e.target)){menu.remove();document.removeEventListener('pointerdown',close)}};
   document.addEventListener('pointerdown',close);
 }
+function sidebarImageReferences(path){
+  const url=state.images[path];
+  return state.files.filter(doc=>[...String(doc.text||'').matchAll(/!\[[^\]]*\]\(<?([^\s)>]+)>?(?:\s+[^)]*)?\)|!\[\[([^\]|]+)(?:\|[^\]]+)?\]\]|<img\b[^>]*\bsrc=["']([^"']+)["']/gi)].some(match=>{
+    const ref=match[1]||match[2]||match[3];
+    return imageKeysFor(ref,doc).some(key=>key===path||(url&&state.images[key]===url));
+  }));
+}
+function downloadSidebarImage(path,file){
+  const url=URL.createObjectURL(file),anchor=document.createElement('a');
+  anchor.href=url;anchor.download=path.split('/').pop()||file.name||'image';
+  document.body.appendChild(anchor);anchor.click();anchor.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),800);
+}
+function deleteSidebarImage(path){
+  const used=sidebarImageReferences(path);
+  if(used.length&&!confirm(`이 이미지는 MD 문서 ${used.length}개에서 사용 중입니다.\n삭제하면 해당 문서에서 이미지가 표시되지 않습니다.\n\n삭제할까요?`))return;
+  state.assets.delete(path);delete state.assetRoots[path];
+  rebuildSidebarImageIndex();renderList();
+  if(state.mode==='edit'&&state.active>=0)renderMarkdown(els.editor.value);
+  scheduleWorkspaceSave();
+}
+function showSidebarImageMenu(event,path,file){
+  event.preventDefault();event.stopPropagation();closeSidebarContextMenus();
+  const menu=document.createElement('div');menu.className='file-context-menu sidebar-context-menu';
+  const item=(label,action,danger=false)=>{const button=document.createElement('button');button.type='button';button.textContent=label;if(danger)button.className='danger';button.onclick=()=>{menu.remove();action()};menu.appendChild(button)};
+  item('다운로드',()=>downloadSidebarImage(path,file));
+  item('삭제',()=>deleteSidebarImage(path),true);
+  document.body.appendChild(menu);positionContextMenu(menu,event.clientX,event.clientY);
+  const close=e=>{if(!menu.contains(e.target)){menu.remove();document.removeEventListener('pointerdown',close)}};
+  document.addEventListener('pointerdown',close);
+}
+function showSidebarAssetMenu(event,path,file){
+  event.preventDefault();event.stopPropagation();closeSidebarContextMenus();
+  const menu=document.createElement('div');menu.className='file-context-menu sidebar-context-menu';
+  const button=document.createElement('button');button.type='button';button.textContent='다운로드';
+  button.onclick=()=>{menu.remove();downloadSidebarImage(path,file)};menu.appendChild(button);
+  document.body.appendChild(menu);positionContextMenu(menu,event.clientX,event.clientY);
+  const close=e=>{if(!menu.contains(e.target)){menu.remove();document.removeEventListener('pointerdown',close)}};
+  document.addEventListener('pointerdown',close);
+}
 function renderSidebarImages(){
-  const assets=[...state.assets].filter(([path])=>imageExt.test(path));if(!assets.length)return;
-  const group=document.createElement('div');group.className='folder-group';
-  const heading=document.createElement('button');heading.className='folder-title';heading.textContent=`이미지 (${assets.length})`;
-  const box=document.createElement('div');box.className='folder-files';heading.onclick=()=>box.hidden=!box.hidden;
+  const assets=[...state.assets].filter(([path])=>imageExt.test(path)).sort(([a],[b])=>a.localeCompare(b,'ko'));
+  const collapsed=!!state.collapsedSidebarGroups.__images;
+  const group=document.createElement('div');group.className='folder-group sidebar-root-group sidebar-image-library'+(collapsed?' collapsed':'');
+  const heading=document.createElement('button');heading.type='button';heading.className='folder-title';heading.innerHTML=`<span class="sidebar-root-chevron" aria-hidden="true"></span><span class="folder-label">이미지 <span class="folder-count">[${assets.length}]</span></span>`;
+  const box=document.createElement('div');box.className='folder-files';
+  heading.onclick=()=>{state.collapsedSidebarGroups.__images=!group.classList.contains('collapsed');group.classList.toggle('collapsed');scheduleWorkspaceSave()};
+  if(!assets.length){const empty=document.createElement('div');empty.className='sidebar-image-empty';empty.textContent='업로드한 이미지가 없습니다.';box.appendChild(empty)}
   assets.forEach(([path,file])=>{
-    const button=document.createElement('button');button.className='file-item';button.textContent=path.split('/').pop();button.title=path;
+    const url=state.images[path]||URL.createObjectURL(file);
+    const button=document.createElement('button');button.className='file-item sidebar-image-item';button.title=path;
+    button.innerHTML=`<img src="${htmlEsc(url)}" alt=""><span><b>${htmlEsc(path.split('/').pop())}</b><small>${htmlEsc(path)}</small></span>`;
+    button.oncontextmenu=event=>showSidebarImageMenu(event,path,file);
     button.onclick=()=>{
-      const url=state.images[path]||URL.createObjectURL(file);
-      const used=state.files.filter(doc=>{
-        const refs=[...String(doc.text||'').matchAll(/!\[[^\]]*\]\(<?([^\s)>]+)>?(?:\s+[^)]*)?\)|<img\b[^>]*\bsrc=["']([^"']+)["']/gi)].map(m=>m[1]||m[2]);
-        return refs.some(ref=>imageKeysFor(ref,doc).some(key=>key===path||state.images[key]===url));
-      });
+      const used=state.files.map((doc,index)=>{
+        if(doc.source!=='uploaded')return null;
+        const match=[...String(doc.text||'').matchAll(/!\[[^\]]*\]\(<?([^\s)>]+)>?(?:\s+[^)]*)?\)|!\[\[([^\]|]+)(?:\|[^\]]+)?\]\]|<img\b[^>]*\bsrc=["']([^"']+)["']/gi)].find(item=>{
+          const ref=item[1]||item[2]||item[3];
+          return imageKeysFor(ref,doc).some(key=>key===path||state.images[key]===url);
+        });
+        return match?{doc,index,offset:match.index??0}:null;
+      }).filter(Boolean);
+      const extension=(path.split('.').pop()||'').toUpperCase();
+      const size=file.size<1024?`${file.size} B`:file.size<1048576?`${(file.size/1024).toFixed(1)} KB`:`${(file.size/1048576).toFixed(1)} MB`;
       const wrap=document.createElement('div');wrap.className='modal-backdrop';
-      wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true"><h3>이미지 정보</h3><img src="${htmlEsc(url)}" alt="${htmlEsc(file.name)}" style="max-width:100%;max-height:40vh;object-fit:contain"><p>파일명: ${htmlEsc(file.name)}<br>확장자: ${htmlEsc(path.split('.').pop())}<br>업로드 경로: ${htmlEsc(path)}</p><p>사용 문서: ${used.length?used.map(doc=>htmlEsc(doc.path)).join('<br>'):'업로드된 MD에서 참조를 찾지 못했습니다.'}</p><div class="modal-actions"><button class="tool">닫기</button></div></div>`;
+      wrap.innerHTML=`<div class="modal-card image-info-card" role="dialog" aria-modal="true" aria-labelledby="image-info-title"><h3 id="image-info-title">이미지 정보</h3><div class="image-info-preview"><img src="${htmlEsc(url)}" alt="${htmlEsc(file.name)}"></div><dl class="image-info-details"><div><dt>파일명</dt><dd>${htmlEsc(path.split('/').pop())}</dd></div><div><dt>확장자</dt><dd>${htmlEsc(extension)}</dd></div><div><dt>경로</dt><dd>${htmlEsc(path)}</dd></div><div><dt>파일 크기</dt><dd>${htmlEsc(size)}</dd></div><div><dt>이미지 크기</dt><dd data-image-dimensions>확인 중...</dd></div></dl><section class="image-info-usage"><strong>사용 중인 업로드 MD <span>[${used.length}]</span></strong>${used.length?`<ul>${used.map((entry,index)=>`<li><button type="button" data-image-usage="${index}" title="${htmlEsc(entry.doc.path||entry.doc.name)}">${htmlEsc(entry.doc.path||entry.doc.name)}</button></li>`).join('')}</ul>`:'<p>업로드된 MD에서 이 이미지를 참조하지 않습니다.</p>'}</section><div class="modal-actions"><button class="tool primary" data-image-info-close>닫기</button></div></div>`;
       const close=()=>{wrap.remove();document.removeEventListener('keydown',key);if(!state.images[path])URL.revokeObjectURL(url)};
-      const key=e=>{if(e.key==='Escape')close()};wrap.querySelector('button').onclick=close;document.addEventListener('keydown',key);document.body.appendChild(wrap);
+      const key=e=>{if(e.key==='Escape')close()};wrap.querySelector('[data-image-info-close]').onclick=close;
+      wrap.querySelectorAll('[data-image-usage]').forEach(item=>item.onclick=()=>{
+        const entry=used[Number(item.dataset.imageUsage)];if(!entry)return;
+        close();
+        if(els.editSplit.classList.contains('edit-md-only'))setEditView('both',{persist:false});
+        openFile(entry.index);
+        requestAnimationFrame(()=>requestAnimationFrame(()=>{
+          const target=[...els.preview.querySelectorAll('img')].find(image=>image.src===url||image.dataset.assetPath===path);
+          if(target)focusPreviewImagePrecisely(target,entry.offset);
+          else scrollMarkdownToSource(entry.offset);
+        }));
+      });
+      document.addEventListener('keydown',key);document.body.appendChild(wrap);
+      const image=wrap.querySelector('.image-info-preview img'),dimensions=wrap.querySelector('[data-image-dimensions]');
+      const updateDimensions=()=>{dimensions.textContent=image.naturalWidth&&image.naturalHeight?`${image.naturalWidth} × ${image.naturalHeight} px`:'확인할 수 없음'};
+      image.complete?updateDimensions():image.addEventListener('load',updateDimensions,{once:true});
     };box.appendChild(button);
   });group.append(heading,box);els.list.appendChild(group);
 }
@@ -4014,6 +4116,23 @@ function schedulePreviewArrival(element,matchText='',sourceOffset=-1){
     }));
   });
 }
+async function focusPreviewImagePrecisely(image,sourceOffset=-1){
+  if(!image?.isConnected)return;
+  const preview=image.closest('.preview')||els.preview;
+  scrollMarkdownToSource(sourceOffset);
+  const pending=[...preview.querySelectorAll('img')].map(item=>item.complete?Promise.resolve():item.decode?.().catch(()=>{})||Promise.resolve());
+  await Promise.race([Promise.all(pending),new Promise(resolve=>setTimeout(resolve,700))]);
+  const center=()=>{
+    if(!image.isConnected)return;
+    const previewRect=preview.getBoundingClientRect(),imageRect=image.getBoundingClientRect();
+    preview.scrollTop+=imageRect.top+imageRect.height/2-(previewRect.top+previewRect.height/2);
+  };
+  center();requestAnimationFrame(()=>requestAnimationFrame(center));
+  [120,320,720].forEach(delay=>setTimeout(center,delay));
+  image.classList.remove('preview-image-arrival');
+  requestAnimationFrame(()=>image.classList.add('preview-image-arrival'));
+  setTimeout(()=>image.classList.remove('preview-image-arrival'),1600);
+}
 function scrollPreviewToText(text){
   const target=String(text||'').trim();
   if(!target)return false;
@@ -4160,7 +4279,7 @@ function ensureFileContextMenu(){
     <button type="button" data-file-action="add">추가</button>
     <button type="button" data-file-action="duplicate">복제</button>
     <button type="button" data-file-action="rename">이름 변경</button>
-    <button type="button" data-file-action="save">저장</button>
+    <button type="button" data-file-action="save">다운로드</button>
     <hr>
     <button type="button" class="danger" data-file-action="remove">제거</button>`;
   fileContextMenu.addEventListener('click',e=>{
@@ -4171,7 +4290,7 @@ function ensureFileContextMenu(){
     if(action==='add')showAddFileChoiceDialog();
     else if(action==='rename')showRenameFileDialog(index);
     else if(action==='duplicate')duplicateSidebarFile(index);
-    else if(action==='save')showFileSaveDialog(index);
+    else if(action==='save')downloadSidebarFile(index);
     else if(action==='remove')removeSidebarFile(index);
   });
   document.addEventListener('mousedown',e=>{if(!fileContextMenu.hidden&&!fileContextMenu.contains(e.target))hideFileContextMenu()});
@@ -4403,9 +4522,9 @@ function showFileSaveDialog(index){
   const wrap=document.createElement('div');
   wrap.className='modal-backdrop file-save-dialog';
   wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="file-save-title">
-    <h3 id="file-save-title">개별 파일 저장</h3>
+    <h3 id="file-save-title">파일 다운로드</h3>
     <p>${htmlEsc(file.displayName||file.name)}</p>
-    <div class="file-save-actions"><button class="tool" type="button" data-format="md">MD 저장</button><button class="tool primary" type="button" data-format="pdf">PDF 저장</button></div>
+    <div class="file-save-actions"><button class="tool" type="button" data-format="md">MD로 저장</button><button class="tool primary" type="button" data-format="pdf">PDF로 저장</button></div>
     <div class="modal-actions"><button class="tool" type="button" data-action="cancel">취소</button></div>
   </div>`;
   const close=()=>{document.removeEventListener('keydown',onKey);wrap.remove()};
@@ -4429,6 +4548,16 @@ function showFileSaveDialog(index){
   document.addEventListener('keydown',onKey);
   document.body.appendChild(wrap);
   wrap.querySelector('[data-format="md"]').focus();
+}
+function downloadSidebarFile(index){
+  const file=state.files[index];
+  if(!file)return;
+  if(!file.convertedFromCode&&mdExt.test(file.name||file.path||'')){showFileSaveDialog(index);return}
+  syncFileBeforeAction(index);
+  const path=file.convertedFromCode?String(file.path||'').replace(/\.md$/i,''):file.path||file.name||'download',asset=state.assets.get(path);
+  if(asset)downloadSidebarImage(path,asset);
+  else download(file.originalName||file.name||path.split('/').pop()||'download',file.text||'','text/plain;charset=utf-8');
+  setStatus(`${file.originalName||file.name||path} 파일을 다운로드했습니다.`);
 }
 function renderMergeList(skipPreview=false){if(!state.files.length){els.mergeList.innerHTML='<div class="muted">병합할 MD 파일이 없습니다.</div>';updateMergeToggleAll();if(!skipPreview)updateMergePreview();return}const checkedBefore=new Set([...els.mergeList.querySelectorAll('input:checked')].map(i=>i.value));const hadChecks=els.mergeList.querySelectorAll('input').length>0;els.mergeList.innerHTML='';groupedFiles().forEach(([dir,files])=>renderFileGroup(els.mergeList,dir,files,(box,file)=>{const i=state.files.indexOf(file),row=document.createElement('label');row.className='check-row';row.dataset.index=i;row.innerHTML=`<input type="checkbox" ${!hadChecks||checkedBefore.has(String(i))?'checked':''} value="${i}"><span><span class="merge-name">${htmlEsc(file.displayName||file.name)}</span><span class="merge-path">${htmlEsc(file.path)}</span></span>`;row.querySelector('input').addEventListener('change',()=>{updateMergeToggleAll();updateMergePreview()});row.addEventListener('mouseenter',showMergePreview);row.addEventListener('mouseleave',scheduleHideMergePreview);box.appendChild(row)},state.collapsedMergeGroups,()=>renderMergeList(true)));updateMergeToggleAll();if(!skipPreview)updateMergePreview()}
 const selectionRequiredMessage='문서를 하나 이상 선택해 주세요.';
@@ -4980,6 +5109,7 @@ function cleanPreviewHtml(root){
     el.removeAttribute('contenteditable');
   });
   root.querySelectorAll('img').forEach(img=>{
+    if(img.dataset.assetPath){img.setAttribute('src',img.dataset.assetPath);img.removeAttribute('data-asset-path')}
     img.classList.remove('img-resizable','img-resizing','img-selected','moving-element');
     img.removeAttribute('aria-selected');
     img.removeAttribute('data-resize-ready');
@@ -6547,7 +6677,15 @@ function orderedListPrefix(){
   state.savedSelection=sel;
   linePrefix(prefix);
 }
-function insertImageFiles(files){const imgs=[...files].filter(f=>imageExt.test(f.name));imgs.forEach(addImage);if(!imgs.length){state.savedSelection=null;return}const range=previewRange();if(range){insertPreviewHtml(imgs.map(f=>`<img src="${htmlEsc(URL.createObjectURL(f))}" alt="${htmlEsc(f.name)}">`).join(''));return}replaceSelection(imgs.map(f=>`![${f.name}](${encodeURI(f.name)})`).join('\n'));renderMarkdown(els.editor.value)}
+function insertImageFiles(files){
+  const imgs=[...files].filter(f=>imageExt.test(f.name));
+  if(!imgs.length){state.savedSelection=null;return}
+  const stored=imgs.map(file=>({file,path:storeImageAsset(file)}));
+  const range=previewRange();
+  if(range)insertPreviewHtml(stored.map(({file,path})=>`<img src="${htmlEsc(state.images[path]||URL.createObjectURL(file))}" data-asset-path="${htmlEsc(path)}" alt="${htmlEsc(file.name)}">`).join(''));
+  else{replaceSelection(stored.map(({file,path})=>`![${fileBaseName(file.name)}](${encodeURI(path)})`).join('\n'));renderMarkdown(els.editor.value)}
+  renderList();scheduleWorkspaceSave();
+}
 function activePrintSource(){
   const activePanel=document.querySelector('.panel.active');
   const source=activePanel?.querySelector('.preview');
@@ -11419,9 +11557,10 @@ const EN_TEXT={
   '라이트':'Light','다크':'Dark','사용자 지정':'Custom','테마 설정':'Theme settings','화면에 사용할 테마를 선택하세요.':'Choose a theme for the interface.',
   '사용자 지정 테마 편집':'Edit custom theme','배경색과 글자색을 직접 설정합니다.':'Set the background and text colors manually.',
   '언어':'Language','화면에 표시할 언어를 선택합니다.':'Choose the language used in the interface.','한국어':'한국어','영어':'English',
-  '문서 폰트':'Document font','업로드 폰트 사용':'Use uploaded font','선택한 폰트를 Preview와 PDF 문서에 적용합니다.':'Apply the selected font to Preview and PDF documents.',
+  '문서 폰트':'Document font','업로드 폰트 사용':'Use uploaded font','선택한 폰트를 Preview와 PDF 문서에 적용합니다.':'Apply the selected font to Preview and PDF documents.','이미지 검사':'Image check','누락 이미지 경고':'Missing image warnings','MD에서 참조하지만 업로드되지 않은 이미지가 있으면 파일 목록에 경고를 표시합니다.':'Show a warning in the file list when an MD file references an image that has not been uploaded.','누락된 이미지':'Missing images',
   '문서 폰트 선택':'Select document font','폰트 업로드':'Upload font','삭제':'Delete','업로드한 폰트 없음':'No uploaded fonts',
-  'TTF, OTF, WOFF, WOFF2 파일을 업로드할 수 있습니다.':'Upload TTF, OTF, WOFF, or WOFF2 font files.',
+  'TTF, OTF, WOFF, WOFF2 파일을 업로드할 수 있습니다.':'Upload TTF, OTF, WOFF, or WOFF2 font files.','폰트를 확인하고 저장하는 중...':'Checking and saving fonts...','폰트를 불러오지 못했습니다.':'Could not load the font.',
+  '이미지':'Images','업로드한 이미지가 없습니다.':'No uploaded images.','이미지 정보':'Image details','파일명':'File name','확장자':'Extension','경로':'Path','파일 크기':'File size','이미지 크기':'Dimensions','확인 중...':'Checking...','확인할 수 없음':'Unavailable','사용 중인 업로드 MD':'Uploaded Markdown files using this image','업로드된 MD에서 이 이미지를 참조하지 않습니다.':'No uploaded Markdown file references this image.',
   '닫기':'Close','완료':'Done','취소':'Cancel','확인':'OK','복구':'Restore','작업 복구':'Restore workspace',
   '브라우저 저장소가 지워지기 전까지 이 기록을 복구할 수 있습니다.':'This workspace can be restored until the browser storage is cleared.',
   '작성 옵션':'Writing options','보기 옵션':'View options','Enter로 줄바꿈':'Line break with Enter','Enter를 누른 위치에서 바로 줄바꿈':'Insert a line break where Enter is pressed',
@@ -11581,7 +11720,7 @@ const EN_TEXT={
   '삽입할 위치를 다시 선택한 뒤 시도해 주세요.':'Select the insertion point again and retry.','먼저 문서를 업로드하거나 만들어 주세요.':'Upload or create a document first.','미니 문서 삽입':'Insert embedded document','빈 줄':'Blank line','시작 지점을 선택하세요':'Select a starting point','자동 기록':'Automatic history','저장된 버전이 없습니다.':'No saved versions.','#ZZ 전용 블록':'#ZZ-specific blocks','MD에는 원문이 보존되지만 전용 카드·시트·미니 문서 모양은 #ZZ와 PDF에서만 표시됩니다.':'The source is preserved in MD, but custom cards, sheets, and embedded-document layouts appear only in #ZZ and PDF.','Obsidian 확장 문법':'Obsidian extended syntax','지원하지 않는 Markdown 앱에서는 일반 인용문이나 원문으로 보일 수 있습니다.':'Unsupported Markdown apps may display a regular quote or the source text.','MD에는 HTML로 저장됩니다. HTML을 제한하는 앱에서는 입력 개체가 숨겨질 수 있습니다.':'Saved as HTML in MD. Apps that restrict HTML may hide form controls.','문자 서식':'Text formatting','색상·배경색·크기는 HTML 허용 여부에 따라 다르게 보입니다.':'Color, background, and size may vary depending on HTML support.',
   '스프레드시트 삽입':'Insert spreadsheet','스프레드시트 모듈을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.':'Could not load spreadsheet support. Check your internet connection.','범위 없음':'No range','범위 오류':'Invalid range','A1:F20처럼 올바른 셀 범위를 입력해 주세요.':'Enter a valid cell range such as A1:F20.','편집할 문서를 먼저 열어 주세요.':'Open a document to edit first.','파일명':'File name','저장할 결과 없음':'No result to save','먼저 파일을 병합해 주세요.':'Merge files first.','MD → PDF는 Ctrl+Enter로 변환한 뒤 인쇄 창에서 PDF로 저장해 주세요.':'For MD → PDF, convert with Ctrl+Enter and save as PDF from the print dialog.','사이드바 펼치기':'Expand sidebar','테마 열기':'Open theme','테마 닫기':'Close theme'
   ,'변경할 단축키를 선택한 뒤 새 키 조합을 누르세요.':'Select a shortcut, then press a new key combination.','기본값':'Default','전체 초기화':'Reset all','브라우저 기본 글꼴이 운영체제 기본값과 다르게 설정되어 있습니다.':'The browser default font differs from the operating system default.'
-  ,'파일 이름 변경':'Rename file','새 파일 이름':'New file name','변경':'Rename','개별 파일 저장':'Save file',
+  ,'파일 이름 변경':'Rename file','새 파일 이름':'New file name','변경':'Rename','개별 파일 저장':'Save file','파일 다운로드':'Download file','MD로 저장':'Save as MD','PDF로 저장':'Save as PDF',
   '전체 복원':'Restore all','복원':'Restore',
   '화면 테마는 PDF에 적용됩니다.\nMD 파일에는 테마 정보가 저장되지 않습니다.':'The display theme is applied to PDF output.\nTheme information is not saved in MD files.',
   '문서의 제목을 찾아 클릭 가능한 이동 목록을 만듭니다. 제목을 바꾸면 목차도 함께 바뀝니다.':'Creates a clickable navigation list from document headings. The table of contents updates when headings change.','포함할 제목':'Headings to include','큰 제목만 (제목 1-2)':'Major headings only (Heading 1–2)','일반 목차 (제목 2-4)':'Standard contents (Heading 2–4)','모든 제목 (제목 1-6)':'All headings (Heading 1–6)','숫자가 클수록 더 작은 하위 제목까지 포함합니다.':'Higher numbers include smaller nested headings.','항목 방향':'Item direction','세로':'Vertical','가로':'Horizontal','목차 항목이 이어지는 방향을 정합니다.':'Choose the direction in which contents items flow.','목차 모양':'Contents style','세로 목록':'Vertical list','간단한 2열':'Compact two-column','번호와 연결선':'Numbers and connector lines','문서 내용은 바뀌지 않고 목차의 모양만 달라집니다.':'Only the appearance of the contents changes; document content is unchanged.','1, 1.1처럼 번호 붙이기':'Number as 1, 1.1','현재 문서에서 보이는 항목':'Items visible in the current document','이 범위에 해당하는 제목이 없습니다.':'No headings match this range.','적용':'Apply',
@@ -11600,6 +11739,10 @@ function translatedUiText(value){
     const count=core.match(/^파일 \[(\d+)]$/);if(count)translated=`Files [${count[1]}]`;
     const local=core.match(/^로컬 \[(\d+)]$/);if(local)translated=`Local [${local[1]}]`;
     const uploaded=core.match(/^업로드된 파일 \[(\d+)]$/);if(uploaded)translated=`Uploaded files [${uploaded[1]}]`;
+    const imageCount=core.match(/^이미지 \[(\d+)]$/);if(imageCount)translated=`Images [${imageCount[1]}]`;
+    const missingImageMessage=core.match(/^이 문서에서 참조한 이미지 파일을 찾을 수 없습니다:\s*(.+)$/);if(missingImageMessage)translated=`The following image files referenced by this document could not be found: ${missingImageMessage[1]}`;
+    const savedFontCount=core.match(/^(\d+)개 저장됨 · TTF, OTF, WOFF, WOFF2 지원$/);if(savedFontCount)translated=`${savedFontCount[1]} font${savedFontCount[1]==='1'?'':'s'} saved · TTF, OTF, WOFF, WOFF2 supported`;
+    const uploadedFontCount=core.match(/^(\d+)개 폰트를 업로드하고 문서에 적용했습니다\.$/);if(uploadedFontCount)translated=`Uploaded ${uploadedFontCount[1]} font${uploadedFontCount[1]==='1'?'':'s'} and applied ${uploadedFontCount[1]==='1'?'it':'them'} to the document.`;
     const untitledDocument=core.match(/^새 문서(?: (\d+))?\.md$/);if(untitledDocument)translated=`New document${untitledDocument[1]?` ${untitledDocument[1]}`:''}.md`;
     const copiedDocument=core.match(/^(.+) 복사본(?: \((\d+)\))?(\.(?:md|markdown))$/i);if(copiedDocument)translated=`${copiedDocument[1]} copy${copiedDocument[2]?` (${copiedDocument[2]})`:''}${copiedDocument[3]}`;
     const recovery=core.match(/^(.+)에 자동 저장된 문서 (\d+)개가 있습니다\.$/);if(recovery)translated=`${recovery[1]}: ${recovery[2]} auto-saved document${recovery[2]==='1'?'':'s'} available.`;
@@ -11859,6 +12002,9 @@ async function showAppSettings(){
       </div>
       <div class="app-settings-font-status" data-custom-font-status>${customFonts.length?`${customFonts.length}개 저장됨 · TTF, OTF, WOFF, WOFF2 지원`:'TTF, OTF, WOFF, WOFF2 파일을 업로드할 수 있습니다.'}</div>
     </section>
+    <section class="app-settings-group app-settings-group-compact"><h4>이미지 검사</h4>
+      <div class="app-settings-section"><div><strong>누락 이미지 경고</strong><p>MD에서 참조하지만 업로드되지 않은 이미지가 있으면 파일 목록에 경고를 표시합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-missing-image-warning ${missingImageWarningEnabled?'checked':''}><span></span></label></div>
+    </section>
     <section class="app-settings-group"><h4>가이드</h4>
       <div class="app-settings-section"><div><strong>기능 가이드 표시</strong><p>설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-guide-enabled ${featureGuideEnabled?'checked':''}><span></span></label></div>
       <button class="app-settings-replay" type="button" data-guide-picker><span>가이드 다시 보기</span><small>목록에서 다시 볼 가이드를 선택합니다.</small></button>
@@ -11875,6 +12021,11 @@ async function showAppSettings(){
     <div class="modal-actions"><button class="tool primary" type="button" data-settings-close>닫기</button></div>
   </div>`;
   wrap.querySelector('[data-guide-enabled]').onchange=event=>setFeatureGuideEnabled(event.target.checked);
+  wrap.querySelector('[data-missing-image-warning]').onchange=event=>{
+    missingImageWarningEnabled=event.target.checked;
+    localStorage.setItem(MISSING_IMAGE_WARNING_KEY,missingImageWarningEnabled?'1':'0');
+    renderList();
+  };
   const fontInput=wrap.querySelector('[data-custom-font-input]');
   const fontStatus=wrap.querySelector('[data-custom-font-status]');
   wrap.querySelector('[data-custom-font-enabled]').onchange=event=>{
@@ -13274,8 +13425,9 @@ async function confirmExportCompatibility(text,target='md'){
 }
 function fileBaseName(name){return String(name||'').replace(/\.[^.]+$/,'')}
 async function insertImageAsset(file){
-  addImage(file);
-  replaceSelection(`![${fileBaseName(file.name)}](${file.name})`);
+  const path=storeImageAsset(file);
+  replaceSelection(`![${fileBaseName(file.name)}](${encodeURI(path)})`);
+  renderList();scheduleWorkspaceSave();
 }
 async function insertHtmlAsset(file){
   const html=await readText(file),payload=zzEncodePayload(html);
