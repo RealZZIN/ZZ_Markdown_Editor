@@ -3578,7 +3578,6 @@ function schedulePostRenderEnhancements(text){
     fixSpanColors(els.preview);
     runMermaid(els.preview);
     runHighlight(els.preview);
-    decorateCodeBlocks(els.preview);
     const previewTables=els.preview.querySelectorAll('table');
     if(previewTables.length>120)installLazyTableResize();
     else addTableResize(els.preview);
@@ -3619,6 +3618,9 @@ function renderMarkdown(text){
   // native insertion/composition after the first character.
   els.preview.innerHTML=html||'<p><br></p>';
   assignPreviewHeadingAnchors(els.preview);
+  // Code blocks must look like code on the first painted frame. Syntax
+  // highlighting can remain deferred, but the structural chrome is cheap.
+  decorateCodeBlocks(els.preview);
   schedulePostRenderEnhancements(text);
 }
 function htmlEsc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -3644,9 +3646,16 @@ function fileTreeCount(node){return node.files.length+[...node.children.values()
 function addTreeFile(root,parts,file){let node=root;parts.filter(Boolean).forEach(part=>{if(!node.children.has(part))node.children.set(part,{name:part,children:new Map(),files:[]});node=node.children.get(part)});node.files.push(file)}
 function buildSidebarTrees(){
   const local={name:'로컬',children:new Map(),files:[]},uploaded={name:'업로드된 파일',children:new Map(),files:[]};
-  state.files.forEach(file=>addTreeFile(file.source==='local'?local:uploaded,(file.path||file.name).replace(/\\/g,'/').split('/').slice(0,-1),file));
+  const representedPaths=new Set();
+  state.files.forEach(file=>{
+    const path=String(file.path||file.name||'').replace(/\\/g,'/');
+    const key=`${file.source==='local'?'local':'uploaded'}:${path.toLocaleLowerCase()}`;
+    if(!path||representedPaths.has(key))return;
+    representedPaths.add(key);
+    addTreeFile(file.source==='local'?local:uploaded,path.split('/').slice(0,-1),file);
+  });
   state.assets.forEach((file,path)=>{
-    if(imageExt.test(path))return;
+    if(imageExt.test(path)||mdExt.test(path))return;
     const represented=state.files.some(doc=>doc.path===path||(doc.convertedFromCode&&String(doc.path||'').replace(/\.md$/i,'')===path));
     if(represented)return;
     const root=state.assetRoots[path]==='로컬'?local:uploaded,parts=path.split('/');
@@ -3944,7 +3953,9 @@ function showSidebarAssetMenu(event,path,file){
   document.addEventListener('pointerdown',close);
 }
 function renderSidebarImages(){
-  const assets=[...state.assets].filter(([path])=>imageExt.test(path)).sort(([a],[b])=>a.localeCompare(b,'ko'));
+  // Map order preserves upload order, so the original image stays before
+  // automatically numbered duplicates such as "image (2).png".
+  const assets=[...state.assets].filter(([path])=>imageExt.test(path));
   const collapsed=!!state.collapsedSidebarGroups.__images;
   const group=document.createElement('div');group.className='folder-group sidebar-root-group sidebar-image-library'+(collapsed?' collapsed':'');
   const heading=document.createElement('button');heading.type='button';heading.className='folder-title';heading.innerHTML=`<span class="sidebar-root-chevron" aria-hidden="true"></span><span class="folder-label">이미지 <span class="folder-count">[${assets.length}]</span></span>`;
@@ -4522,9 +4533,19 @@ function showRenameFileDialog(index){
     const path=file.dir?`${file.dir}/${name}`:name;
     const duplicate=state.files.some((entry,i)=>i!==index&&String(entry.path||entry.name).toLowerCase()===path.toLowerCase());
     if(duplicate){error.textContent='같은 위치에 동일한 이름의 파일이 있습니다.';input.focus();return}
+    const oldPath=String(file.path||file.name||'').replace(/\\/g,'/');
+    const oldAsset=state.assets.get(oldPath);
+    const oldAssetRoot=state.assetRoots[oldPath];
     file.name=name;
     file.displayName=name;
     file.path=path;
+    if(oldAsset&&oldPath!==path){
+      state.assets.delete(oldPath);
+      delete state.assetRoots[oldPath];
+      state.assets.set(path,oldAsset);
+      state.assetRoots[path]=oldAssetRoot||(file.source==='local'?'로컬':'업로드된 파일');
+      sidebarUploadPaths.set(oldAsset,path);
+    }
     if(index===state.active)state.lastInput={type:'md',name};
     close();
     scheduleWorkspaceSave();
@@ -5088,6 +5109,9 @@ function syncActive(){
 }
 function cleanPreviewHtml(root){
   resetTableFilterView(root);
+  root.querySelectorAll('[data-quote-format-pending],[data-quote-format-allowed],[data-quote-format-dismissed]').forEach(node=>{
+    delete node.dataset.quoteFormatPending;delete node.dataset.quoteFormatAllowed;delete node.dataset.quoteFormatDismissed;
+  });
   root.querySelectorAll('[data-code-surface]').forEach(el=>{el.removeAttribute('data-code-surface');el.style.removeProperty('--code-surface-fix')});
   root.querySelectorAll('[data-inline-code-ink]').forEach(el=>el.removeAttribute('data-inline-code-ink'));
   root.querySelectorAll('[data-chip-contrast]').forEach(chip=>chip.removeAttribute('data-chip-contrast'));
@@ -5907,8 +5931,18 @@ function showInfoNotice(title,message){
   document.body.appendChild(wrap);
   wrap.querySelector('button').focus();
 }
-function findTextMatches(text,needle,matchCase,wholeWord){
+function findTextMatches(text,needle,matchCase,wholeWord,includeSpaces=true){
   if(!needle)return[];
+  if(!includeSpaces){
+    const compact=value=>String(value||'').replace(/\s+/g,'');
+    const compactText=compact(text),compactNeedle=compact(needle);
+    if(!compactNeedle)return[];
+    const rawMap=[];let compactIndex=0;
+    for(let index=0;index<text.length;index++)if(!/\s/.test(text[index]))rawMap[compactIndex++]=index;
+    return findTextMatches(compactText,compactNeedle,matchCase,wholeWord,true).map(match=>({
+      start:rawMap[match.start],end:(rawMap[match.end-1]??rawMap[match.start])+1,text:text.slice(rawMap[match.start],(rawMap[match.end-1]??rawMap[match.start])+1)
+    }));
+  }
   const escaped=needle.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
   const source=wholeWord?`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`:escaped;
   let regex;
@@ -5948,9 +5982,9 @@ function previewSearchIndex(root=activeFindPreview()){
   };
   return{text,toRange};
 }
-function previewFindMatches(needle,matchCase,wholeWord,root=activeFindPreview()){
+function previewFindMatches(needle,matchCase,wholeWord,includeSpaces=true,root=activeFindPreview()){
   const index=previewSearchIndex(root);
-  return findTextMatches(index.text,needle,matchCase,wholeWord)
+  return findTextMatches(index.text,needle,matchCase,wholeWord,includeSpaces)
     .map(match=>({...match,range:index.toRange(match.start,match.end)}))
     .filter(match=>match.range);
 }
@@ -5987,12 +6021,13 @@ function showFindReplaceDialog(){
     </div>
     <div class="find-replace-body">
     <div class="find-replace-fields">
-      <label>찾을 내용<input type="text" data-find-field autocomplete="off"></label>
-      ${findOnly?'':'<label>바꿀 내용<input type="text" data-replace-field autocomplete="off" placeholder="비워두면 찾은 내용을 삭제합니다"></label>'}
+      <label>찾을 내용<input type="text" data-find-field autocomplete="off"><small class="find-space-preview" data-find-space-preview></small></label>
+      ${findOnly?'':'<label>바꿀 내용<input type="text" data-replace-field autocomplete="off" placeholder="비워두면 찾은 내용을 삭제합니다"><small class="find-space-preview" data-replace-space-preview></small></label>'}
     </div>
     <div class="find-replace-options">
       <label class="find-option-toggle"><input type="checkbox" data-find-case><span>대소문자 구분</span></label>
       <label class="find-option-toggle"><input type="checkbox" data-find-whole><span>단어 전체</span></label>
+      <label class="find-option-toggle"><input type="checkbox" data-find-spaces checked><span>${uiLanguage==='en'?'Include spaces':'공백 포함'}</span></label>
       <span class="find-replace-status"></span>
     </div>
     <div class="find-replace-actions">
@@ -6003,16 +6038,18 @@ function showFindReplaceDialog(){
   </div>`;
   const find=panel.querySelector('[data-find-field]');
   const replacement=panel.querySelector('[data-replace-field]');
+  const replacementValue=()=>panel.querySelector('[data-find-spaces]').checked?replacement.value:replacement.value.trim();
   const status=panel.querySelector('.find-replace-status');
   let cursor=-1;
   let previewMatches=[];
   const options=()=>({
     matchCase:panel.querySelector('[data-find-case]').checked,
-    wholeWord:panel.querySelector('[data-find-whole]').checked
+    wholeWord:panel.querySelector('[data-find-whole]').checked,
+    includeSpaces:panel.querySelector('[data-find-spaces]').checked
   });
   const refreshMatches=()=>{
-    const {matchCase,wholeWord}=options();
-    previewMatches=previewFindMatches(find.value,matchCase,wholeWord,searchRoot());
+    const {matchCase,wholeWord,includeSpaces}=options();
+    previewMatches=previewFindMatches(find.value,matchCase,wholeWord,includeSpaces,searchRoot());
     clearPreviewFindHighlights();
     if(previewMatches.length&&window.Highlight&&CSS.highlights){
       CSS.highlights.set('preview-find-all',new Highlight(...previewMatches.map(item=>item.range)));
@@ -6047,8 +6084,8 @@ function showFindReplaceDialog(){
   };
   const sourceMatches=()=>{
     if(findOnly)return[];
-    const {matchCase,wholeWord}=options();
-    return findTextMatches(els.editor.value,find.value,matchCase,wholeWord);
+    const {matchCase,wholeWord,includeSpaces}=options();
+    return findTextMatches(els.editor.value,find.value,matchCase,wholeWord,includeSpaces);
   };
   const replaceCurrent=()=>{
     if(findOnly)return;
@@ -6057,7 +6094,7 @@ function showFindReplaceDialog(){
     const list=sourceMatches();
     const current=list[Math.min(cursor,list.length-1)];
     if(!current){status.textContent='원문에서 바꿀 위치를 찾지 못했습니다';return}
-    replaceRange(replacement.value,current.start,current.end,false);
+    replaceRange(replacementValue(),current.start,current.end,false);
     requestAnimationFrame(()=>{refreshMatches();showCurrent(Math.min(cursor,previewMatches.length-1))});
   };
   const replaceAll=()=>{
@@ -6066,7 +6103,8 @@ function showFindReplaceDialog(){
     if(!list.length){status.textContent='일치 항목 없음';return}
     pushHistory(true);
     let text=els.editor.value;
-    for(let i=list.length-1;i>=0;i--)text=text.slice(0,list[i].start)+replacement.value+text.slice(list[i].end);
+    const nextValue=replacementValue();
+    for(let i=list.length-1;i>=0;i--)text=text.slice(0,list[i].start)+nextValue+text.slice(list[i].end);
     els.editor.value=text;
     syncActive();
     pushHistory(true);
@@ -6098,8 +6136,31 @@ function showFindReplaceDialog(){
     else if(action==='close')close();
   });
   const reset=()=>{cursor=-1;refreshMatches();status.textContent=previewMatches.length?`${previewMatches.length}개 찾음`:find.value?'일치 항목 없음':''};
+  const showSpaces=(input,output)=>{
+    if(!input||!output)return;
+    const value=input.value;
+    const hasWhitespace=!!value&&/\s/.test(value);
+    output.replaceChildren();
+    if(hasWhitespace){
+      const label=document.createElement('span');label.textContent=uiLanguage==='en'?'Space preview':'공백 미리보기';
+      const sample=document.createElement('code');
+      for(const character of value){
+        if(/\s/.test(character)){
+          const space=document.createElement('i');
+          space.textContent=character===' '?'SPACE':character==='\t'?'TAB':'↵';
+          space.dataset.spaceKind=character===' '?'space':character==='\t'?'tab':'enter';
+          space.title=character===' '?'스페이스':character==='\t'?'탭':'줄바꿈';
+          sample.appendChild(space);
+        }else sample.appendChild(document.createTextNode(character));
+      }
+      output.append(label,sample);
+    }
+    output.classList.toggle('active',!!hasWhitespace);
+  };
   find.addEventListener('input',reset);
-  panel.querySelectorAll('[data-find-case],[data-find-whole]').forEach(input=>input.addEventListener('change',reset));
+  find.addEventListener('input',()=>showSpaces(find,panel.querySelector('[data-find-space-preview]')));
+  replacement?.addEventListener('input',()=>showSpaces(replacement,panel.querySelector('[data-replace-space-preview]')));
+  panel.querySelectorAll('[data-find-case],[data-find-whole],[data-find-spaces]').forEach(input=>input.addEventListener('change',reset));
   const drag=panel.querySelector('[data-find-drag]');
   drag.addEventListener('pointerdown',event=>{
     if(event.target.closest('button'))return;
@@ -6712,9 +6773,7 @@ function sourceDefaultStyleValue(styleName){
 function stripInlineStyleFromHtml(html,styleName){
   if(!html.includes('<'))return html;
   const template=document.createElement('template');template.innerHTML=html;
-  template.content.querySelectorAll('[style]').forEach(node=>removeInlineStyleProperty(node,styleName));
-  if(styleName==='color')template.content.querySelectorAll('font[color]').forEach(font=>{font.removeAttribute('color');if(!font.attributes.length)font.replaceWith(...font.childNodes)});
-  if(styleName==='background-color')template.content.querySelectorAll('mark').forEach(mark=>mark.replaceWith(...mark.childNodes));
+  removeNestedInlineStyle(template.content,styleName);
   return template.innerHTML;
 }
 function applyHeading(tag){
@@ -6757,7 +6816,7 @@ function styleSpan(styleName,value){
   const m=sel.text.match(fullSpanRe);
   if(m){
     const nextStyle=mergeStyle(m[1],styleName,value);
-    const inner=value===''||value==null?stripInlineStyleFromHtml(m[2],styleName):m[2];
+    const inner=stripInlineStyleFromHtml(m[2],styleName);
     replaceRange(nextStyle?`<span style="${nextStyle}">${inner}</span>`:inner,sel.start,sel.end,true);
     return;
   }
@@ -6776,7 +6835,7 @@ function styleSpan(styleName,value){
     const originalStyle=openSource[1];
     const clearing=value===''||value==null;
     const selectedStyle=mergeStyle(originalStyle,styleName,clearing?sourceDefaultStyleValue(styleName):value);
-    const selectedContent=clearing?stripInlineStyleFromHtml(selected,styleName):selected;
+    const selectedContent=stripInlineStyleFromHtml(selected,styleName);
     replaceRange(wrap(leading,originalStyle)+wrap(selectedContent,selectedStyle)+wrap(trailing,originalStyle),openIndex,contentEnd+7,true);
     return;
   }
@@ -6795,7 +6854,7 @@ function styleSpan(styleName,value){
     replaceRange(sel.text,sel.start,sel.end,true);
     return;
   }
-  const valueText=`<span style="${styleName}:${value}">${sel.text}</span>`;
+  const valueText=`<span style="${styleName}:${value}">${stripInlineStyleFromHtml(sel.text,styleName)}</span>`;
   replaceRange(valueText,sel.start,sel.end,true);
   if(sel.placeholder){
     const innerStart=sel.start+`<span style="${styleName}:${value}">`.length;
@@ -6964,10 +7023,16 @@ function makePrintArticle(source,scale,paged=false){
   article.style.width=width;
   return article;
 }
-function arrangePagedPrintPages(pages,pagesPerSheet,target){
+async function yieldPrintRender(){
+  if(globalThis.scheduler?.yield)await globalThis.scheduler.yield();
+  else await new Promise(resolve=>setTimeout(resolve,0));
+}
+async function arrangePagedPrintPages(pages,pagesPerSheet,target,totalPages=pages.length){
   const layout=printSheetLayout(pagesPerSheet);
   const sheets=document.createElement('div');
   sheets.className='print-preview-sheets';
+  sheets.dataset.pageCount=String(totalPages);
+  sheets.dataset.truncated=String(pages.length<totalPages);
   for(let index=0;index<pages.length;index+=pagesPerSheet){
     const sheet=document.createElement('section');
     sheet.className='print-nup-sheet'+(layout.landscape?' landscape':'');
@@ -6982,11 +7047,26 @@ function arrangePagedPrintPages(pages,pagesPerSheet,target){
     });
     sheet.dataset.sheet=String(Math.floor(index/pagesPerSheet)+1);
     sheets.appendChild(sheet);
+    if(index&&index%(pagesPerSheet*2)===0)await yieldPrintRender();
   }
   target.replaceChildren(sheets);
   return sheets.children.length;
 }
-async function renderNupPrintSheets(source,scale,pagesPerSheet,target){
+async function renderNupPrintSheets(source,scale,pagesPerSheet,target,pageCache=null,maxPreviewPages=Infinity,shouldCancel=null){
+  await yieldPrintRender();
+  if(shouldCancel?.())return 0;
+  const pageCacheKey=String(printScaleValue(scale));
+  const cachedPages=pageCache?.get(pageCacheKey);
+  if(cachedPages){
+    const visible=cachedPages.slice(0,maxPreviewPages);
+    const pages=[];
+    for(let index=0;index<visible.length;index++){
+      if(shouldCancel?.())return 0;
+      pages.push(visible[index].cloneNode(true));
+      if(index&&index%2===0)await yieldPrintRender();
+    }
+    return arrangePagedPrintPages(pages,pagesPerSheet,target,cachedPages.length);
+  }
   const staging=document.createElement('div');
   staging.className='paged-render-staging';
   const factor=printScaleValue(scale)/100;
@@ -7014,18 +7094,32 @@ async function renderNupPrintSheets(source,scale,pagesPerSheet,target){
       image.complete?Promise.resolve():image.decode?.().catch(()=>{})||Promise.resolve()
     ));
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    if(shouldCancel?.())return 0;
     const columnWidth=Math.max(1,flow.clientWidth);
     const gapWidth=columnWidth*(flowGap/flowContentWidth);
-    const pageCount=Math.max(1,Math.ceil((flow.scrollWidth+gapWidth-1)/(columnWidth+gapWidth)));
-    const pages=Array.from({length:pageCount},(_,index)=>{
+    const horizontalPageCount=Math.max(1,Math.ceil((flow.scrollWidth+gapWidth-1)/(columnWidth+gapWidth)));
+    const verticalPageCount=Math.max(1,Math.ceil(flow.scrollHeight/Math.max(1,flow.clientHeight)));
+    const verticalFlow=horizontalPageCount===1&&verticalPageCount>1;
+    const pageCount=verticalFlow?verticalPageCount:horizontalPageCount;
+    const renderCount=Math.min(pageCount,maxPreviewPages);
+    const pages=[];
+    for(let index=0;index<renderCount;index++){
+      if(shouldCancel?.())return 0;
       const page=document.createElement('div');
       page.className='print-flow-page';
       const clone=flow.cloneNode(true);
-      clone.style.transform=`scale(${factor}) translateX(-${index*logicalWidth}mm)`;
+      clone.style.transform=verticalFlow
+        ?`scale(${factor}) translateY(-${index*logicalHeight}mm)`
+        :`scale(${factor}) translateX(-${index*logicalWidth}mm)`;
       page.appendChild(clone);
-      return page;
-    });
-    return arrangePagedPrintPages(pages,pagesPerSheet,target);
+      pages.push(page);
+      if(index&&index%2===0)await yieldPrintRender();
+    }
+    if(pageCache&&renderCount===pageCount){
+      if(pageCache.size>=5)pageCache.delete(pageCache.keys().next().value);
+      pageCache.set(pageCacheKey,pages.map(page=>page.cloneNode(true)));
+    }
+    return arrangePagedPrintPages(pages,pagesPerSheet,target,pageCount);
   }finally{
     staging.remove();
   }
@@ -7073,6 +7167,7 @@ function showPrintScaleDialog(source){
       updateViewerZoom();
     });
     let renderTimer=0,renderJob=0,renderPromise=Promise.resolve();
+    const nupPreviewCache=new Map(),nupPageCache=new Map();
     let renderError=null;
     const renderSinglePage=scale=>{
       const sheet=document.createElement('div');
@@ -7093,20 +7188,35 @@ function showPrintScaleDialog(source){
       const job=++renderJob;
       renderError=null;
       if(pagesPerSheet===1){
+        surface.classList.remove('is-rendering');
         renderSinglePage(scale);
         printButton.disabled=false;
         renderPromise=Promise.resolve();
         return;
       }
+      const cacheKey=`${scale}:${pagesPerSheet}`;
+      const cached=nupPreviewCache.get(cacheKey);
+      if(cached){
+        surface.classList.remove('is-rendering');
+        surface.replaceChildren(cached.cloneNode(true));
+        printButton.disabled=false;
+        renderPromise=Promise.resolve();
+        return;
+      }
       printButton.disabled=true;
-      surface.innerHTML='<div class="print-preview-loading">페이지를 나누는 중...</div>';
+      surface.classList.add('is-rendering');
       renderPromise=new Promise(done=>{
         renderTimer=setTimeout(async()=>{
           try{
             const target=document.createElement('div');
-            await renderNupPrintSheets(source,scale,pagesPerSheet,target);
+            await renderNupPrintSheets(article,scale,pagesPerSheet,target,nupPageCache,18,()=>job!==renderJob);
             if(job===renderJob){
               surface.replaceChildren(...target.childNodes);
+              const rendered=surface.querySelector('.print-preview-sheets');
+              if(rendered){
+                if(nupPreviewCache.size>=8)nupPreviewCache.delete(nupPreviewCache.keys().next().value);
+                nupPreviewCache.set(cacheKey,rendered.cloneNode(true));
+              }
               printButton.disabled=false;
             }
           }catch(error){
@@ -7115,8 +7225,11 @@ function showPrintScaleDialog(source){
               printButton.disabled=true;
               surface.innerHTML=`<div class="print-preview-loading">${htmlEsc(error.message)}<br>네트워크 연결을 확인해 주세요.</div>`;
             }
-          }finally{done()}
-        },180);
+          }finally{
+            if(job===renderJob)surface.classList.remove('is-rendering');
+            done();
+          }
+        },320);
       });
     };
     const finish=value=>{
@@ -7137,7 +7250,8 @@ function showPrintScaleDialog(source){
       await renderPromise;
       if(renderError)return;
       const pagesPerSheet=printPagesPerSheetValue(pagesSelect.value);
-      const preparedSheets=pagesPerSheet>1?surface.querySelector('.print-preview-sheets')?.cloneNode(true):null;
+      const previewSheets=pagesPerSheet>1?surface.querySelector('.print-preview-sheets'):null;
+      const preparedSheets=previewSheets?.dataset.truncated==='false'?previewSheets.cloneNode(true):null;
       finish({scale:printScaleValue(input.value),pagesPerSheet,preparedSheets});
     };
     document.addEventListener('keydown',onKey);
@@ -7469,7 +7583,6 @@ function autoCorrectPreviewAtSelection(){
   return block;
 }
 let acEnabled=savedOption('md-option-autocorrect',true);
-let autoMathSyntaxEnabled=savedOption('md-option-auto-math-syntax',true);
 let colorCorrectEnabled=savedOption('md-option-color-correct',true);
 let paragraphBreakEnabled=savedOption('md-option-paragraph-break',true);
 let previewMarkdownEnabled=localStorage.getItem('md-preview-markdown')!=='0';
@@ -7477,32 +7590,6 @@ let autoLinkEnabled=localStorage.getItem('md-auto-link')!=='0';
 let sourceSyntaxHoverEnabled=localStorage.getItem('md-source-syntax-hover')!=='0';
 let sourceSyntaxHoverDelaySeconds=Math.max(1,Math.min(30,Number(localStorage.getItem('md-source-syntax-hover-delay'))||5));
 let previewMarkdownTimer=null;
-const autoMathLatexCommand=/\\(?:frac|dfrac|tfrac|sqrt|sum|prod|int|oint|lim|rightarrow|leftarrow|leftrightarrow|Rightarrow|Leftarrow|Leftrightarrow|to|mapsto|times|cdot|div|pm|mp|leq|geq|neq|approx|equiv|infty|partial|nabla|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|rho|sigma|tau|phi|psi|omega|Gamma|Delta|Theta|Lambda|Pi|Sigma|Phi|Psi|Omega|mathbf|mathrm|mathit|text|overline|underline|vec|hat|begin|end)\b/;
-function autoConvertPreviewMathAtSelection(){
-  if(!autoMathSyntaxEnabled)return false;
-  const selection=window.getSelection();
-  if(!selection?.rangeCount||!selection.isCollapsed)return false;
-  const caret=selection.getRangeAt(0),node=caret.endContainer;
-  if(node.nodeType!==Node.TEXT_NODE||node.parentElement?.closest('pre,code,.zz-math,[contenteditable="false"]'))return false;
-  const before=node.data.slice(0,caret.endOffset);
-  const match=before.match(/\(([^()\n]*\\[A-Za-z]+[^()\n]*)\)$/);
-  if(!match||!autoMathLatexCommand.test(match[0]))return false;
-  const latex=match[0],start=caret.endOffset-latex.length;
-  const holder=document.createElement('template');
-  holder.innerHTML=renderMathHtml(latex,false);
-  const math=holder.content.firstElementChild;
-  if(!math)return false;
-  const replace=document.createRange();
-  replace.setStart(node,start);replace.setEnd(node,caret.endOffset);replace.deleteContents();replace.insertNode(math);
-  const next=document.createRange();next.setStartAfter(math);next.collapse(true);selection.removeAllRanges();selection.addRange(next);
-  state.savedPreviewRange=next.cloneRange();
-  math.dataset.movable='1';
-  math.draggable=true;
-  // Serializing the whole Preview synchronously here causes a visible pause in
-  // large documents. The normal idle sync also commits the history entry.
-  scheduleSyncFromPreview();
-  return true;
-}
 function synchronizeEditorSyncBlocks(){
   const source=els.editor.value;
   if(!source.includes('zz:sync'))return false;
@@ -7793,7 +7880,6 @@ els.preview.addEventListener('input',e=>{
   // Preview serialization and live Markdown conversion can replace/reparent
   // the active text node. Wait until the browser finishes the IME composition.
   if(e.isComposing||previewCompositionActive)return;
-  if(typeof e.data==='string'&&e.data.endsWith(')')&&autoConvertPreviewMathAtSelection())return;
   const closingSyntax=typeof e.data==='string'&&['*','_','`',')'].includes(e.data.slice(-1));
   const correctedBlock=closingSyntax?autoCorrectPreviewAtSelection():null;
   if(correctedBlock&&applyPreviewMarkdown(correctedBlock))return;
@@ -8181,7 +8267,6 @@ function selectMathNode(math){
 function finishMathFormat(math){
   const mathIndex=[...els.preview.querySelectorAll('.zz-math')].indexOf(math);
   syncFromPreview();
-  pushHistory(true);
   const refreshedMath=els.preview.querySelectorAll('.zz-math')[mathIndex];
   if(refreshedMath){
     clickMoveElement=refreshedMath;
@@ -8244,9 +8329,17 @@ function applySelectedMathCommand(command,value=null){
 function tableFormatTextParts(rangeOverride=null,cellsOverride=null){
   if(document.activeElement===els.editor&&!rangeOverride&&!cellsOverride?.length)return null;
   const cells=(cellsOverride||[...els.preview.querySelectorAll('td.table-cell-selected,th.table-cell-selected')]).filter(cell=>cell?.isConnected&&els.preview.contains(cell));
-  const range=cells.length?null:(rangeOverride&&els.preview.contains(rangeOverride.commonAncestorContainer)?rangeOverride.cloneRange():previewRange());
+  const liveSelection=window.getSelection();
+  const liveRange=liveSelection?.rangeCount&&els.preview.contains(liveSelection.getRangeAt(0).commonAncestorContainer)
+    ?liveSelection.getRangeAt(0).cloneRange():null;
+  const range=cells.length?null:(rangeOverride&&els.preview.contains(rangeOverride.commonAncestorContainer)?rangeOverride.cloneRange():liveRange||previewRange());
   if(!cells.length&&(!range||range.collapsed))return null;
-  if(!cells.length&&![...els.preview.querySelectorAll('td,th')].some(cell=>range.intersectsNode(cell)))return null;
+  if(!cells.length){
+    const boundaryElement=node=>node?.nodeType===Node.ELEMENT_NODE?node:node?.parentElement;
+    const startTable=boundaryElement(range.startContainer)?.closest?.('table');
+    const endTable=boundaryElement(range.endContainer)?.closest?.('table');
+    if(!startTable||startTable!==endTable)return null;
+  }
   const parts=[],roots=cells.length?cells:[range.commonAncestorContainer.nodeType===Node.TEXT_NODE?range.commonAncestorContainer.parentElement:range.commonAncestorContainer];
   const visit=node=>{
     if(!node.data||node.parentElement.closest('.block-move-handle,.form-move-handle,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.code-head,.zz-math'))return;
@@ -8267,6 +8360,17 @@ function removeInlineStyleProperty(element,styleName){
   element.style.removeProperty(styleName);
   if(styleName==='background-color')element.style.removeProperty('background');
   if(!element.getAttribute('style'))element.removeAttribute('style');
+}
+function removeNestedInlineStyle(root,styleName){
+  root.querySelectorAll?.('[style]').forEach(node=>removeInlineStyleProperty(node,styleName));
+  if(styleName==='color')root.querySelectorAll?.('font[color]').forEach(font=>{font.removeAttribute('color');if(!font.attributes.length)font.replaceWith(...font.childNodes)});
+  if(styleName==='background-color')root.querySelectorAll?.('mark').forEach(mark=>mark.replaceWith(...mark.childNodes));
+  return root;
+}
+function removeEmptyInlineCode(root){
+  (root||els.preview).querySelectorAll?.('code:not(pre code)').forEach(code=>{
+    if(!code.textContent.replace(/[\u200b\u00a0]/g,'').trim()&&!code.querySelector('img,br'))code.remove();
+  });
 }
 function defaultPreviewStyleValue(node,styleName){
   if(styleName==='color')return getComputedStyle(els.preview).color;
@@ -8325,16 +8429,20 @@ function clearTableTextStyle(selection,styleName){
       if(styleName==='background-color')cell.querySelectorAll('mark').forEach(mark=>mark.replaceWith(...mark.childNodes));
       if(styleName==='color')cell.querySelectorAll('font[color]').forEach(font=>{font.removeAttribute('color');if(!font.attributes.length)font.replaceWith(...font.childNodes)});
     });
-    syncFromPreview();pushHistory(true);return true;
+    syncFromPreview();return true;
   }
   pushHistory(true);
   const reset=[];
   [...parts].reverse().forEach(part=>{
-    const span=wrapTextPartStyle(part,styleName,defaultPreviewStyleValue(part.node,styleName));
-    if(span)reset.push(span);
+    const cell=part.node.parentElement?.closest('td,th');
+    const host=inlineStyleHost(part.node,styleName,cell);
+    const cleared=host
+      ?splitInlineStyleHost(host,part.node,part.start,part.node,part.end,styleName)
+      :wrapTextPartStyle(part,styleName,defaultPreviewStyleValue(part.node,styleName));
+    if(cleared)reset.push(cleared);
   });
   if(reset.length){const next=document.createRange();next.selectNodeContents(reset.at(-1));state.savedPreviewRange=next.cloneRange()}
-  syncFromPreview();pushHistory(true);return true;
+  syncFromPreview();return true;
 }
 function styleTableTextSelection(styleName,value,selection=tableFormatTextParts()){
   if(!selection)return false;
@@ -8346,7 +8454,7 @@ function styleTableTextSelection(styleName,value,selection=tableFormatTextParts(
   if(cells.length){
     pushHistory(true);
     cells.forEach(cell=>applyStyleToWholeCell(cell,styleName,value));
-    syncFromPreview();pushHistory(true);return true;
+    syncFromPreview();return true;
   }
   if(!parts.length)return true;
   pushHistory(true);
@@ -8374,7 +8482,7 @@ function styleTableTextSelection(styleName,value,selection=tableFormatTextParts(
     window.getSelection()?.removeAllRanges();
     state.savedPreviewRange=null;
   }
-  syncFromPreview();pushHistory(true);return true;
+  syncFromPreview();return true;
 }
 function applyPreviewCommand(command,value=null){
   const tableSelection=tableFormatTextParts();
@@ -8394,7 +8502,7 @@ function applyPreviewCommand(command,value=null){
     }
     const selection=window.getSelection();selection.removeAllRanges();
     if(!tableSelection.cells.length&&saved){selection.addRange(saved);state.savedPreviewRange=saved.cloneRange()}
-    syncFromPreview();pushHistory(true);return true;
+    syncFromPreview();return true;
   }
   const inline={bold:['font-weight','700','400'],italic:['font-style','italic','normal'],underline:['text-decoration','underline','none'],strikeThrough:['text-decoration','line-through','none']}[command];
   if(tableSelection&&inline){
@@ -8419,7 +8527,6 @@ function applyPreviewCommand(command,value=null){
   document.execCommand(command,false,value);
   rememberPreviewRange();
   syncFromPreview();
-  pushHistory(true);
   return true;
 }
 function closestStyleHost(node,range){
@@ -8446,6 +8553,7 @@ function applyPreviewStyleToExisting(range,styleName,value){
   }else{
     host.style[prop]=value;
     if(styleName==='color'&&host.tagName==='FONT')host.removeAttribute('color');
+    removeNestedInlineStyle(host,styleName);
   }
   const next=document.createRange();
   next.selectNodeContents(host);
@@ -8454,7 +8562,6 @@ function applyPreviewStyleToExisting(range,styleName,value){
   sel.addRange(next);
   state.savedPreviewRange=next.cloneRange();
   syncFromPreview();
-  pushHistory(true);
   return true;
 }
 function rangeSelectsWholePreview(range){
@@ -8473,6 +8580,7 @@ function styleWholePreview(styleName,value){
   children.forEach(node=>{
     node.style[property]=value||'';
     if(!node.getAttribute('style'))node.removeAttribute('style');
+    if(value!==''&&value!=null)removeNestedInlineStyle(node,styleName);
     if(styleName==='background-color'&&(value===''||value==null)){
       node.querySelectorAll('[style]').forEach(child=>removeInlineStyleProperty(child,'background-color'));
       node.querySelectorAll('mark').forEach(mark=>mark.replaceWith(...mark.childNodes));
@@ -8485,28 +8593,23 @@ function styleWholePreview(styleName,value){
   selection.addRange(next);
   state.savedPreviewRange=next.cloneRange();
   syncFromPreview();
-  pushHistory(true);
   return true;
 }
 function clearPreviewInlineStyle(range,styleName){
-  const parts=[];
-  const root=range.commonAncestorContainer.nodeType===Node.TEXT_NODE?range.commonAncestorContainer.parentElement:range.commonAncestorContainer;
-  const visit=node=>{
-    if(!node.data||node.parentElement.closest('.block-move-handle,.form-move-handle,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.code-head,.zz-math')||!range.intersectsNode(node))return;
-    const start=node===range.startContainer?range.startOffset:0,end=node===range.endContainer?range.endOffset:node.length;
-    if(end>start)parts.push({node,start,end});
-  };
-  if(root.nodeType===Node.TEXT_NODE)visit(root);
-  else{
-    const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let node;
-    while((node=walker.nextNode()))visit(node);
-  }
-  if(!parts.length)return false;
-  pushHistory(true);const reset=[];
-  [...parts].reverse().forEach(part=>{const span=wrapTextPartStyle(part,styleName,defaultPreviewStyleValue(part.node,styleName));if(span)reset.push(span)});
-  if(!reset.length)return false;
-  const next=document.createRange();next.selectNodeContents(reset.at(-1));state.savedPreviewRange=next.cloneRange();
-  syncFromPreview();pushHistory(true);return true;
+  if(!range||range.collapsed||!range.toString())return false;
+  pushHistory(true);
+  const fragment=removeNestedInlineStyle(range.extractContents(),styleName);
+  const first=fragment.firstChild,last=fragment.lastChild;
+  if(!first||!last)return false;
+  range.insertNode(fragment);
+  const cleanupRoot=first.parentElement?.closest('p,li,blockquote,td,th')||els.preview;
+  cleanupRoot.querySelectorAll('span,font,mark').forEach(node=>{
+    if(!node.textContent&&!node.querySelector('img,br,svg,math'))node.remove();
+  });
+  const next=document.createRange();next.setStartBefore(first);next.setEndAfter(last);
+  const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);
+  state.savedPreviewRange=next.cloneRange();
+  syncFromPreview();return true;
 }
 function stylePreviewSelection(styleName,value){
   if(styleTableTextSelection(styleName,value))return true;
@@ -8522,23 +8625,27 @@ function stylePreviewSelection(styleName,value){
   const chipLabel=rangeNode?.closest?.('.zz-source-chip-label');
   if(chipLabel&&els.preview.contains(chipLabel)){
     pushHistory(true);
+    const cleanupRoot=rangeNode.closest?.('p,li,blockquote,td,th')||els.preview;
     const span=document.createElement('span');
     span.style[styleName.replace(/-([a-z])/g,(_,c)=>c.toUpperCase())]=value;
-    span.appendChild(range.extractContents());
+    span.appendChild(removeNestedInlineStyle(range.extractContents(),styleName));
     range.insertNode(span);
+    removeEmptyInlineCode(cleanupRoot);
     const next=document.createRange();next.selectNodeContents(span);
     const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);
-    state.savedPreviewRange=next.cloneRange();syncFromPreview();pushHistory(true);return true;
+    state.savedPreviewRange=next.cloneRange();syncFromPreview();return true;
   }
   if(rangeSelectsWholePreview(range))return styleWholePreview(styleName,value);
   if((value===''||value==null)&&!range.collapsed&&clearPreviewInlineStyle(range,styleName))return true;
   if(!range.collapsed&&applyPreviewStyleToExisting(range,styleName,value))return true;
   if(value===''||value==null)return false;
   pushHistory(true);
+  const cleanupRoot=rangeNode.closest?.('p,li,blockquote,td,th')||els.preview;
   const span=document.createElement('span');
   span.style[styleName.replace(/-([a-z])/g,(_,c)=>c.toUpperCase())]=value;
-  span.appendChild(range.extractContents());
+  span.appendChild(removeNestedInlineStyle(range.extractContents(),styleName));
   range.insertNode(span);
+  removeEmptyInlineCode(cleanupRoot);
   const sel=window.getSelection();
   sel.removeAllRanges();
   const next=document.createRange();
@@ -8546,7 +8653,6 @@ function stylePreviewSelection(styleName,value){
   sel.addRange(next);
   state.savedPreviewRange=next.cloneRange();
   syncFromPreview();
-  pushHistory(true);
   return true;
 }
 let textContextMenu=null,textContextRange=null,pendingTextContextRange=null,lastTextContextRange=null,copiedTextFormat=null,copiedPreviewText='';
@@ -9831,6 +9937,60 @@ function previewMarkdownCandidate(text){
   return /(?:\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|`[^`\n]+`|!?\[[^\]\n]+\]\([^)\n]+\)|(?:^|\s)[*_][^*_\n]+[*_](?:\s|$))/.test(text)
     || /^\s{0,3}(?:#{1,6}\s+\S|[-+*]\s*(?:\S.*)?|\d+\.\s+\S|>\s+\S|```|~~~|(?:---+|\*\*\*+)\s*$)/.test(text);
 }
+function confirmPreviewQuoteFormatLoss(){
+  return new Promise(resolve=>{
+    const wrap=document.createElement('div');wrap.className='modal-backdrop quote-format-confirm';
+    const english=uiLanguage==='en';
+    wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="quote-loss-title"><h3 id="quote-loss-title">${english?'Quote formatting':'인용문 서식'}</h3><p>${english?'Choose whether to keep the current colors and emphasis.':'현재 색상과 굵기를 유지할지 선택하세요.'}</p><div class="modal-actions"><button class="tool" type="button" data-quote-loss="remove">${english?'Remove formatting':'서식 제거'}</button><button class="tool primary" type="button" data-quote-loss="keep">${english?'Keep formatting':'서식 유지'}</button></div></div>`;
+    const finish=value=>{document.removeEventListener('keydown',onKey);wrap.remove();resolve(value)};
+    const onKey=event=>{if(event.key==='Escape')finish(null)};
+    wrap.onclick=event=>{const action=event.target.closest('[data-quote-loss]')?.dataset.quoteLoss;if(action)finish(action)};
+    document.addEventListener('keydown',onKey);document.body.appendChild(wrap);wrap.querySelector('[data-quote-loss="keep"]').focus();
+  });
+}
+function previewBlockHasInlineFormatting(block){
+  return !!block.querySelector('strong,b,em,i,u,span[style],font[color],mark,code,a,s,del,[style*="color"],[style*="font"]');
+}
+function removePreviewTextPrefix(block,count){
+  const walker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,{acceptNode(node){
+    return node.parentElement?.closest('.block-move-handle,.form-move-handle,.code-head')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;
+  }});
+  let remaining=count,node;
+  while(remaining>0&&(node=walker.nextNode())){
+    const take=Math.min(remaining,node.data.length);
+    node.deleteData(0,take);remaining-=take;
+  }
+}
+function applyPreviewQuoteKeepingFormat(block,text){
+  const marker=text.match(/^\s{0,3}>\s+/);
+  if(!marker||!block?.isConnected)return false;
+  pushHistory(true);
+  removePreviewTextPrefix(block,marker[0].length);
+  block.querySelectorAll(':scope > .block-move-handle,:scope > .form-move-handle').forEach(handle=>handle.remove());
+  const quote=document.createElement('blockquote');
+  let caretTarget=block;
+  if(block.matches('li')&&block.parentElement?.matches('ul,ol')){
+    const list=block.parentElement,parent=list.parentNode;
+    const before=list.cloneNode(false),after=list.cloneNode(false);
+    let sibling=block.previousSibling;
+    while(sibling){const previous=sibling.previousSibling;before.prepend(sibling);sibling=previous}
+    sibling=block.nextSibling;
+    while(sibling){const next=sibling.nextSibling;after.append(sibling);sibling=next}
+    const paragraph=document.createElement('p');
+    while(block.firstChild)paragraph.appendChild(block.firstChild);
+    quote.appendChild(paragraph);caretTarget=paragraph;
+    if(before.childNodes.length)parent.insertBefore(before,list);
+    parent.insertBefore(quote,list);
+    if(after.childNodes.length)parent.insertBefore(after,list);
+    list.remove();
+  }else{
+    block.before(quote);quote.appendChild(block);
+  }
+  quote.appendChild(makeMoveHandle('인용 위치 이동'));
+  placeCaretAtPreviewEnd(caretTarget);
+  rememberPreviewRange();syncFromPreview();
+  return true;
+}
 function applyPreviewStructuralMarkdown(block,text){
   if(/^\s*-\s+$/.test(text)){
     const list=document.createElement('ul');
@@ -9962,8 +10122,31 @@ function applyPreviewMarkdown(block){
     }
   }
   if(!previewMarkdownCandidate(text)){
+    delete block.dataset.quoteFormatAllowed;
+    delete block.dataset.quoteFormatDismissed;
     if(correctedSpacing){syncFromPreview();pushHistory(true);return true}
     return false;
+  }
+  const quoteCandidate=/^\s{0,3}>\s+\S/.test(text);
+  if(quoteCandidate&&previewBlockHasInlineFormatting(block)){
+    if(block.dataset.quoteFormatDismissed==='1')return false;
+    if(block.dataset.quoteFormatAllowed!=='1'){
+      if(block.dataset.quoteFormatPending==='1')return true;
+      block.dataset.quoteFormatPending='1';
+      confirmPreviewQuoteFormatLoss().then(choice=>{
+        if(!block.isConnected)return;
+        delete block.dataset.quoteFormatPending;
+        if(!choice){block.dataset.quoteFormatDismissed='1';return}
+        if(choice==='keep'){
+          applyPreviewQuoteKeepingFormat(block,previewBlockPlainText(block));
+          return;
+        }
+        block.dataset.quoteFormatAllowed='1';
+        applyPreviewMarkdown(block);
+      });
+      return true;
+    }
+    delete block.dataset.quoteFormatAllowed;
   }
   if(applyPreviewStructuralMarkdown(block,text))return true;
   if(applyPreviewBoldMarkup(block,caretOffset)){
@@ -10439,6 +10622,7 @@ function preservePreviewFormatOnDelete(e){
   if(!range?.collapsed||!els.preview.contains(range.commonAncestorContainer))return false;
   const block=closestPreviewBlock(range.startContainer);
   if(!block||block.closest('pre,table'))return false;
+  const previewScrollTop=els.preview.scrollTop;
   const split=lastPreviewEnterSplit;
   const mergeSplitBackward=backward&&split?.next===block&&split.previous===block.previousElementSibling&&previewRangeSideIsEmpty(block,range,true);
   const mergeSplitForward=forward&&split?.previous===block&&split.next===block.nextElementSibling&&previewRangeSideIsEmpty(block,range,false);
@@ -10485,6 +10669,11 @@ function preservePreviewFormatOnDelete(e){
     removeBlock=block.nextElementSibling;
     caretBlock=block;
   }
+  if(backward&&removeBlock&&!caretBlock){
+    // Native contenteditable deletion at an empty leading paragraph can move
+    // the caret to the end of the entire preview. Keep it at the empty line.
+    e.preventDefault();e.stopPropagation();placeCaretInPreviewBlock(block);els.preview.scrollTop=previewScrollTop;return true;
+  }
   if(!removeBlock||!caretBlock||caretBlock.matches('hr,table,.code-block'))return false;
   e.preventDefault();
   e.stopPropagation();
@@ -10500,6 +10689,7 @@ function preservePreviewFormatOnDelete(e){
   addMovableElements(els.preview);
   rememberPreviewRange();
   syncFromPreview();
+  els.preview.scrollTop=previewScrollTop;
   pushHistory(true);
   return true;
 }
@@ -11419,10 +11609,6 @@ const acPanelHtml=`
       <input type="checkbox" id="enable-preview-markdown" checked>
       <span><b>프리뷰 MD 문법 적용</b><div class="ac-desc">Preview에 입력한 Markdown 문법을 서식으로 변환</div></span>
     </label>
-    <label title="Preview에서 LaTeX 문법을 입력하면 편집 가능한 수식으로 자동 변환합니다.">
-      <input type="checkbox" id="enable-auto-math-syntax" checked>
-      <span><b>수식 자동 변환</b><div class="ac-desc">LaTeX 문법을 입력하면 자동으로 수식으로 바꿉니다.</div></span>
-    </label>
     <label title="URL을 붙여넣으면 클릭할 수 있는 링크 서식으로 자동 변환합니다.">
       <input type="checkbox" id="enable-auto-link" checked>
       <span><b>URL 자동 링크</b><div class="ac-desc">붙여넣은 주소를 링크로 자동 변환</div></span>
@@ -11471,7 +11657,6 @@ PANELS.push('ac-panel');TOGGLES.push('autocorrect-toggle');
 const optionPreviewExamples={
   'enable-paragraph-break':{title:'Enter로 줄바꿈',body:'<div class="option-live-demo"><small>Enter를 누르면 다음 줄이 바로 만들어집니다.</small><div class="option-enter-animation"><span>첫 번째 줄</span><i>Enter ↵</i><span>두 번째 줄</span><b></b></div></div>'},
   'enable-preview-markdown':{title:'프리뷰 MD 문법 적용',body:'<div class="option-live-demo"><small>입력한 Markdown 문법이 바로 서식으로 바뀝니다.</small><div class="option-markdown-animation"><div class="option-demo-input"><span>**텍스트**</span><b></b></div><i>서식 적용</i><div class="option-demo-output"><strong>텍스트</strong></div></div></div>'},
-  'enable-auto-math-syntax':{title:'수식 자동 변환',body:'<div class="option-live-demo"><small>LaTeX 문법을 입력하면 편집 가능한 수식으로 자동 변환합니다.</small><div class="option-example-code"><i>입력</i><span>(X \\rightarrow y)</span><i>결과</i><span>X → y</span></div></div>'},
   'enable-auto-link':{title:'URL 자동 링크',body:'<div class="option-live-demo"><small>붙여넣은 주소가 클릭 가능한 링크로 바뀝니다.</small><div class="option-link-animation"><div class="option-demo-input"><span>https://example.com</span><b></b></div><i>붙여넣기</i><div class="option-demo-output"><a>https://example.com</a></div></div></div>'},
   'enable-source-syntax-hover':{title:'문법 빠른 편집',body:'<div class="option-live-demo"><small>Preview의 문장에 마우스를 올리면 Markdown 원문을 고칠 수 있는 창이 열립니다.</small><div class="option-quick-edit-animation"><div class="option-preview-sentence"><span>중요한 문장입니다.</span><b>마우스</b></div><div class="option-source-editor"><code>**중요한 문장**입니다.</code><i>수정</i></div><div class="option-quick-edit-result"><strong>수정한 문장</strong>입니다.</div></div></div>'},
   'enable-autocorrect':{title:'기호 공백 보정',body:'<div class="option-live-demo"><small>Markdown 기호 안에 잘못 들어간 공백을 자동으로 정리합니다.</small><div class="option-space-animation"><div><span>**김밥 </span><em> </em><span>**</span><b></b></div><i>공백 제거</i><strong>**김밥**</strong></div></div>'},
@@ -11529,7 +11714,6 @@ $('autocorrect-toggle').onclick=e=>{
   if(open){hideOptionPreview(true);closeAllPanels()}else openPanel('ac-panel','autocorrect-toggle');
 };
 $('enable-autocorrect').checked=acEnabled;
-$('enable-auto-math-syntax').checked=autoMathSyntaxEnabled;
 $('enable-color-correct').checked=colorCorrectEnabled;
 $('enable-paragraph-break').checked=paragraphBreakEnabled;
 $('enable-sync-scroll').checked=syncScrollEnabled;
@@ -11539,7 +11723,6 @@ $('enable-table-filter').onchange=e=>{localStorage.setItem('md-option-table-filt
 $('enable-swap-panes').checked=savedOption('md-option-swap-panes',false);
 $('enable-hashtag-navigator').checked=hashtagNavigatorEnabled;
 $('enable-autocorrect').onchange=e=>{acEnabled=e.target.checked;localStorage.setItem('md-option-autocorrect',acEnabled?'1':'0')};
-$('enable-auto-math-syntax').onchange=e=>{autoMathSyntaxEnabled=e.target.checked;localStorage.setItem('md-option-auto-math-syntax',autoMathSyntaxEnabled?'1':'0')};
 $('enable-sync-scroll').onchange=e=>{syncScrollEnabled=e.target.checked;localStorage.setItem('md-option-sync-scroll',syncScrollEnabled?'1':'0')};
 $('enable-line-numbers').onchange=e=>{setLineNumbers(e.target.checked);localStorage.setItem('md-option-line-numbers',e.target.checked?'1':'0')};
 $('enable-swap-panes').onchange=e=>{setSwapPanes(e.target.checked);localStorage.setItem('md-option-swap-panes',e.target.checked?'1':'0')};
@@ -11888,9 +12071,6 @@ const EN_TEXT={
   '브라우저 저장소가 지워지기 전까지 이 기록을 복구할 수 있습니다.':'This workspace can be restored until the browser storage is cleared.',
   '작성 옵션':'Writing options','보기 옵션':'View options','Enter로 줄바꿈':'Line break with Enter','Enter를 누른 위치에서 바로 줄바꿈':'Insert a line break where Enter is pressed',
   '프리뷰 MD 문법 적용':'Render Markdown in Preview','Preview에 입력한 Markdown 문법을 서식으로 변환':'Render Markdown syntax entered in Preview',
-  '수식 자동 변환':'Automatic math conversion','LaTeX 문법을 입력하면 자동으로 수식으로 바꿉니다.':'Automatically convert LaTeX syntax into rendered math.',
-  'Preview에서 LaTeX 문법을 입력하면 편집 가능한 수식으로 자동 변환합니다.':'Enter LaTeX syntax in Preview to convert it automatically into editable math.',
-  'LaTeX 문법을 입력하면 편집 가능한 수식으로 자동 변환합니다.':'Enter LaTeX syntax to convert it automatically into editable math.',
   'URL 자동 링크':'Automatic URL links','붙여넣은 주소를 링크로 자동 변환':'Convert pasted URLs into links',
   '문법 빠른 편집':'Quick syntax editing','문장에 마우스를 올려 원문 수정':'Hover over a sentence to edit its source',
   '창 표시까지':'Show after','초':'sec','기호 공백 보정':'Fix syntax spacing','MD 기호 안의 불필요한 공백 제거':'Remove unnecessary spaces inside Markdown syntax',
@@ -12137,6 +12317,7 @@ let editGuideWelcomeTimer=0;
 function modeGuideKey(mode){return mode==='home'?HOME_GUIDE_WELCOME_KEY:mode==='convert'?CONVERT_GUIDE_WELCOME_KEY:mode==='merge'?MERGE_GUIDE_WELCOME_KEY:EDIT_GUIDE_WELCOME_KEY}
 function scheduleModeGuideWelcome(mode=state.mode,force=false){
   clearTimeout(editGuideWelcomeTimer);
+  if(!force&&navigator.webdriver)return;
   if(!force&&(!featureGuideEnabled||localStorage.getItem(modeGuideKey(mode))==='1'))return;
   if(!force&&mode==='home'&&localStorage.getItem(FEATURE_GUIDE_WELCOME_KEY)!=='1')return;
   editGuideWelcomeTimer=setTimeout(()=>{
@@ -12244,6 +12425,7 @@ function showModeGuideWelcome(mode='edit',force=false){
   wrap.querySelector('[data-edit-guide-next]').focus();
 }
 function showFeatureGuideWelcome(force=false){
+  if(!force&&navigator.webdriver)return;
   if(!force&&(!featureGuideEnabled||localStorage.getItem(FEATURE_GUIDE_WELCOME_KEY)==='1'))return;
   document.querySelector('.feature-guide-welcome')?.remove();
   const wrap=document.createElement('div');wrap.className='modal-backdrop feature-guide-welcome';
@@ -12521,11 +12703,72 @@ function previewRangeContent(fallback){
   box.appendChild(range.cloneContents());
   return box.innerHTML.trim()||htmlEsc(fallback);
 }
-function insertPreviewQuote(level){
-  const content=previewRangeContent('텍스트');
-  if(content===null)return false;
+function confirmFormattedQuote(){
+  return new Promise(resolve=>{
+    const wrap=document.createElement('div');wrap.className='modal-backdrop quote-format-confirm';
+    const english=uiLanguage==='en';
+    wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="quote-format-title"><h3 id="quote-format-title">${english?'Existing formatting':'기존 서식이 있습니다'}</h3><p>${english?'Convert to a quote while keeping colors, emphasis, and links?':'선택한 글자의 색상·굵기·링크 등을 유지한 채 인용문으로 변경할까요?'}</p><div class="modal-actions"><button class="tool" type="button" data-quote-confirm="cancel">${english?'Cancel':'취소'}</button><button class="tool primary" type="button" data-quote-confirm="keep">${english?'Keep formatting':'서식 유지하고 변경'}</button></div></div>`;
+    const finish=value=>{document.removeEventListener('keydown',onKey);wrap.remove();resolve(value)};
+    const onKey=event=>{if(event.key==='Escape')finish(false)};
+    wrap.onclick=event=>{const action=event.target.closest('[data-quote-confirm]')?.dataset.quoteConfirm;if(action)finish(action==='keep')};
+    document.addEventListener('keydown',onKey);document.body.appendChild(wrap);wrap.querySelector('[data-quote-confirm="keep"]').focus();
+  });
+}
+function previewRangeFormatAncestors(range,selector){
+  const found=[];
+  const root=range.commonAncestorContainer.nodeType===Node.TEXT_NODE?range.commonAncestorContainer.parentElement:range.commonAncestorContainer;
+  const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let node;
+  const visit=textNode=>{
+    if(!textNode.data||!range.intersectsNode(textNode))return;
+    const start=textNode===range.startContainer?range.startOffset:0,end=textNode===range.endContainer?range.endOffset:textNode.length;
+    if(end<=start)return;
+    for(let parent=textNode.parentElement;parent&&parent!==els.preview;parent=parent.parentElement){
+      if(parent.matches?.(selector)&&!found.includes(parent))found.push(parent);
+      if(parent.matches?.('p,li,h1,h2,h3,h4,h5,h6,blockquote,td,th'))break;
+    }
+  };
+  if(root.nodeType===Node.TEXT_NODE)visit(root);else while((node=walker.nextNode()))visit(node);
+  return found;
+}
+async function insertPreviewQuote(level){
+  const range=previewRange();
+  if(!range)return false;
+  const box=document.createElement('div');box.appendChild(range.cloneContents());
+  const formatSelector='strong,b,em,i,u,span[style],font,mark,code,a,s,del';
+  let content=box.innerHTML.trim()||'텍스트';
+  let common=range.commonAncestorContainer.nodeType===Node.TEXT_NODE?range.commonAncestorContainer.parentElement:range.commonAncestorContainer;
+  const sharedFormats=[];
+  while(common&&common!==els.preview&&common.contains(range.startContainer)&&common.contains(range.endContainer)){
+    if(common.matches?.(formatSelector))sharedFormats.push(common);
+    if(common.matches?.('p,li,h1,h2,h3,h4,h5,h6,blockquote,td,th'))break;
+    common=common.parentElement;
+  }
+  // cloneContents() omits the parent tag when only part of one formatted text
+  // node is selected. Rebuild that shared inline ancestor chain explicitly.
+  sharedFormats.forEach(source=>{const clone=source.cloneNode(false);clone.innerHTML=content;content=clone.outerHTML});
+  const selectedFormatAncestors=previewRangeFormatAncestors(range,formatSelector);
+  // A selection wholly inside one formatted run has no wrapper in
+  // cloneContents(). Preserve the innermost-to-outermost shared ancestors.
+  if(!sharedFormats.length&&selectedFormatAncestors.length){
+    const allSelectedInside=selectedFormatAncestors.filter(parent=>parent.contains(range.startContainer)&&parent.contains(range.endContainer));
+    allSelectedInside.forEach(source=>{const clone=source.cloneNode(false);clone.innerHTML=content;content=clone.outerHTML});
+  }
+  const formatted=selectedFormatAncestors.length>0||sharedFormats.length>0||!!box.querySelector(formatSelector);
+  if(formatted&&!await confirmFormattedQuote())return true;
   const inner=`<blockquote><p>${content}</p></blockquote>`;
-  return insertPreviewHtml(level===2?`<blockquote>${inner}</blockquote>`:inner,'quote');
+  return insertPreviewHtmlAtContext(level===2?`<blockquote>${inner}</blockquote>`:inner,{kind:'preview',range},'quote');
+}
+function sourceSelectionHasFormatting(text){
+  return /(?:\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|`[^`\n]+`|(?<!\*)\*[^*\n]+\*(?!\*)|(?<!_)_[^_\n]+_(?!_)|!?\[[^\]\n]+\]\([^)\n]+\)|<(?:span|font|b|strong|i|em|u|mark|code|a|s|del)\b)/i.test(text);
+}
+async function applyQuote(level){
+  if(await insertPreviewQuote(level))return;
+  const saved=state.savedSelection||state.lastEditorSelection||{start:els.editor.selectionStart,end:els.editor.selectionEnd};
+  const start=Math.max(0,Math.min(els.editor.value.length,saved.start)),end=Math.max(start,Math.min(els.editor.value.length,saved.end));
+  const selected=els.editor.value.slice(start,end);
+  if(sourceSelectionHasFormatting(selected)&&!await confirmFormattedQuote())return;
+  state.savedSelection={start,end};
+  linePrefix(level===2?'>> ':'> ');
 }
 function insertPreviewList(ordered){
   const range=previewRange();
@@ -13222,8 +13465,8 @@ async function insertDocumentEmbed(){
 $('ins-hr').onclick=()=>{if(insertPreviewBlockBelow('<hr>'))return;insertBlockBelowSelection('---')};
 $('ins-br').onclick=()=>{if(insertPreviewBlockBelow('<br>'))return;insertBlockBelowSelection('<br>')};
 $('ins-pagebreak').onclick=()=>{if(insertPreviewBlockBelow('<hr>'))return;insertBlockBelowSelection('***')};
-$('ins-quote').onclick=()=>{if(insertPreviewQuote(1))return;linePrefix('> ')};
-$('ins-quote2').onclick=()=>{if(insertPreviewQuote(2))return;linePrefix('>> ')};
+$('ins-quote').onclick=()=>applyQuote(1);
+$('ins-quote2').onclick=()=>applyQuote(2);
 $('ins-footnote').onclick=insertFootnote;
 $('ins-citation').onclick=insertCitationDefinition;
 $('ins-bibliography').onclick=insertBibliography;
@@ -13323,7 +13566,21 @@ function applyPickedColor(type,value){
   }
   const snapTable=snapshotTableSelection();
   if(snapTable&&styleTableTextSelection(prop,value,snapTable)){revealAppliedColor();if(value)trackColor(type,value);return}
-  if(!colorTargetSnapshot&&styleTableTextSelection(prop,value)){revealAppliedColor();if(value)trackColor(type,value);return}
+  // Prefer a live table selection whenever it still exists. A snapshot from a
+  // previous toolbar interaction must not redirect the command to old text.
+  if(styleTableTextSelection(prop,value)){revealAppliedColor();if(value)trackColor(type,value);return}
+  const liveSelection=window.getSelection();
+  if(liveSelection?.rangeCount){
+    const liveRange=liveSelection.getRangeAt(0);
+    if(!liveRange.collapsed&&els.preview.contains(liveRange.commonAncestorContainer)){
+      state.lastInsertionSurface='preview';
+      state.savedPreviewRange=liveRange.cloneRange();
+      const applied=stylePreviewSelection(prop,value);
+      if(applied)revealAppliedColor();
+      if(applied&&value)trackColor(type,value);
+      if(applied)return;
+    }
+  }
   if(finalizeColor(type,value)){if(value)trackColor(type,value);return}
   if(colorTargetSnapshot?.surface==='preview')restoreColorPreviewRange();
   if(colorTargetSnapshot?.surface==='preview'||state.lastInsertionSurface==='preview'){
@@ -13701,7 +13958,14 @@ async function saveVersionSnapshot(reason='자동 기록'){
 }
 function applyWorkspaceSnapshot(snapshot){
   if(!snapshot?.files||!(snapshot.files.length||snapshot.sidebarFolders?.length||snapshot.assets?.length))return false;
-  state.files=snapshot.files;
+  const seenFiles=new Set();
+  state.files=snapshot.files.filter(file=>{
+    const path=String(file?.path||file?.name||'').replace(/\\/g,'/').toLocaleLowerCase();
+    const key=`${file?.source==='local'?'local':'uploaded'}:${path}`;
+    if(!path||seenFiles.has(key))return false;
+    seenFiles.add(key);
+    return true;
+  });
   state.sidebarFolders=snapshot.sidebarFolders||[];
   state.sidebarOrder=snapshot.sidebarOrder||{};
   state.assetRoots=snapshot.assetRoots||{};

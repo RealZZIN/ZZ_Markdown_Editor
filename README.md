@@ -1,157 +1,258 @@
-# #ZZ.md
+<div align="center">
 
-웹에서 바로 사용할 수 있는 Markdown Editor입니다.
+# `#ZZ.md`
 
-Markdown 작성과 실시간 미리보기는 물론, 문서 병합, PDF 변환, 표·수식·다이어그램 편집, 파일 관리 등 문서 작업에 자주 필요한 기능들을 한곳에 모아두었습니다.
+### Write. Preview. Organize. Convert. — without leaving your document.
 
-> 현재 개발 진행 중인 프로젝트입니다.  
-> 기능과 UI는 계속 수정·추가될 예정입니다.
+**A feature-rich Markdown workspace built for people who want the speed of plain text<br>
+and the comfort of a visual editor.**
 
-## Demo
+[![Live Demo](https://img.shields.io/badge/OPEN_LIVE_DEMO-%23ZZ.md-e59abb?style=for-the-badge)](https://realzzin.github.io/ZZ_Markdown_Editor/)
+[![Built with Vite](https://img.shields.io/badge/Built_with-Vite-646CFF?style=flat-square&logo=vite&logoColor=white)](https://vite.dev/)
+[![Markdown](https://img.shields.io/badge/Markdown-Editor-1f2328?style=flat-square&logo=markdown&logoColor=white)](https://www.markdownguide.org/)
 
-https://realzzin.github.io/ZZ_Markdown_Editor/
+**[English](#english) · [한국어](#한국어)**
+
+</div>
 
 ---
 
-## Features
+# English
 
-### Markdown Editing
+## Markdown should feel lightweight — not limited
 
-- Markdown 원문 편집
-- 실시간 Preview
-- Preview 화면에서 직접 내용 수정
-- Editor / Preview 영역 크기 조절
-- 여러 Markdown 파일 및 폴더 불러오기
+`#ZZ.md` brings writing, live preview, visual editing, file organization, merging, conversion, tables, math, diagrams, and export into one focused workspace.
 
-### Document Formatting
+Use Markdown when you want control. Use the Preview when you want speed. Move between both without changing tools.
 
-- 제목 및 본문 서식
-- 글자 크기 / 글자색 / 배경색
-- 텍스트 정렬
-- 링크 및 이미지 삽입
-- 각주
-- 코드 블록 및 Syntax Highlighting
-- 수식 입력 및 렌더링
-- Mermaid 다이어그램
-- 표 생성 및 편집
-- 표 정렬 및 필터
+> [!NOTE]
+> `#ZZ.md` is actively being developed. Features and interface details may continue to evolve.
 
-### Document Navigation
+## Try it now
 
-- 제목 기반 문서 목차
-- 해시태그 탐색
-- 문서 간 이동
-- 작업 기록 및 이전 상태 복구
+### [Open the live editor →](https://realzzin.github.io/ZZ_Markdown_Editor/)
 
-### File Management
+No installation is required for the web demo. Open it, add a Markdown file, and start editing.
 
-- 여러 Markdown 파일 불러오기
-- Markdown 문서 병합
-- 이미지 및 첨부 파일 관리
-- MD / PDF 저장
-- 여러 파일 ZIP 저장
+## Why `#ZZ.md`?
 
-### File Conversion
+| One workspace | What it gives you |
+| --- | --- |
+| ✍️ **Write your way** | Edit Markdown source or work directly in the live Preview. |
+| 🗂️ **Handle real projects** | Open multiple files and folders, browse outlines and hashtags, and organize attachments. |
+| 🎨 **Format visually** | Apply headings, alignment, colors, links, images, footnotes, and reusable formatting. |
+| 📊 **Build rich documents** | Create and edit tables, code blocks, math, and Mermaid diagrams. |
+| 🔄 **Convert and combine** | Merge documents and work with Markdown, PDF, source code, CSV, and XLSX inputs. |
+| 📦 **Take your work with you** | Save as MD or PDF, or export multiple files as a ZIP archive. |
+
+## Highlights
+
+### A preview you can actually edit
+
+- Live Markdown rendering while you type
+- Direct editing inside Preview
+- Resizable Editor and Preview panes
+- Split, editor-only, and preview-focused workflows
+- Quick source editing from Preview
+- Undo, recovery history, search, and replace
+
+### More than paragraphs
+
+- Text color, background color, size, and alignment
+- Links, images, footnotes, and blockquotes
+- Syntax-highlighted code blocks
+- KaTeX / MathLive-powered equations
+- Mermaid diagrams
+- Editable tables with sorting and filtering
+- Custom document fonts and light, dark, or personalized themes
+
+### Made for a folder full of notes
+
+- Open multiple Markdown files or an entire folder
+- Navigate nested folders, document outlines, and hashtags
+- Manage images and attached files
+- Merge selected documents
+- Save individual files or export a collection as ZIP
+- Restore earlier workspace and document states
+
+### Conversion and export
 
 - Markdown → PDF
-- PDF → Markdown
-- 소스 코드 파일 → Markdown Code Block
-- CSV / XLSX 데이터 불러오기
+- PDF → editable Markdown
+- Source code → Markdown code block
+- CSV / XLSX data import
+- Multi-page PDF layout and scale controls
 
-> PDF → Markdown 변환 결과는 원본 PDF의 구조와 레이아웃에 따라 일부 차이가 발생할 수 있습니다.
+> [!IMPORTANT]
+> PDF-to-Markdown conversion is best-effort. Results can vary depending on the original PDF's layout, embedded fonts, tables, and graphics.
 
-### Appearance
+## Quick start for developers
 
-- Light / Dark Theme
-- 사용자 지정 배경색
-- 사용자 지정 글자색
-- 사이드바 크기 조절
-- Editor / Preview 레이아웃 조절
-
----
-
-## Screenshot
-
-현재 화면
-
-<!--
-![ZZ Markdown Editor](./docs/screenshot.png)
--->
-
----
-
-## Development Status
-
-현재 기본적인 Markdown 편집 및 문서 관리 기능은 구현되어 있으며, 사용 중 발견되는 문제를 수정하고 기능을 추가하고 있습니다.
-
-### Planned
-
-- [ ] 모바일 환경 최적화
-- [ ] 전체 UI / UX 개선
-- [ ] 처음 사용하는 사용자를 위한 가이드 / 튜토리얼
-- [ ] 표 편집 기능 개선
-- [ ] 파일 관리 기능 개선
-- [ ] 추가 Markdown 편집 기능
-- [ ] 단축키 및 작업 편의 기능 추가
-- [ ] 오류 처리 및 안정성 개선
-- [ ] 테스트 확대
-
----
-
-## Tech Stack
-
-- HTML
-- CSS
-- JavaScript
-- Vite
-
-### Libraries
-
-- `marked` — Markdown parsing
-- `highlight.js` — Syntax Highlighting
-- `KaTeX` / `MathLive` — Math
-- `Mermaid` — Diagram
-- `PDF.js` — PDF processing
-- `SheetJS` — Spreadsheet processing
-- `JSZip` — ZIP export
-
----
-
-## Getting Started
-
-### Clone
+Requirements: a current Node.js release and npm.
 
 ```bash
 git clone https://github.com/RealZZIN/ZZ_Markdown_Editor.git
 cd ZZ_Markdown_Editor
-```
-
-### Install
-
-```bash
 npm install
-```
-
-### Run
-
-```bash
 npm run dev
 ```
 
-개발 서버 실행 후 터미널에 표시되는 주소로 접속합니다.
+Open the local address shown in the terminal.
 
-### Build
+### Production build
 
 ```bash
 npm run build
+npm run preview
 ```
 
-빌드 결과는 `dist/` 디렉터리에 생성됩니다.
+The production files are generated in `dist/`.
+
+## Technology
+
+`#ZZ.md` is built with HTML, CSS, JavaScript, and Vite.
+
+| Library | Purpose |
+| --- | --- |
+| marked | Markdown parsing |
+| highlight.js | Syntax highlighting |
+| KaTeX / MathLive | Mathematical notation |
+| Mermaid | Diagrams |
+| PDF.js | PDF processing |
+| SheetJS | Spreadsheet import |
+| JSZip | ZIP export |
+
+## Project status
+
+The editor is usable today and is under active development. Current work focuses on responsiveness, editing stability, file management, PDF performance, and a smoother experience across desktop and mobile screens.
+
+If you find a reproducible issue, please include the input Markdown, what you expected, what happened, and—when helpful—a screenshot.
+
+<div align="center">
+
+### Plain text at heart. A complete document workspace in practice.
+
+[Launch `#ZZ.md`](https://realzzin.github.io/ZZ_Markdown_Editor/) · [Back to top](#zzmd)
+
+</div>
 
 ---
 
-## Project Status
+# 한국어
 
-`#ZZ.md`는 현재 개발 중입니다.
+## Markdown은 가벼워야 하지만, 기능까지 가벼울 필요는 없으니까
 
-실제 Markdown 문서를 작성하고 관리하면서 필요한 기능을 중심으로 개선하고 있으며, 기존 기능의 안정화와 함께 새로운 기능도 계속 추가할 예정입니다.
+`#ZZ.md`는 작성, 실시간 미리보기, 시각적 편집, 파일 관리, 문서 병합, 변환, 표, 수식, 다이어그램, 내보내기를 하나의 작업 공간에 담은 Markdown 편집기입니다.
+
+세밀하게 다듬을 때는 Markdown 원문을, 빠르게 편집할 때는 Preview를 사용하세요. 도구를 바꾸지 않고 두 방식을 자연스럽게 오갈 수 있습니다.
+
+> [!NOTE]
+> `#ZZ.md`는 활발하게 개발 중입니다. 기능과 화면 구성은 계속 개선될 수 있습니다.
+
+## 지금 사용해 보기
+
+### [웹에서 바로 편집기 열기 →](https://realzzin.github.io/ZZ_Markdown_Editor/)
+
+웹 데모는 설치할 필요가 없습니다. 편집기를 열고 Markdown 파일을 추가하면 바로 시작할 수 있습니다.
+
+## 왜 `#ZZ.md`인가요?
+
+| 하나의 작업 공간 | 할 수 있는 일 |
+| --- | --- |
+| ✍️ **원하는 방식으로 작성** | Markdown 원문과 실시간 Preview 양쪽에서 문서를 편집합니다. |
+| 🗂️ **실제 프로젝트 관리** | 여러 파일과 폴더를 열고 목차·해시태그를 탐색하며 첨부 파일을 관리합니다. |
+| 🎨 **눈으로 보며 서식 적용** | 제목, 정렬, 색상, 링크, 이미지, 각주와 사용자 서식을 적용합니다. |
+| 📊 **풍부한 문서 제작** | 표, 코드 블록, 수식과 Mermaid 다이어그램을 만들고 편집합니다. |
+| 🔄 **변환하고 합치기** | 문서를 병합하고 Markdown, PDF, 소스 코드, CSV, XLSX를 다룹니다. |
+| 📦 **필요한 형태로 저장** | MD 또는 PDF로 저장하고 여러 파일을 ZIP으로 내보냅니다. |
+
+## 주요 기능
+
+### 보기만 하는 미리보기가 아닙니다
+
+- 입력과 동시에 반영되는 Markdown Preview
+- Preview 화면에서 직접 내용 편집
+- Editor와 Preview 영역 크기 조절
+- 분할 보기, 편집 중심, 미리보기 중심 작업 방식
+- Preview에서 Markdown 원문 빠른 편집
+- 실행 취소, 복원 기록, 검색과 바꾸기
+
+### 평범한 본문 그 이상
+
+- 글자색, 배경색, 크기와 정렬
+- 링크, 이미지, 각주와 인용문
+- 문법 강조 코드 블록
+- KaTeX / MathLive 기반 수식
+- Mermaid 다이어그램
+- 정렬과 필터를 지원하는 편집 가능한 표
+- 사용자 문서 폰트와 라이트·다크·사용자 지정 테마
+
+### 수많은 노트와 폴더를 위해
+
+- 여러 Markdown 파일 또는 폴더 전체 열기
+- 중첩 폴더, 문서 목차와 해시태그 탐색
+- 이미지와 첨부 파일 관리
+- 선택한 문서 병합
+- 개별 파일 저장과 여러 파일 ZIP 내보내기
+- 이전 작업 공간과 문서 상태 복원
+
+### 변환과 내보내기
+
+- Markdown → PDF
+- PDF → 편집 가능한 Markdown
+- 소스 코드 → Markdown 코드 블록
+- CSV / XLSX 데이터 불러오기
+- 여러 페이지 PDF 배치와 배율 조절
+
+> [!IMPORTANT]
+> PDF → Markdown 변환은 원본 구조를 최대한 보존하는 방식입니다. 원본 PDF의 레이아웃, 내장 폰트, 표와 그래픽 구성에 따라 결과가 달라질 수 있습니다.
+
+## 개발 환경에서 실행하기
+
+최신 Node.js와 npm이 필요합니다.
+
+```bash
+git clone https://github.com/RealZZIN/ZZ_Markdown_Editor.git
+cd ZZ_Markdown_Editor
+npm install
+npm run dev
+```
+
+실행 후 터미널에 표시되는 로컬 주소로 접속하세요.
+
+### 배포용 빌드
+
+```bash
+npm run build
+npm run preview
+```
+
+빌드 결과는 `dist/`에 생성됩니다.
+
+## 사용 기술
+
+`#ZZ.md`는 HTML, CSS, JavaScript와 Vite로 제작되었습니다.
+
+| 라이브러리 | 용도 |
+| --- | --- |
+| marked | Markdown 파싱 |
+| highlight.js | 코드 문법 강조 |
+| KaTeX / MathLive | 수식 표현과 편집 |
+| Mermaid | 다이어그램 |
+| PDF.js | PDF 처리 |
+| SheetJS | 스프레드시트 불러오기 |
+| JSZip | ZIP 내보내기 |
+
+## 프로젝트 상태
+
+현재 실제 문서 편집에 사용할 수 있으며 계속 개발 중입니다. 반응 속도, 편집 안정성, 파일 관리, PDF 성능과 데스크톱·모바일 사용 경험을 중심으로 개선하고 있습니다.
+
+재현 가능한 문제를 발견했다면 입력한 Markdown, 기대한 결과, 실제 결과와 필요한 경우 스크린샷을 함께 남겨 주세요.
+
+<div align="center">
+
+### 본질은 가벼운 텍스트, 경험은 완전한 문서 작업 공간.
+
+[지금 `#ZZ.md` 사용하기](https://realzzin.github.io/ZZ_Markdown_Editor/) · [맨 위로](#zzmd)
+
+</div>

@@ -2485,10 +2485,14 @@ body.dark .preview pre code *::selection { background: #60a5fa; color: #111110; 
 .preview blockquote {
   position: relative;
   border-left: 2px solid var(--t1);
-  margin: 0 0 .9em;
-  padding: .5em 1em;
+  margin: .15em 0 .65em;
+  padding: .24em .85em;
   color: var(--t2);
+  line-height: 1.42;
 }
+.preview blockquote > :first-child { margin-top: 0; }
+.preview blockquote > :last-child { margin-bottom: 0; }
+.preview blockquote p { margin-block: .22em; line-height: inherit; }
 .preview blockquote::before {
   content: '';
   position: absolute;
@@ -3299,7 +3303,30 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
   padding: 24px;
   background: var(--s2);
 }
-.print-preview-surface { transform-origin: top center; }
+.print-preview-surface {
+  position: relative;
+  transform-origin: top center;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.print-preview-surface.is-rendering::after {
+  content: '페이지를 업데이트하는 중...';
+  position: sticky;
+  left: 50%;
+  bottom: 16px;
+  z-index: 4;
+  display: block;
+  width: max-content;
+  margin: -42px auto 12px;
+  padding: 7px 11px;
+  border: 1px solid var(--b1);
+  border-radius: 999px;
+  background: color-mix(in srgb,var(--white) 92%,transparent);
+  color: var(--t2);
+  font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.16);
+  pointer-events: none;
+}
 .print-preview-sheet {
   width: min(794px,100%);
   min-height: 1123px;
@@ -3314,6 +3341,22 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
   justify-content: center;
   gap: 24px;
   min-width: min-content;
+}
+.print-preview-sheets[data-truncated="true"]::after {
+  content: '미리보기는 처음 18쪽까지만 표시합니다. PDF 저장 시 전체 문서를 처리합니다.';
+  position: sticky;
+  bottom: 10px;
+  justify-self: center;
+  width: max-content;
+  max-width: min(520px,calc(100vw - 80px));
+  padding: 8px 12px;
+  border: 1px solid var(--b1);
+  border-radius: 999px;
+  background: color-mix(in srgb,var(--white) 94%,transparent);
+  color: var(--t2);
+  font-size: 12px;
+  text-align: center;
+  box-shadow: 0 4px 16px rgba(0,0,0,.14);
 }
 .print-preview-loading {
   width: min(794px,calc(100vw - 80px));
@@ -3395,7 +3438,6 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
   column-width: var(--flow-content-width);
   column-gap: var(--flow-gap);
   column-fill: auto;
-  contain: layout style;
   break-inside: avoid;
   page-break-inside: avoid;
   transform-origin: top left;
@@ -3654,10 +3696,18 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
   color: var(--t1);
 }
 .find-replace-fields input[type="text"]::placeholder { color: var(--t3); opacity: .86; }
+.find-space-preview { display:none;min-width:0;min-height:27px;box-sizing:border-box;margin-top:2px;align-items:center;gap:7px;color:var(--t3);font-size:10.5px;font-weight:650;line-height:1; }
+.find-space-preview.active { display:flex; }
+.find-space-preview > span { flex:0 0 auto;color:var(--t3);font-size:10px;font-weight:650; }
+.find-space-preview code { display:flex;align-items:center;min-width:0;max-width:100%;overflow:hidden;padding:3px 0;border:0;background:transparent;color:var(--t2);font:700 11px/1.25 var(--mono);letter-spacing:.005em;white-space:nowrap;text-overflow:ellipsis; }
+.find-space-preview code i { display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;height:17px;margin:0 2px;padding:0 5px;border:0;border-radius:4px;background:color-mix(in srgb,var(--accent) 14%,var(--s2));color:color-mix(in srgb,var(--accent) 70%,var(--t1));font:800 7.5px/1 var(--font);font-style:normal;letter-spacing:.05em; }
+.find-space-preview code i:first-child { margin-left:0; }
+.find-space-preview code i:last-child { margin-right:0; }
 .find-replace-options {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 24px;
+  gap: 8px 18px;
   color: var(--t2);
   font-size: 12px;
 }
