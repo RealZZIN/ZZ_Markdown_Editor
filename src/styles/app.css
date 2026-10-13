@@ -5519,3 +5519,9 @@ body.custom-theme .edit-guide-focus { border-color:color-mix(in srgb,var(--t1) 7
 @media(prefers-reduced-motion:reduce){
   .feature-guide-format-document mark,.feature-guide-format-cursor,.feature-guide-format-toolbar b,.feature-guide-format-toolbar i,.feature-guide-sync-source em,.feature-guide-sync-source b,.feature-guide-sync-link i,.option-markdown-animation *,.option-link-animation *,.option-quick-edit-animation *,.option-table-animation *,.option-swap-animation * { animation:none!important; }
 }
+.busy-notice { position:fixed;right:14px;bottom:14px;z-index:24000;display:flex;align-items:center;gap:8px;max-width:calc(100vw - 28px);padding:8px 11px;border:1px solid var(--b2);border-radius:7px;background:color-mix(in srgb,var(--white) 94%,transparent);color:var(--t1);box-shadow:0 6px 20px #0003;font-size:12px;font-weight:700;line-height:1.2;pointer-events:none;backdrop-filter:blur(8px); }
+.busy-notice[hidden] { display:none; }
+.busy-notice-spinner { width:13px;height:13px;box-sizing:border-box;border:2px solid color-mix(in srgb,var(--t1) 22%,transparent);border-top-color:var(--accent);border-radius:50%;animation:busy-notice-spin .7s linear infinite; }
+@keyframes busy-notice-spin { to { transform:rotate(360deg); } }
+@media(max-width:700px){.busy-notice{right:10px;bottom:10px;max-width:calc(100vw - 20px)}}
+@media(prefers-reduced-motion:reduce){.busy-notice-spinner{animation-duration:1.4s}}

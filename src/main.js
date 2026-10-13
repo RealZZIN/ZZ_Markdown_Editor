@@ -39,6 +39,42 @@ if(window.mermaid){
 }
 const parser=window.marked||{parse:s=>s.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])).replace(/\n/g,'<br>')};
 function setStatus(t){els.status.textContent=t}
+let busyNoticeDepth=0,busyNoticeTimer=0,busyNoticeVisibleAt=0;
+function ensureBusyNotice(){
+  let notice=document.getElementById('zz-busy-notice');
+  if(notice)return notice;
+  notice=document.createElement('div');
+  notice.id='zz-busy-notice';notice.className='busy-notice';notice.hidden=true;
+  notice.setAttribute('role','status');notice.setAttribute('aria-live','polite');
+  notice.innerHTML='<span class="busy-notice-spinner" aria-hidden="true"></span><span data-busy-notice-label></span>';
+  document.body.appendChild(notice);
+  return notice;
+}
+function beginBusyNotice(label,{immediate=false}={}){
+  const notice=ensureBusyNotice(),labelEl=notice.querySelector('[data-busy-notice-label]');
+  busyNoticeDepth++;
+  if(labelEl)labelEl.textContent=label;
+  clearTimeout(busyNoticeTimer);
+  if(immediate&&notice.hidden){
+    busyNoticeVisibleAt=performance.now();notice.hidden=false;
+  }else if(notice.hidden)busyNoticeTimer=setTimeout(()=>{
+    if(!busyNoticeDepth)return;
+    busyNoticeVisibleAt=performance.now();notice.hidden=false;
+  },140);
+  let ended=false;
+  return()=>{
+    if(ended)return;ended=true;
+    busyNoticeDepth=Math.max(0,busyNoticeDepth-1);
+    if(busyNoticeDepth)return;
+    clearTimeout(busyNoticeTimer);
+    const hide=()=>{if(!busyNoticeDepth)notice.hidden=true};
+    const remaining=notice.hidden?0:Math.max(0,240-(performance.now()-busyNoticeVisibleAt));
+    busyNoticeTimer=setTimeout(hide,remaining);
+  };
+}
+function waitForBusyNoticePaint(){
+  return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+}
 function setSidebarWidth(px,save=false){const next=Math.max(240,Math.min(520,Math.round(px)));document.documentElement.style.setProperty('--sw',next+'px');if(save)localStorage.setItem('md-sidebar-width',String(next))}
 const sidebarUploadPaths=new WeakMap();
 state.sidebarFolders=[];
@@ -304,6 +340,9 @@ function notifyMissingImages(files){
   alert(`이 문서에는 함께 필요한 이미지가 있어요.\n\nMD 파일만 업로드하면 이미지가 보이지 않을 수 있습니다.\n이미지 파일도 같이 업로드하거나, 폴더 업로드로 MD와 이미지를 한 번에 올려주세요.\n\n확인된 이미지: ${sample}${missing.length>3?' 외 '+(missing.length-3)+'개':''}`);
 }
 async function addFiles(files){
+  const finishBusy=beginBusyNotice(uiLanguage==='en'?'Uploading files…':'파일을 불러오는 중…');
+  await waitForBusyNoticePaint();
+  try{
   const arr=[...files],jobs=[];
   const activeFileBeforeSort=state.files[state.active]||null;
   const activePreviewNeedsAssetRefresh=state.mode==='edit'&&arr.some(file=>imageExt.test(file.name));
@@ -339,6 +378,7 @@ async function addFiles(files){
   renderAll({forcePreview:activePreviewNeedsAssetRefresh,deferPreview:state.mode==='edit',visibleOnly:true});
   notifyMissingImages(addedDocs.filter(file=>!file.convertedFromCode));
   if(typeof scheduleWorkspaceSave==='function')scheduleWorkspaceSave();
+  }finally{finishBusy()}
 }
 function resolveImage(src){if(/^(https?:|data:|blob:|#)/i.test(src))return src;const active=state.files[state.active];for(const k of imageKeysFor(src,active)){if(state.images[k])return state.images[k]}return src}
 function markdownImageSrc(src){const resolved=resolveImage(src.trim());return /^(https?:|data:|blob:|#)/i.test(resolved)?resolved:encodeURI(resolved)}
@@ -983,14 +1023,30 @@ function updateInlineCodeInk(){
   corrections.forEach(([el,color])=>{el.dataset.codeSurface='1';el.style.setProperty('--code-surface-fix',color)});
 }
 let chipContrastFrame=0;
-const chipContrastObserver=new MutationObserver(()=>{
+const chipContrastObserver=new MutationObserver(mutations=>{
   if(chipContrastFrame)return;
+  let needsCodeRefresh=false,needsTableRefresh=false,needsEyedroppers=false;
+  const contains=(node,selector)=>node.nodeType===Node.ELEMENT_NODE&&(node.matches(selector)||node.querySelector(selector));
+  for(const mutation of mutations){
+    if(mutation.type==='attributes'){
+      if(mutation.target===document.body&&mutation.attributeName==='class')needsCodeRefresh=true;
+      continue;
+    }
+    for(const node of mutation.addedNodes){
+      if(!needsCodeRefresh&&contains(node,'code,[data-inline-code-ink],[data-code-surface]'))needsCodeRefresh=true;
+      if(!needsTableRefresh&&contains(node,'table'))needsTableRefresh=true;
+      if(!needsEyedroppers&&contains(node,'.cp-head'))needsEyedroppers=true;
+    }
+  }
+  if(!needsCodeRefresh&&!needsTableRefresh&&!needsEyedroppers)return;
   chipContrastFrame=requestAnimationFrame(()=>{
-    chipContrastFrame=0;chipContrastObserver.disconnect();
-    try{installColorEyedroppers();updateInlineCodeInk();installTableFilters()}finally{chipContrastObserver.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['style','class']})}
+    chipContrastFrame=0;
+    if(needsEyedroppers)installColorEyedroppers();
+    if(needsCodeRefresh)updateInlineCodeInk();
+    if(needsTableRefresh)installTableFilters();
   });
 });
-chipContrastObserver.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['style','class']});
+chipContrastObserver.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});
 installColorEyedroppers();
 function fixSpanColors(container){
   if(!colorCorrectEnabled)return;
@@ -6644,6 +6700,23 @@ function replaceRange(value,start,end,keepSel=false){pushHistory(true);els.edito
 function replaceSelection(value){const{start,end}=selectionText();replaceRange(value,start,end)}
 function placeholderSelection(sel,word='TEXT'){return sel.start===sel.end?{...sel,text:word,placeholder:true}:sel}
 function wrapSelection(before,after=before){let sel=placeholderSelection(selectionText());const core=sel.text.trimEnd();const trail=sel.text.slice(core.length);const value=`${before}${core}${after}${trail}`;replaceRange(value,sel.start,sel.end,true);if(sel.placeholder)els.editor.setSelectionRange(sel.start+before.length,sel.start+before.length+core.length)}
+function sourceDefaultStyleValue(styleName){
+  const previewStyle=getComputedStyle(els.preview);
+  if(styleName==='color')return previewStyle.color||getComputedStyle(document.body).color;
+  if(styleName==='background-color'){
+    const previewBackground=previewStyle.backgroundColor;
+    return previewBackground&&previewBackground!=='rgba(0, 0, 0, 0)'?previewBackground:getComputedStyle(document.body).backgroundColor;
+  }
+  return'inherit';
+}
+function stripInlineStyleFromHtml(html,styleName){
+  if(!html.includes('<'))return html;
+  const template=document.createElement('template');template.innerHTML=html;
+  template.content.querySelectorAll('[style]').forEach(node=>removeInlineStyleProperty(node,styleName));
+  if(styleName==='color')template.content.querySelectorAll('font[color]').forEach(font=>{font.removeAttribute('color');if(!font.attributes.length)font.replaceWith(...font.childNodes)});
+  if(styleName==='background-color')template.content.querySelectorAll('mark').forEach(mark=>mark.replaceWith(...mark.childNodes));
+  return template.innerHTML;
+}
 function applyHeading(tag){
   if(!tag)return;
   if(applyPreviewCommand('formatBlock',tag))return;
@@ -6684,7 +6757,8 @@ function styleSpan(styleName,value){
   const m=sel.text.match(fullSpanRe);
   if(m){
     const nextStyle=mergeStyle(m[1],styleName,value);
-    replaceRange(nextStyle?`<span style="${nextStyle}">${m[2]}</span>`:m[2],sel.start,sel.end,true);
+    const inner=value===''||value==null?stripInlineStyleFromHtml(m[2],styleName):m[2];
+    replaceRange(nextStyle?`<span style="${nextStyle}">${inner}</span>`:inner,sel.start,sel.end,true);
     return;
   }
 
@@ -6699,8 +6773,11 @@ function styleSpan(styleName,value){
     const contentStart=openIndex+openSource[0].length,contentEnd=sel.end+closeOffset;
     const leading=full.slice(contentStart,sel.start),selected=full.slice(sel.start,sel.end),trailing=full.slice(sel.end,contentEnd);
     const wrap=(text,style)=>text?(style?`<span style="${style}">${text}</span>`:text):'';
-    const originalStyle=openSource[1],selectedStyle=mergeStyle(originalStyle,styleName,value);
-    replaceRange(wrap(leading,originalStyle)+wrap(selected,selectedStyle)+wrap(trailing,originalStyle),openIndex,contentEnd+7,true);
+    const originalStyle=openSource[1];
+    const clearing=value===''||value==null;
+    const selectedStyle=mergeStyle(originalStyle,styleName,clearing?sourceDefaultStyleValue(styleName):value);
+    const selectedContent=clearing?stripInlineStyleFromHtml(selected,styleName):selected;
+    replaceRange(wrap(leading,originalStyle)+wrap(selectedContent,selectedStyle)+wrap(trailing,originalStyle),openIndex,contentEnd+7,true);
     return;
   }
   const openMatch=before.match(/<span style="([^"]*)">\s*$/);
@@ -8170,15 +8247,19 @@ function tableFormatTextParts(rangeOverride=null,cellsOverride=null){
   const range=cells.length?null:(rangeOverride&&els.preview.contains(rangeOverride.commonAncestorContainer)?rangeOverride.cloneRange():previewRange());
   if(!cells.length&&(!range||range.collapsed))return null;
   if(!cells.length&&![...els.preview.querySelectorAll('td,th')].some(cell=>range.intersectsNode(cell)))return null;
-  const parts=[],walker=document.createTreeWalker(els.preview,NodeFilter.SHOW_TEXT);
-  let node;
-  while((node=walker.nextNode())){
-    if(!node.data||node.parentElement.closest('.block-move-handle,.form-move-handle,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.code-head,.zz-math'))continue;
-    if(cells.length){if(!cells.some(cell=>cell.contains(node)))continue}
-    else if(!range.intersectsNode(node))continue;
+  const parts=[],roots=cells.length?cells:[range.commonAncestorContainer.nodeType===Node.TEXT_NODE?range.commonAncestorContainer.parentElement:range.commonAncestorContainer];
+  const visit=node=>{
+    if(!node.data||node.parentElement.closest('.block-move-handle,.form-move-handle,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.code-head,.zz-math'))return;
+    if(cells.length){if(!cells.some(cell=>cell.contains(node)))return}
+    else if(!range.intersectsNode(node))return;
     const start=range&&node===range.startContainer?range.startOffset:0;
     const end=range&&node===range.endContainer?range.endOffset:node.length;
     if(end>start)parts.push({node,start,end});
+  };
+  for(const root of roots){
+    if(root.nodeType===Node.TEXT_NODE){visit(root);continue}
+    const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let node;
+    while((node=walker.nextNode()))visit(node);
   }
   return {parts,cells};
 }
@@ -8408,11 +8489,17 @@ function styleWholePreview(styleName,value){
   return true;
 }
 function clearPreviewInlineStyle(range,styleName){
-  const parts=[],walker=document.createTreeWalker(els.preview,NodeFilter.SHOW_TEXT);let node;
-  while((node=walker.nextNode())){
-    if(!node.data||node.parentElement.closest('.block-move-handle,.form-move-handle,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.code-head,.zz-math')||!range.intersectsNode(node))continue;
+  const parts=[];
+  const root=range.commonAncestorContainer.nodeType===Node.TEXT_NODE?range.commonAncestorContainer.parentElement:range.commonAncestorContainer;
+  const visit=node=>{
+    if(!node.data||node.parentElement.closest('.block-move-handle,.form-move-handle,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.code-head,.zz-math')||!range.intersectsNode(node))return;
     const start=node===range.startContainer?range.startOffset:0,end=node===range.endContainer?range.endOffset:node.length;
     if(end>start)parts.push({node,start,end});
+  };
+  if(root.nodeType===Node.TEXT_NODE)visit(root);
+  else{
+    const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let node;
+    while((node=walker.nextNode()))visit(node);
   }
   if(!parts.length)return false;
   pushHistory(true);const reset=[];
@@ -13157,7 +13244,7 @@ $('ins-ol').onclick=()=>{if(insertPreviewList(true))return;orderedListPrefix()};
 let colorDragState=null;
 let colorTargetSnapshot=null;
 function captureColorTarget(){
-  const cells=[...els.preview.querySelectorAll('td.table-cell-selected,th.table-cell-selected')];
+  let cells=[...els.preview.querySelectorAll('td.table-cell-selected,th.table-cell-selected')];
   const selection=window.getSelection();
   let range=null;
   if(selection?.rangeCount){
@@ -13165,6 +13252,10 @@ function captureColorTarget(){
     if(els.preview.contains(live.commonAncestorContainer)&&!live.collapsed)range=live.cloneRange();
   }
   if(!range&&state.savedPreviewRange&&!state.savedPreviewRange.collapsed&&els.preview.contains(state.savedPreviewRange.commonAncestorContainer))range=state.savedPreviewRange.cloneRange();
+  // A real text selection is more specific than stale table-cell selection.
+  // Keeping both made the color picker format whole cells instead of the text
+  // the user had just highlighted.
+  if(range&&range.toString())cells=[];
   const editorSelection=document.activeElement===els.editor||els.editor.selectionStart!==els.editor.selectionEnd
     ?{start:els.editor.selectionStart,end:els.editor.selectionEnd}
     :state.savedSelection&&state.savedSelection.start!==state.savedSelection.end?{...state.savedSelection}:null;
@@ -13643,24 +13734,33 @@ async function showVersionHistory(){
   wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true"><h3>버전 기록</h3>${recoveryItem||documentItems
     ?`<div class="version-list">${recoveryItem}${documentItems}</div>`
     :'<p class="recovery-summary">저장된 버전이 없습니다.</p>'}<div class="modal-actions"><button class="tool primary" type="button" data-close-version>닫기</button></div></div>`;
-  wrap.onclick=e=>{
+  wrap.onclick=async e=>{
     const button=e.target.closest('[data-version]');
     if(button){
       const version=versions[Number(button.dataset.version)];
-      if(version){restoreEditor(version.text);wrap.remove();scheduleWorkspaceSave()}
+      if(version){
+        const finishBusy=beginBusyNotice(uiLanguage==='en'?'Restoring document…':'문서를 복원하는 중…',{immediate:true});
+        wrap.remove();await waitForBusyNoticePaint();
+        try{restoreEditor(version.text);scheduleWorkspaceSave()}finally{finishBusy()}
+      }
     }else if(e.target.closest('[data-recover-workspace]')){
-      if(applyWorkspaceSnapshot(snapshot)){wrap.remove();scheduleWorkspaceSave()}
+      const finishBusy=beginBusyNotice(uiLanguage==='en'?'Restoring workspace…':'작업을 복원하는 중…',{immediate:true});
+      wrap.remove();await waitForBusyNoticePaint();
+      try{if(applyWorkspaceSnapshot(snapshot))scheduleWorkspaceSave()}finally{finishBusy()}
     }else if(e.target.closest('[data-close-version]'))wrap.remove();
   };
   document.body.appendChild(wrap);
 }
 async function restoreWorkspaceSession(){
-  const snapshot=await zzStoreGet('session','latest').catch(()=>null);
+  const finishLookup=beginBusyNotice(uiLanguage==='en'?'Checking recovery data…':'복원 데이터를 확인하는 중…');
+  const snapshot=await zzStoreGet('session','latest').catch(()=>null).finally(finishLookup);
   if(!(snapshot?.files?.length||snapshot?.sidebarFolders?.length||snapshot?.assets?.length)||state.files.length)return;
   const age=new Date(snapshot.savedAt).toLocaleString();
   const dialog=await showInsertDialog('작업 복구',`<p class="recovery-summary">${htmlEsc(age)}에 자동 저장된 문서 ${snapshot.files.length}개가 있습니다.<br>브라우저 저장소가 지워지기 전까지 이 기록을 복구할 수 있습니다.</p>`,'복구',wrap=>wrap.classList.add('recovery-dialog'));
   if(!dialog)return;
-  applyWorkspaceSnapshot(snapshot);
+  const finishBusy=beginBusyNotice(uiLanguage==='en'?'Restoring workspace…':'작업을 복원하는 중…',{immediate:true});
+  await waitForBusyNoticePaint();
+  try{applyWorkspaceSnapshot(snapshot)}finally{finishBusy()}
 }
 function exportCompatibilityIssues(text){
   const source=String(text||''),issues=[];
