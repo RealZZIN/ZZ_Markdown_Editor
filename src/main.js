@@ -629,7 +629,7 @@ function refreshZzTocSource(source){
   };
 }
 function refreshEditorTocBlocks(){
-  if(!/(?:<!--|&lt;!--)\s*zz:toc\b/i.test(els.editor.value))return false;
+  if(!els.editor.value.includes('zz:toc')||!/(?:<!--|&lt;!--)\s*zz:toc\b/i.test(els.editor.value))return false;
   const start=els.editor.selectionStart,end=els.editor.selectionEnd;
   const refreshed=refreshZzTocSource(els.editor.value);
   if(refreshed.text===els.editor.value)return false;
@@ -644,6 +644,15 @@ function refreshEditorTocBlocks(){
   els.editor.value=refreshed.text;
   els.editor.setSelectionRange(mapOffset(start),mapOffset(end));
   return true;
+}
+let editorTocRefreshTimer=0;
+function scheduleEditorTocRefresh(){
+  clearTimeout(editorTocRefreshTimer);
+  if(!els.editor.value.includes('zz:toc'))return;
+  editorTocRefreshTimer=setTimeout(()=>{
+    editorTocRefreshTimer=0;
+    if(refreshEditorTocBlocks()){syncActive();pushHistory()}
+  },320);
 }
 function renderZzToc(attrsRaw,source){
   const attrs=parseZzAttributes(attrsRaw);
@@ -2258,7 +2267,7 @@ els.preview.addEventListener('mouseleave',event=>{
   if(!sourceSyntaxPinned&&sourceSyntaxPopover&&!sourceSyntaxPopover.contains(event.relatedTarget))sourceSyntaxHideTimer=setTimeout(closeSourceSyntaxPopover,240);
 });
 document.addEventListener('keydown',event=>{
-  if(event.key==='Control'&&sourceSyntaxPopover){
+  if(shortcutMatches(event,'quickEditPin')&&sourceSyntaxPopover){
     pinSourceSyntaxPopover();
   }else if(event.key==='Escape'&&sourceSyntaxPopover){
     event.preventDefault();closeSourceSyntaxPopover();
@@ -2559,7 +2568,7 @@ els.preview.addEventListener('click',e=>{
     return;
   }
   const direct=e.target.closest('a[data-movable],code[data-movable],hr[data-movable],.zz-math[data-movable],mark[data-movable]')||formMoveCandidate(e);
-  const candidate=e.altKey?direct:null;
+  const candidate=direct?.matches('hr,.zz-math')||e.altKey?direct:null;
   if(!clickMoveElement&&candidate){
     e.preventDefault();
     e.stopPropagation();
@@ -2822,6 +2831,7 @@ function addTableResize(container){
         if(e.button!==0)return;
         e.preventDefault();e.stopPropagation();
         h.setPointerCapture?.(e.pointerId);
+        document.body.classList.add('table-resizing');window.getSelection()?.removeAllRanges();clearClickMove();
         highlightColumn(colIdx,true);h.classList.add('dragging');
         tblResizeDrag={type:'col',th:cell,h,pointerId:e.pointerId,startX:e.clientX,startW:cell.offsetWidth,startTableW:table.offsetWidth,colIdx,table,lockTableColumns,updateOuterHandles,highlightColumn,started:false};
       });
@@ -2839,6 +2849,7 @@ function addTableResize(container){
         if(e.button!==0)return;
         e.preventDefault();e.stopPropagation();
         h.setPointerCapture?.(e.pointerId);
+        document.body.classList.add('table-resizing');window.getSelection()?.removeAllRanges();clearClickMove();
         h.classList.add('dragging');
         tblResizeDrag={type:'row',row,rowIdx,h,pointerId:e.pointerId,startY:e.clientY,startH:row.offsetHeight,startTableH:table.offsetHeight,table,lockTableRows,updateOuterHandles,started:false};
       });
@@ -2850,8 +2861,9 @@ function addTableResize(container){
       if(e.button!==0)return;
       e.preventDefault();e.stopPropagation();
       corner.setPointerCapture?.(e.pointerId);
+      document.body.classList.add('table-resizing');window.getSelection()?.removeAllRanges();clearClickMove();
       corner.classList.add('dragging');
-      tblResizeDrag={type:'table',h:corner,pointerId:e.pointerId,startX:e.clientX,startY:e.clientY,startW:table.offsetWidth,startH:table.offsetHeight,table,updateOuterHandles,started:false};
+      tblResizeDrag={type:'table',h:corner,pointerId:e.pointerId,startX:e.clientX,startY:e.clientY,startW:table.offsetWidth,startH:table.offsetHeight,table,updateOuterHandles,rowBaseHeights:Array.from(table.querySelectorAll('tr')).map(row=>row.offsetHeight),started:false};
     });
     const tableRows=Array.from(table.querySelectorAll('tr'));
     const lastRow=tableRows[tableRows.length-1];
@@ -2934,9 +2946,9 @@ document.addEventListener('pointermove',e=>{
     tblResizeDrag.updateOuterHandles?.();
     const scale=Math.max(.5,(tblResizeDrag.startH+dy)/Math.max(1,tblResizeDrag.startH));
     tblResizeDrag.table.style.height=Math.max(56,tblResizeDrag.startH+dy)+'px';
-    Array.from(tblResizeDrag.table.querySelectorAll('tr')).forEach(row=>{
-      if(!row.dataset.baseH)row.dataset.baseH=row.offsetHeight;
-      row.style.height=Math.max(28,Number(row.dataset.baseH)*scale)+'px';
+    Array.from(tblResizeDrag.table.querySelectorAll('tr')).forEach((row,index)=>{
+      const base=tblResizeDrag.rowBaseHeights[index]||row.offsetHeight;
+      row.style.height=Math.max(28,base*scale)+'px';
     });
     updateTableCellOverflow(tblResizeDrag.table);
   }
@@ -2953,6 +2965,7 @@ function finishTableResize(e){
     tblResizeDrag.h.classList.remove('dragging');
     if(tblResizeDrag.started){syncFromPreview();pushHistory(true)}
     tblResizeDrag=null;
+    document.body.classList.remove('table-resizing');
   }
 }
 document.addEventListener('pointerup',finishTableResize);
@@ -3540,7 +3553,11 @@ function renderMarkdown(text){
   if(state.editingPreview)return;
   lastRenderedMarkdownText=text;
   selectedPreviewImage=null;
-  const html=markdownHtml(text);
+  let html='';
+  try{html=markdownHtml(text)}catch(error){
+    console.error('Markdown render failed',error);
+    html=`<pre class="preview-render-error">${htmlEsc(text)}</pre>`;
+  }
   // Keep a stable editable block for an empty document. Moving the first text
   // node into a newly-created paragraph during input breaks desktop and mobile
   // native insertion/composition after the first character.
@@ -3709,10 +3726,18 @@ function clearSidebarDropMark(){els.list.querySelectorAll('[data-sidebar-drop]')
 function sidebarDropDestination(event){
   const row=event.target.closest('.folder-title,.file-item');
   const owner=row?.closest('[data-sidebar-key]');
-  if(!owner||!els.list.contains(owner))return {parent:'로컬',mark:els.list,position:'inside'};
-  const key=owner.dataset.sidebarKey,rect=row.getBoundingClientRect(),fraction=(event.clientY-rect.top)/Math.max(1,rect.height);
-  if(row.matches('.folder-title')&&(key.split('/').length===1||(fraction>.25&&fraction<.75)))return {parent:key,mark:row,position:'inside'};
-  return {parent:key.split('/').slice(0,-1).join('/'),reference:key,position:fraction<.5?'before':'after',mark:row};
+  if(!row||!owner||!els.list.contains(owner))return {valid:false};
+  const ownerKey=owner.dataset.sidebarKey;
+  // Major category headers are boundaries, not folder destinations. A nested
+  // item must be dropped beside a real child to prevent accidental promotion.
+  if(row.matches('.folder-title')&&ownerKey.split('/').length===1)return {valid:false};
+  const key=row.dataset.sidebarKey||ownerKey,rect=row.getBoundingClientRect(),fraction=(event.clientY-rect.top)/Math.max(1,rect.height);
+  if(row.matches('.folder-title')&&fraction>.25&&fraction<.75)return {valid:true,parent:key,mark:row,position:'inside'};
+  return {valid:true,parent:key.split('/').slice(0,-1).join('/'),reference:key,position:fraction<.5?'before':'after',mark:row};
+}
+function validSidebarDrop(item,destination){
+  if(!item||!destination?.valid||!destination.parent)return false;
+  return item.key.split('/')[0]===destination.parent.split('/')[0];
 }
 function normalizeSidebarPath(path){const parts=[];String(path).split('/').forEach(part=>{if(part==='..')parts.pop();else if(part&&part!=='.')parts.push(part)});return parts.join('/')}
 function repairMovedImageReferences(oldDirs,assetMoves){
@@ -4160,6 +4185,7 @@ function renderDocumentOutline(){
   headings.forEach((heading,index)=>{if(!heading.id)heading.id=`zz-heading-${index}`});
   if(state.active<0&&!els.editor.value.trim()){
     els.outline.innerHTML='<div class="empty">문서를 열면 제목과 문단 탐색이 표시됩니다.</div>';
+    translateUi(els.outline);
     return;
   }
   const headingTree=[],stack=[];
@@ -4194,6 +4220,7 @@ function renderDocumentOutline(){
     <div class="outline-section-body">${tags.length?tags.map(tag=>`<button class="tag-item" type="button" data-outline-tag="${htmlEsc(tag)}">${htmlEsc(tag)}</button>`).join(''):'<div class="muted" style="padding:8px 10px">사용된 해시태그가 없습니다.</div>'}</div>
   </section>`:'';
   els.outline.innerHTML=structureSection+tagSection;
+  translateUi(els.outline);
 }
 let hashtagContextMenu=null,hashtagContextTag='';
 function hideHashtagContextMenu(){
@@ -4246,6 +4273,7 @@ function ensureHashtagContextMenu(){
   window.addEventListener('resize',hideHashtagContextMenu);
   document.addEventListener('scroll',hideHashtagContextMenu,true);
   document.body.appendChild(hashtagContextMenu);
+  translateUi(hashtagContextMenu);
   return hashtagContextMenu;
 }
 function showHashtagContextMenu(e,tag){
@@ -4809,7 +4837,7 @@ function scheduleMarkdownHighlight(text=els.editor.value){
     const render=()=>{markdownHighlightIdle=0;if(pendingMarkdownHighlight===els.editor.value)renderMarkdownHighlight(pendingMarkdownHighlight)};
     if('requestIdleCallback' in window)markdownHighlightIdle=requestIdleCallback(render,{timeout:700});
     else setTimeout(render,0);
-  },deferredEditorDelay(text,70,180));
+  },deferredEditorDelay(text,140,520));
 }
 function syncMarkdownHighlightScroll(){
   if(!els.markdownHighlight)return;
@@ -4953,7 +4981,23 @@ function setMode(mode,showHome=false){
     if(mode==='edit'||mode==='convert'||mode==='merge')scheduleModeGuideWelcome(mode);
   }else{renderHomeMergeList();updateHomeConvert();scheduleModeGuideWelcome('home')}
 }
-function pushHistory(force=false){if(state.restoring)return;clearTimeout(state.historyTimer);const commit=()=>{const v=els.editor.value;if(state.history[state.history.length-1]!==v){state.history.push(v);if(state.history.length>80)state.history.shift();state.future=[]}updateUndoRedoButtons()};force?commit():state.historyTimer=setTimeout(commit,650)}
+const HISTORY_MAX_ENTRIES=80,HISTORY_MIN_ENTRIES=8,HISTORY_CHAR_BUDGET=12_000_000;
+function trimHistoryBudget(){
+  while(state.history.length>HISTORY_MAX_ENTRIES)state.history.shift();
+  let chars=state.history.reduce((sum,value)=>sum+value.length,0);
+  while(state.history.length>HISTORY_MIN_ENTRIES&&chars>HISTORY_CHAR_BUDGET)chars-=state.history.shift().length;
+}
+function pushHistory(force=false){
+  if(state.restoring)return;
+  clearTimeout(state.historyTimer);state.historyTimer=null;
+  const commit=()=>{
+    state.historyTimer=null;
+    const v=els.editor.value;
+    if(state.history[state.history.length-1]!==v){state.history.push(v);trimHistoryBudget();state.future=[]}
+    updateUndoRedoButtons();
+  };
+  force?commit():state.historyTimer=setTimeout(commit,650);
+}
 function markDirty(){state.dirty=els.editor.value!==state.savedText}
 let editorRenderTimer=null,lineNumberFrame=0,pendingEditorRender='';
 function scheduleEditorRender(text){
@@ -4962,14 +5006,22 @@ function scheduleEditorRender(text){
   editorRenderTimer=setTimeout(()=>{
     editorRenderTimer=null;
     if(pendingEditorRender===els.editor.value)renderMarkdown(pendingEditorRender);
-  },deferredEditorDelay(text,70,180));
+  },deferredEditorDelay(text,110,650));
 }
+let lineNumberTimer=0;
 function scheduleLineNumbers(){
+  if(els.editor.value.length>80000){
+    if(lineNumberFrame){cancelAnimationFrame(lineNumberFrame);lineNumberFrame=0}
+    clearTimeout(lineNumberTimer);
+    lineNumberTimer=setTimeout(()=>{lineNumberTimer=0;updateLineNumbers()},220);
+    return;
+  }
+  clearTimeout(lineNumberTimer);lineNumberTimer=0;
   if(lineNumberFrame)return;
   lineNumberFrame=requestAnimationFrame(()=>{lineNumberFrame=0;updateLineNumbers()});
 }
 function syncActive(){
-  refreshEditorTocBlocks();
+  scheduleEditorTocRefresh();
   createDraftFromEditor();
   const text=els.editor.value;
   if(state.active>=0)state.files[state.active].text=text;
@@ -5177,22 +5229,31 @@ function syncFromPreview(){
   if(previewSyncIdle&&'cancelIdleCallback' in window)cancelIdleCallback(previewSyncIdle);
   previewSyncIdle=0;
   state.editingPreview=true;
-  const clone=els.preview.cloneNode(true);
-  cleanPreviewHtml(clone);
-  const html=previewHasMeaningfulContent(clone)
-    ?refreshZzTocSource(serializePreviewHtml(clone)).text
-    :'';
-  clearTimeout(editorRenderTimer);
-  editorRenderTimer=null;
-  pendingEditorRender=html;
-  els.editor.value=html;
-  createDraftFromEditor();
-  if(state.active>=0)state.files[state.active].text=html;
-  state.editingPreview=false;
-  pushHistory();
-  markDirty();
-  scheduleLineNumbers();
-  if(typeof scheduleWorkspaceSave==='function')scheduleWorkspaceSave();
+  try{
+    const clone=els.preview.cloneNode(true);
+    cleanPreviewHtml(clone);
+    const html=previewHasMeaningfulContent(clone)
+      ?refreshZzTocSource(serializePreviewHtml(clone)).text
+      :'';
+    if(html===els.editor.value)return false;
+    clearTimeout(editorRenderTimer);
+    editorRenderTimer=null;
+    pendingEditorRender=html;
+    els.editor.value=html;
+    createDraftFromEditor();
+    if(state.active>=0)state.files[state.active].text=html;
+    pushHistory();
+    markDirty();
+    scheduleLineNumbers();
+    if(typeof scheduleWorkspaceSave==='function')scheduleWorkspaceSave();
+    return true;
+  }catch(error){
+    console.error('Preview sync failed',error);
+    setStatus(uiLanguage==='en'?'Could not sync the preview. Your source was preserved.':'미리보기를 원문에 반영하지 못했습니다. 기존 원문은 보존되었습니다.');
+    return false;
+  }finally{
+    state.editingPreview=false;
+  }
 }
 function scheduleSyncFromPreview(){
   clearTimeout(previewSyncTimer);
@@ -5206,9 +5267,31 @@ function scheduleSyncFromPreview(){
     }else syncFromPreview();
   },deferredEditorDelay(sourceLength,140,420));
 }
-function restoreEditor(value){state.restoring=true;els.editor.value=value;if(state.active>=0)state.files[state.active].text=value;renderMarkdown(value);state.restoring=false;markDirty();updateUndoRedoButtons();updateLineNumbers()}
-function undoEdit(){if(state.history.length<2)return;state.future.push(state.history.pop());restoreEditor(state.history[state.history.length-1])}
-function redoEdit(){if(!state.future.length)return;const v=state.future.pop();state.history.push(v);restoreEditor(v)}
+let historyRestoreFrame=0,historyRestoreValue='';
+function restoreEditor(value){
+  state.restoring=true;
+  clearTimeout(editorRenderTimer);editorRenderTimer=null;
+  clearTimeout(previewSyncTimer);previewSyncTimer=null;
+  if(previewSyncIdle&&'cancelIdleCallback' in window)cancelIdleCallback(previewSyncIdle);
+  previewSyncIdle=0;
+  els.editor.value=value;
+  if(state.active>=0)state.files[state.active].text=value;
+  historyRestoreValue=value;
+  if(historyRestoreFrame)cancelAnimationFrame(historyRestoreFrame);
+  historyRestoreFrame=requestAnimationFrame(()=>{
+    historyRestoreFrame=0;
+    if(els.editor.value===historyRestoreValue)renderMarkdown(historyRestoreValue);
+  });
+  state.restoring=false;
+  markDirty();updateUndoRedoButtons();scheduleLineNumbers();scheduleMarkdownHighlight(value);
+  if(typeof scheduleWorkspaceSave==='function')scheduleWorkspaceSave();
+}
+function trimFutureBudget(){
+  let chars=state.future.reduce((sum,value)=>sum+value.length,0);
+  while(state.future.length>HISTORY_MIN_ENTRIES&&chars>HISTORY_CHAR_BUDGET)chars-=state.future.shift().length;
+}
+function undoEdit(){if(state.history.length<2)return;state.future.push(state.history.pop());trimFutureBudget();restoreEditor(state.history[state.history.length-1])}
+function redoEdit(){if(!state.future.length)return;const v=state.future.pop();state.history.push(v);trimHistoryBudget();restoreEditor(v)}
 function download(name,text,type='text/markdown;charset=utf-8'){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([text],{type}));a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),800)}
 // PDF layout reconstruction. Coordinates are normalized to the rendered page.
 function pdfMedian(values){
@@ -6600,19 +6683,33 @@ function styleSpan(styleName,value){
   const fullSpanRe=/^<span style="([^"]*)">([^]*)<\/span>$/;
   const m=sel.text.match(fullSpanRe);
   if(m){
-    replaceRange(`<span style="${mergeStyle(m[1],styleName,value)}">${m[2]}</span>`,sel.start,sel.end,true);
+    const nextStyle=mergeStyle(m[1],styleName,value);
+    replaceRange(nextStyle?`<span style="${nextStyle}">${m[2]}</span>`:m[2],sel.start,sel.end,true);
     return;
   }
 
   // Case 2: 선택 범위가 기존 <span> 안의 내용인 경우 (태그 제외하고 드래그한 상황)
   const before=full.slice(0,sel.start);
   const after=full.slice(sel.end);
+  const openIndex=before.lastIndexOf('<span style="');
+  const closeBefore=before.lastIndexOf('</span>');
+  const openSource=openIndex>closeBefore?before.slice(openIndex).match(/^<span style="([^"]*)">/):null;
+  const closeOffset=after.indexOf('</span>');
+  if(openSource&&closeOffset>=0){
+    const contentStart=openIndex+openSource[0].length,contentEnd=sel.end+closeOffset;
+    const leading=full.slice(contentStart,sel.start),selected=full.slice(sel.start,sel.end),trailing=full.slice(sel.end,contentEnd);
+    const wrap=(text,style)=>text?(style?`<span style="${style}">${text}</span>`:text):'';
+    const originalStyle=openSource[1],selectedStyle=mergeStyle(originalStyle,styleName,value);
+    replaceRange(wrap(leading,originalStyle)+wrap(selected,selectedStyle)+wrap(trailing,originalStyle),openIndex,contentEnd+7,true);
+    return;
+  }
   const openMatch=before.match(/<span style="([^"]*)">\s*$/);
   const closeMatch=after.match(/^\s*<\/span>/);
   if(openMatch&&closeMatch){
     const tagStart=before.lastIndexOf('<span');
     const tagEnd=sel.end+closeMatch[0].length;
-    replaceRange(`<span style="${mergeStyle(openMatch[1],styleName,value)}">${sel.text}</span>`,tagStart,tagEnd,true);
+    const nextStyle=mergeStyle(openMatch[1],styleName,value);
+    replaceRange(nextStyle?`<span style="${nextStyle}">${sel.text}</span>`:sel.text,tagStart,tagEnd,true);
     return;
   }
 
@@ -7189,11 +7286,15 @@ els.list.addEventListener('click',event=>{
 },true);
 els.list.addEventListener('dragover',event=>{
   if(!sidebarDragItem||![...event.dataTransfer.types].includes('application/x-zz-sidebar'))return;event.preventDefault();event.stopPropagation();event.dataTransfer.dropEffect='move';
-  clearSidebarDropMark();const destination=sidebarDropDestination(event);destination.mark.dataset.sidebarDrop=destination.position;
+  clearSidebarDropMark();const destination=sidebarDropDestination(event);
+  if(!validSidebarDrop(sidebarDragItem,destination)){event.dataTransfer.dropEffect='none';return}
+  destination.mark.dataset.sidebarDrop=destination.position;
 });
 els.list.addEventListener('drop',event=>{
   if(!sidebarDragItem||![...event.dataTransfer.types].includes('application/x-zz-sidebar'))return;event.preventDefault();event.stopImmediatePropagation();
-  const item=sidebarDragItem;sidebarDragItem=null;const destination=sidebarDropDestination(event);clearSidebarDropMark();moveSidebarItem(item,destination);els.app.classList.remove('drag');
+  const item=sidebarDragItem;sidebarDragItem=null;const destination=sidebarDropDestination(event);clearSidebarDropMark();
+  if(validSidebarDrop(item,destination))moveSidebarItem(item,destination);
+  els.app.classList.remove('drag');
 });
 document.addEventListener('keydown',event=>{if(event.key==='Escape')document.querySelectorAll('.sidebar-context-menu').forEach(menu=>menu.remove())});
 els.folderInput.onchange=e=>addFiles(e.target.files);
@@ -7327,6 +7428,7 @@ function autoConvertPreviewMathAtSelection(){
 }
 function synchronizeEditorSyncBlocks(){
   const source=els.editor.value;
+  if(!source.includes('zz:sync'))return false;
   const pattern=/(<!--\s*zz:sync\s+id\s*=\s*"([^"]+)"\s*-->\r?\n)([\s\S]*?)(\r?\n<!--\s*\/zz:sync\s*-->)/gi;
   const blocks=[];
   let match;
@@ -7351,20 +7453,30 @@ function synchronizeEditorSyncBlocks(){
   els.editor.setSelectionRange(caret,caret);
   return true;
 }
+let editorSyncBlockTimer=0;
+function scheduleEditorSyncBlocks(){
+  clearTimeout(editorSyncBlockTimer);
+  if(!els.editor.value.includes('zz:sync'))return;
+  editorSyncBlockTimer=setTimeout(()=>{
+    editorSyncBlockTimer=0;
+    if(synchronizeEditorSyncBlocks()){syncActive();pushHistory()}
+  },260);
+}
 els.editor.oninput=()=>{
   if(acEnabled){
     const pos=els.editor.selectionStart;
     const lastChar=els.editor.value[pos-1];
     if(['*','_','`',')'].includes(lastChar)){
-      const corrected=autoCorrectMd(els.editor.value);
-      if(corrected!==els.editor.value){
-        const diff=corrected.length-els.editor.value.length;
-        els.editor.value=corrected;
-        els.editor.setSelectionRange(pos+diff,pos+diff);
+      const source=els.editor.value,lineStart=source.lastIndexOf('\n',Math.max(0,pos-1))+1,nextBreak=source.indexOf('\n',pos),lineEnd=nextBreak<0?source.length:nextBreak;
+      const line=source.slice(lineStart,lineEnd),corrected=autoCorrectMd(line);
+      if(corrected!==line){
+        const relative=pos-lineStart,diff=corrected.length-line.length;
+        els.editor.setRangeText(corrected,lineStart,lineEnd,'preserve');
+        els.editor.setSelectionRange(Math.max(lineStart,Math.min(lineStart+corrected.length,lineStart+relative+diff)),Math.max(lineStart,Math.min(lineStart+corrected.length,lineStart+relative+diff)));
       }
     }
   }
-  synchronizeEditorSyncBlocks();
+  scheduleEditorSyncBlocks();
   state.lastEditorSelection={start:els.editor.selectionStart,end:els.editor.selectionEnd};
   state.lastInsertionSurface='editor';
   syncActive();pushHistory();
@@ -7668,6 +7780,7 @@ setEditView(localStorage.getItem(EDIT_VIEW_STORAGE_KEY)||'both',{persist:false})
 
 // ── 툴바 클릭 시 에디터 선택 유지 (capture=true → color mousedown보다 먼저 실행) ──
 document.getElementById('format-tools').addEventListener('mousedown',e=>{
+  if(e.target.closest('.cp-wrap'))captureColorTarget();
   const sel=window.getSelection();
   if(sel&&sel.rangeCount){
     const range=sel.getRangeAt(0);
@@ -7753,6 +7866,8 @@ function applyFontSizeInput(){
   const size=Math.max(6,Math.min(96,Number(input.value)||0));
   if(!size)return;
   input.value=size;
+  const math=selectedPreviewMath();
+  if(math){styleSelectedMath(math,'font-size',`${size}px`);return}
   if(!stylePreviewSelection('font-size',`${size}px`))styleSpan('font-size',`${size}px`);
 }
 function stepWholePreviewFontSize(range,delta){
@@ -7786,6 +7901,15 @@ function stepWholePreviewFontSize(range,delta){
   return true;
 }
 function stepFontSize(delta){
+  const math=selectedPreviewMath();
+  if(math){
+    const root=mathFormatRoot(math),explicit=parseFloat(root.style.fontSize),computed=parseFloat(getComputedStyle(root).fontSize);
+    const current=Number.isFinite(explicit)?explicit:Number.isFinite(computed)?computed:14;
+    const next=Math.max(6,Math.min(96,Math.round(current)+delta));
+    $('fmt-size').value=String(next);
+    styleSelectedMath(math,'font-size',`${next}px`);
+    return;
+  }
   const range=previewRange();
   if(range&&stepWholePreviewFontSize(range,delta))return;
   const input=$('fmt-size');
@@ -8011,8 +8135,8 @@ function styleSelectedMath(math,styleName,value){
     math.before(wrapper);
     wrapper.appendChild(math);
   }
-  const property=styleName.replace(/-([a-z])/g,(_,letter)=>letter.toUpperCase());
-  wrapper.style[property]=value;
+  if(value==='')wrapper.style.removeProperty(styleName);
+  else wrapper.style.setProperty(styleName,value);
   if(!wrapper.getAttribute('style'))wrapper.replaceWith(...wrapper.childNodes);
   return finishMathFormat(math);
 }
@@ -8040,10 +8164,10 @@ function applySelectedMathCommand(command,value=null){
   if(command==='hiliteColor'||command==='backColor')return styleSelectedMath(math,'background-color',value);
   return false;
 }
-function tableFormatTextParts(){
-  if(document.activeElement===els.editor)return null;
-  const cells=[...els.preview.querySelectorAll('td.table-cell-selected,th.table-cell-selected')];
-  const range=cells.length?null:previewRange();
+function tableFormatTextParts(rangeOverride=null,cellsOverride=null){
+  if(document.activeElement===els.editor&&!rangeOverride&&!cellsOverride?.length)return null;
+  const cells=(cellsOverride||[...els.preview.querySelectorAll('td.table-cell-selected,th.table-cell-selected')]).filter(cell=>cell?.isConnected&&els.preview.contains(cell));
+  const range=cells.length?null:(rangeOverride&&els.preview.contains(rangeOverride.commonAncestorContainer)?rangeOverride.cloneRange():previewRange());
   if(!cells.length&&(!range||range.collapsed))return null;
   if(!cells.length&&![...els.preview.querySelectorAll('td,th')].some(cell=>range.intersectsNode(cell)))return null;
   const parts=[],walker=document.createTreeWalker(els.preview,NodeFilter.SHOW_TEXT);
@@ -8062,6 +8186,33 @@ function removeInlineStyleProperty(element,styleName){
   element.style.removeProperty(styleName);
   if(styleName==='background-color')element.style.removeProperty('background');
   if(!element.getAttribute('style'))element.removeAttribute('style');
+}
+function defaultPreviewStyleValue(node,styleName){
+  if(styleName==='color')return getComputedStyle(els.preview).color;
+  if(styleName==='background-color'){
+    const cell=node?.nodeType===1?node.closest?.('td,th'):node?.parentElement?.closest('td,th');
+    if(cell?.matches('th'))return getComputedStyle(els.preview).getPropertyValue('--s1').trim()||getComputedStyle(els.preview).backgroundColor;
+    return getComputedStyle(els.preview).backgroundColor==='rgba(0, 0, 0, 0)'?'transparent':getComputedStyle(els.preview).backgroundColor;
+  }
+  return'inherit';
+}
+function applyStyleToWholeCell(cell,styleName,value){
+  cell.style.setProperty(styleName,value);
+  cell.querySelectorAll('span[style],font[style],mark[style]').forEach(node=>removeInlineStyleProperty(node,styleName));
+  if(styleName==='color')cell.querySelectorAll('font[color]').forEach(font=>{font.removeAttribute('color');if(!font.attributes.length)font.replaceWith(...font.childNodes)});
+  if(styleName==='background-color')cell.querySelectorAll('mark').forEach(mark=>mark.replaceWith(...mark.childNodes));
+}
+function closestStyledAncestor(node,styleName,boundary){
+  for(let element=node?.nodeType===1?node:node?.parentElement;element&&element!==boundary;element=element.parentElement){
+    if(element.style?.getPropertyValue(styleName)||(styleName==='background-color'&&element.style?.background))return element;
+  }
+  return null;
+}
+function wrapTextPartStyle(part,styleName,value){
+  if(!part?.node?.isConnected||part.end<=part.start)return null;
+  const range=document.createRange();range.setStart(part.node,part.start);range.setEnd(part.node,part.end);
+  const span=document.createElement('span');span.style.setProperty(styleName,value);
+  span.appendChild(range.extractContents());range.insertNode(span);return span;
 }
 function inlineStyleHost(node,styleName,boundary){
   for(let element=node?.nodeType===1?node:node?.parentElement;element&&element!==boundary;element=element.parentElement){
@@ -8083,40 +8234,64 @@ function splitInlineStyleHost(host,startNode,startOffset,endNode,endOffset,style
   };
   append(before.cloneContents());const cleared=append(middle.cloneContents(),true);append(after.cloneContents());host.replaceWith(fragment);return cleared;
 }
-function clearTableTextBackground(selection){
+function clearTableTextStyle(selection,styleName){
   if(!selection)return false;
   const {parts,cells}=selection;
   if(cells.length){
-    pushHistory(true);cells.forEach(cell=>{removeInlineStyleProperty(cell,'background-color');cell.querySelectorAll('span[style],font[style]').forEach(node=>removeInlineStyleProperty(node,'background-color'));cell.querySelectorAll('mark').forEach(mark=>mark.replaceWith(...mark.childNodes))});
+    pushHistory(true);cells.forEach(cell=>{
+      removeInlineStyleProperty(cell,styleName);
+      cell.querySelectorAll('span[style],font[style]').forEach(node=>removeInlineStyleProperty(node,styleName));
+      if(styleName==='background-color')cell.querySelectorAll('mark').forEach(mark=>mark.replaceWith(...mark.childNodes));
+      if(styleName==='color')cell.querySelectorAll('font[color]').forEach(font=>{font.removeAttribute('color');if(!font.attributes.length)font.replaceWith(...font.childNodes)});
+    });
     syncFromPreview();pushHistory(true);return true;
   }
   pushHistory(true);
-  const groups=new Map();
-  parts.forEach(part=>{const host=inlineStyleHost(part.node,'background-color',part.node.parentElement.closest('td,th'));if(host){const list=groups.get(host)||[];list.push(part);groups.set(host,list)}});
-  const selectedCells=[...new Set(parts.map(part=>part.node.parentElement.closest('td,th')).filter(Boolean))];
-  selectedCells.forEach(cell=>{const cellParts=parts.filter(part=>cell.contains(part.node)),selected=cellParts.map(part=>part.node.data.slice(part.start,part.end)).join('');if(selected.trim()===cell.textContent.trim())removeInlineStyleProperty(cell,'background-color')});
-  if(!groups.size){syncFromPreview();pushHistory(true);return true}
-  const cleared=[];
-  [...groups].reverse().forEach(([host,list])=>{const first=list[0],last=list.at(-1),node=splitInlineStyleHost(host,first.node,first.start,last.node,last.end,'background-color');if(node)cleared.push(node)});
-  if(cleared.length){const next=document.createRange();next.selectNodeContents(cleared.at(-1));const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);state.savedPreviewRange=next.cloneRange()}
+  const reset=[];
+  [...parts].reverse().forEach(part=>{
+    const span=wrapTextPartStyle(part,styleName,defaultPreviewStyleValue(part.node,styleName));
+    if(span)reset.push(span);
+  });
+  if(reset.length){const next=document.createRange();next.selectNodeContents(reset.at(-1));state.savedPreviewRange=next.cloneRange()}
   syncFromPreview();pushHistory(true);return true;
 }
 function styleTableTextSelection(styleName,value,selection=tableFormatTextParts()){
   if(!selection)return false;
-  if(styleName==='background-color'&&(value===''||value==null))return clearTableTextBackground(selection);
-  const {parts,cells}=selection;if(!parts.length)return true;
+  if((styleName==='background-color'||styleName==='color')&&(value===''||value==null))return clearTableTextStyle(selection,styleName);
+  const {parts,cells}=selection;
+  // Explicit cell ranges are formatted at cell level. This avoids extracting
+  // and reinserting every text node, which was slow and could disturb complex
+  // cell contents or column measurements.
+  if(cells.length){
+    pushHistory(true);
+    cells.forEach(cell=>applyStyleToWholeCell(cell,styleName,value));
+    syncFromPreview();pushHistory(true);return true;
+  }
+  if(!parts.length)return true;
   pushHistory(true);
   const spans=[];
-  for(const {node,start,end} of parts){
+  const fullCells=new Set();
+  const partsByCell=new Map();
+  parts.forEach(part=>{const cell=part.node.parentElement.closest('td,th');if(!cell)return;const list=partsByCell.get(cell)||[];list.push(part);partsByCell.set(cell,list)});
+  partsByCell.forEach((cellParts,cell)=>{
+    const selected=cellParts.map(part=>part.node.data.slice(part.start,part.end)).join('').replace(/\s+/g,'');
+    const complete=cell.textContent.replace(/\s+/g,'');
+    if(selected===complete)fullCells.add(cell);
+  });
+  fullCells.forEach(cell=>applyStyleToWholeCell(cell,styleName,value));
+  for(const {node,start,end} of [...parts].reverse()){
+    if(fullCells.has(node.parentElement.closest('td,th')))continue;
     // Never extract a range containing td/tr/table: format leaf text in place.
-    const range=document.createRange();range.setStart(node,start);range.setEnd(node,end);
-    const span=document.createElement('span');
-    span.style.setProperty(styleName,value||({color:'inherit','background-color':'transparent','font-weight':'normal','font-style':'normal','text-decoration':'none'}[styleName]||'inherit'));
-    span.appendChild(range.extractContents());range.insertNode(span);spans.push(span);
+    const span=wrapTextPartStyle({node,start,end},styleName,value||({color:'inherit','background-color':'transparent','font-weight':'normal','font-style':'normal','text-decoration':'none'}[styleName]||'inherit'));
+    if(span)spans.push(span);
   }
-  if(!cells.length){
-    const next=document.createRange();next.setStart(spans[0].firstChild,0);next.setEnd(spans.at(-1).lastChild,spans.at(-1).lastChild.length);
+  if(!cells.length&&spans.length){
+    const ordered=[...spans].reverse();
+    const next=document.createRange();next.setStart(ordered[0].firstChild,0);next.setEnd(ordered.at(-1).lastChild,ordered.at(-1).lastChild.length);
     const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);state.savedPreviewRange=next.cloneRange();
+  }else if(!cells.length){
+    window.getSelection()?.removeAllRanges();
+    state.savedPreviewRange=null;
   }
   syncFromPreview();pushHistory(true);return true;
 }
@@ -8234,13 +8409,16 @@ function styleWholePreview(styleName,value){
 }
 function clearPreviewInlineStyle(range,styleName){
   const parts=[],walker=document.createTreeWalker(els.preview,NodeFilter.SHOW_TEXT);let node;
-  while((node=walker.nextNode()))if(node.data&&range.intersectsNode(node)){const start=node===range.startContainer?range.startOffset:0,end=node===range.endContainer?range.endOffset:node.length;if(end>start)parts.push({node,start,end})}
-  const groups=new Map();parts.forEach(part=>{const host=inlineStyleHost(part.node,styleName,els.preview);if(host){const list=groups.get(host)||[];list.push(part);groups.set(host,list)}});
-  if(!groups.size)return false;
-  pushHistory(true);const cleared=[];
-  [...groups].reverse().forEach(([host,list])=>{const first=list[0],last=list.at(-1),element=splitInlineStyleHost(host,first.node,first.start,last.node,last.end,styleName);if(element)cleared.push(element)});
-  if(!cleared.length)return false;
-  const next=document.createRange();next.selectNodeContents(cleared.at(-1));const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);state.savedPreviewRange=next.cloneRange();
+  while((node=walker.nextNode())){
+    if(!node.data||node.parentElement.closest('.block-move-handle,.form-move-handle,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.code-head,.zz-math')||!range.intersectsNode(node))continue;
+    const start=node===range.startContainer?range.startOffset:0,end=node===range.endContainer?range.endOffset:node.length;
+    if(end>start)parts.push({node,start,end});
+  }
+  if(!parts.length)return false;
+  pushHistory(true);const reset=[];
+  [...parts].reverse().forEach(part=>{const span=wrapTextPartStyle(part,styleName,defaultPreviewStyleValue(part.node,styleName));if(span)reset.push(span)});
+  if(!reset.length)return false;
+  const next=document.createRange();next.selectNodeContents(reset.at(-1));state.savedPreviewRange=next.cloneRange();
   syncFromPreview();pushHistory(true);return true;
 }
 function stylePreviewSelection(styleName,value){
@@ -9155,6 +9333,29 @@ function applyCustomFormatPreset(preset){
     return false;
   }
   const fields=new Set(preset.fields||[]);
+  const tableSelection=tableFormatTextParts();
+  if(tableSelection){
+    const styles={};
+    if(fields.has('fontSize'))styles.fontSize=`${Number(preset.fontSize)||14}px`;
+    if(fields.has('color'))styles.color=preset.color||'';
+    if(fields.has('backgroundColor'))styles.backgroundColor=preset.backgroundColor||'transparent';
+    if(fields.has('bold'))styles.fontWeight=preset.bold?'700':'400';
+    if(fields.has('italic'))styles.fontStyle=preset.italic?'italic':'normal';
+    if(fields.has('underline'))styles.textDecoration=preset.underline?'underline':'none';
+    const {parts,cells}=tableSelection;if(!parts.length)return false;
+    pushHistory(true);const spans=[];
+    for(const {node,start,end} of [...parts].reverse()){
+      const part=document.createRange();part.setStart(node,start);part.setEnd(node,end);
+      const span=document.createElement('span');Object.assign(span.style,styles);
+      span.appendChild(part.extractContents());part.insertNode(span);spans.push(span);
+    }
+    if(fields.has('textAlign')){
+      const targets=cells.length?cells:[...new Set(parts.map(part=>part.node.parentElement?.closest('td,th')).filter(Boolean))];
+      targets.forEach(cell=>cell.style.textAlign=preset.textAlign||'left');
+    }
+    if(!cells.length&&spans.length){const ordered=[...spans].reverse(),next=document.createRange();next.setStart(ordered[0].firstChild,0);next.setEnd(ordered.at(-1).lastChild,ordered.at(-1).lastChild.length);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);state.savedPreviewRange=next.cloneRange()}
+    syncFromPreview();pushHistory(true);return true;
+  }
   pushHistory(true);
   let selection=window.getSelection();
   selection.removeAllRanges();selection.addRange(range);
@@ -9162,8 +9363,8 @@ function applyCustomFormatPreset(preset){
   stripSelectedCopiedTextFormatting(fragment,fields);
   const span=document.createElement('span');
   if(fields.has('fontSize'))span.style.fontSize=`${Number(preset.fontSize)||14}px`;
-  if(fields.has('color'))span.style.color=preset.color;
-  if(fields.has('backgroundColor'))span.style.backgroundColor=preset.backgroundColor;
+  if(fields.has('color'))span.style.setProperty('color',preset.color||'inherit');
+  if(fields.has('backgroundColor'))span.style.setProperty('background-color',preset.backgroundColor||'transparent');
   if(fields.has('bold'))span.style.fontWeight=preset.bold?'700':'400';
   if(fields.has('italic'))span.style.fontStyle=preset.italic?'italic':'normal';
   if(fields.has('underline'))span.style.textDecoration=preset.underline?'underline':'none';
@@ -11142,10 +11343,10 @@ const acPanelHtml=`
     <div class="ac-option-block">
       <label title="미리보기의 글씨에 설정한 시간 동안 마우스를 올리면 원문을 수정할 수 있는 작은 창을 표시합니다.">
         <input type="checkbox" id="enable-source-syntax-hover" checked>
-        <span><b>문법 빠른 편집</b><div class="ac-desc">Preview의 문장에 마우스를 올려 Markdown 원문 수정</div></span>
+        <span><b>문법 빠른 편집</b><div class="ac-desc">문장에 마우스를 올려 원문 수정</div></span>
       </label>
       <div class="ac-hover-delay" id="source-syntax-hover-delay-wrap">
-        <span>창 표시까지</span><input type="number" id="source-syntax-hover-delay" min="1" max="30" step="1" value="5" inputmode="numeric" aria-label="빠른 편집 대기 시간"><span>초</span>
+        <span>창 표시까지</span><div class="ac-delay-number-control"><input type="number" id="source-syntax-hover-delay" min="1" max="30" step="1" value="5" inputmode="numeric" aria-label="빠른 편집 대기 시간"><span class="size-stepper ac-delay-stepper" aria-label="빠른 편집 대기 시간 조절"><button class="size-up" type="button" data-source-delay-step="1" aria-label="대기 시간 1초 늘리기"></button><button class="size-down" type="button" data-source-delay-step="-1" aria-label="대기 시간 1초 줄이기"></button></span></div><span>초</span>
       </div>
     </div>
     <label title="마크다운 기호 안 불필요한 공백을 자동으로 제거합니다.&#10;&#10;예시:&#10;  **김밥 **  →  **김밥**&#10;  * 텍스트 *  →  *텍스트*&#10;  _ 내용 _  →  _내용_&#10;  \` 코드 \`  →  \`코드\`&#10;  [ 링크 ](url)  →  [링크](url)&#10;  ##  제목  →  ## 제목&#10;&#10;* 및 _ 를 입력할 때만 실행됩니다.">
@@ -11289,6 +11490,11 @@ $('source-syntax-hover-delay').onchange=e=>{
   clearTimeout(sourceSyntaxHoverTimer);
   sourceSyntaxHoverCandidate=null;
 };
+document.querySelectorAll('[data-source-delay-step]').forEach(button=>button.onclick=()=>{
+  const input=$('source-syntax-hover-delay');
+  input.value=String(Math.max(1,Math.min(30,(Number(input.value)||sourceSyntaxHoverDelaySeconds)+Number(button.dataset.sourceDelayStep))));
+  input.dispatchEvent(new Event('change',{bubbles:true}));
+});
 $('enable-color-correct').onchange=e=>{colorCorrectEnabled=e.target.checked;localStorage.setItem('md-option-color-correct',colorCorrectEnabled?'1':'0');renderMarkdown(els.editor.value)};
 
 // ── Insert menu (구분선, 줄바꿈 등) ──
@@ -11391,15 +11597,20 @@ const SHORTCUT_DEFINITIONS=[
   {id:'underline',name:'밑줄',description:'선택한 글자에 밑줄 적용',defaultKey:'Ctrl+U'},
   {id:'link',name:'링크',description:'선택한 글자에 링크 추가',defaultKey:'Ctrl+K'},
   {id:'customFormat',name:'사용자 지정 서식',description:'저장한 사용자 서식 열기',defaultKey:'Ctrl+Alt+S'},
-  {id:'previewPin',name:'미니 프리뷰 고정',description:'변환·병합 화면의 미니 프리뷰를 고정',defaultKey:'Ctrl'}
+  {id:'previewPin',name:'미니 프리뷰 고정',description:'변환·병합 화면의 미니 프리뷰를 고정',defaultKey:'Ctrl'},
+  {id:'quickEditPin',name:'빠른 편집창 고정',description:'문법 빠른 편집창을 열린 위치에 고정',defaultKey:'Ctrl'}
 ];
 const SHORTCUT_GROUPS=[
   {id:'navigation',name:'화면 이동',description:'변환·편집·병합 화면 전환',items:['modeConvert','modeEdit','modeMerge']},
   {id:'file',name:'파일·실행',description:'열기, 저장, 인쇄와 작업 실행',items:['save','saveAs','open','runSelection','print']},
   {id:'editing',name:'찾기·편집 기록',description:'찾기와 실행 취소·다시 실행',items:['find','replace','undo','redo']},
   {id:'format',name:'글자 서식',description:'선택한 글자의 모양과 링크 변경',items:['bold','italic','underline','link','customFormat']},
-  {id:'preview',name:'미니 프리뷰',description:'문서 미리보기 표시와 고정',items:['previewPin']}
+  {id:'preview',name:'팝업·미리보기',description:'빠른 편집창과 미니 프리뷰 고정',items:['previewPin','quickEditPin']}
 ];
+function shortcutConflict(id,value){
+  const contextual=new Set(['previewPin','quickEditPin']);
+  return SHORTCUT_DEFINITIONS.find(item=>item.id!==id&&shortcutSettings[item.id]===value&&!(contextual.has(id)&&contextual.has(item.id)));
+}
 function loadShortcutSettings(){
   let saved={};try{saved=JSON.parse(localStorage.getItem(SHORTCUT_SETTINGS_KEY)||'{}')||{}}catch{}
   return Object.fromEntries(SHORTCUT_DEFINITIONS.map(item=>[item.id,typeof saved[item.id]==='string'?saved[item.id]:item.defaultKey]));
@@ -11581,7 +11792,7 @@ const EN_TEXT={
   '테마':'Theme','화면 테마':'Display theme','라이트·다크 테마를 선택하거나 사용자 지정 색상을 편집합니다.':'Choose a light or dark theme, or edit custom colors.',
   '라이트':'Light','다크':'Dark','사용자 지정':'Custom','테마 설정':'Theme settings','화면에 사용할 테마를 선택하세요.':'Choose a theme for the interface.',
   '사용자 지정 테마 편집':'Edit custom theme','배경색과 글자색을 직접 설정합니다.':'Set the background and text colors manually.',
-  '언어':'Language','화면에 표시할 언어를 선택합니다.':'Choose the language used in the interface.','한국어':'한국어','영어':'English',
+  '언어':'Language','화면에 표시할 언어를 선택합니다.':'Choose the language used in the interface.','한국어':'한국어','영어':'English','프로그램 정보':'About','작성부터 미리보기, 변환과 병합까지 한곳에서 이어가고':'Write, preview, convert, and merge in one place,','문서 작업을 편리하게 완성하는 Markdown 편집기입니다.':'with a practical Markdown editor built for smooth document work.','GitHub 저장소로 이동':'Open GitHub repository',
   '문서 폰트':'Document font','업로드 폰트 사용':'Use uploaded font','선택한 폰트를 Preview와 PDF 문서에 적용합니다.':'Apply the selected font to Preview and PDF documents.','이미지 검사':'Image check','누락 이미지 경고':'Missing image warnings','MD에서 참조하지만 업로드되지 않은 이미지가 있으면 파일 목록에 경고를 표시합니다.':'Show a warning in the file list when an MD file references an image that has not been uploaded.','누락된 이미지':'Missing images','파일 목록':'File list','스크롤 시 소폴더 고정':'Keep subfolder visible while scrolling','파일 목록을 스크롤할 때 현재 소폴더 이름을 위쪽에 표시합니다.':'Show the current subfolder name at the top while scrolling through the file list.',
   '문서 폰트 선택':'Select document font','폰트 업로드':'Upload font','삭제':'Delete','업로드한 폰트 없음':'No uploaded fonts',
   'TTF, OTF, WOFF, WOFF2 파일을 업로드할 수 있습니다.':'Upload TTF, OTF, WOFF, or WOFF2 font files.','폰트를 확인하고 저장하는 중...':'Checking and saving fonts...','폰트를 불러오지 못했습니다.':'Could not load the font.',
@@ -11594,7 +11805,7 @@ const EN_TEXT={
   'Preview에서 LaTeX 문법을 입력하면 편집 가능한 수식으로 자동 변환합니다.':'Enter LaTeX syntax in Preview to convert it automatically into editable math.',
   'LaTeX 문법을 입력하면 편집 가능한 수식으로 자동 변환합니다.':'Enter LaTeX syntax to convert it automatically into editable math.',
   'URL 자동 링크':'Automatic URL links','붙여넣은 주소를 링크로 자동 변환':'Convert pasted URLs into links',
-  '문법 빠른 편집':'Quick syntax editing','Preview의 문장에 마우스를 올려 Markdown 원문 수정':'Hover over Preview text to edit the Markdown source',
+  '문법 빠른 편집':'Quick syntax editing','문장에 마우스를 올려 원문 수정':'Hover over a sentence to edit its source',
   '창 표시까지':'Show after','초':'sec','기호 공백 보정':'Fix syntax spacing','MD 기호 안의 불필요한 공백 제거':'Remove unnecessary spaces inside Markdown syntax',
   '색상 가독성 보정':'Improve color readability','화면 테마에 맞춰 읽기 어려운 글자색을 자동 보정':'Adjust hard-to-read text colors for the current theme',
   '표 필터·정렬':'Table filter and sort','표 머리글에서 행을 필터링하거나 정렬하며 원문은 유지':'Filter or sort rows from table headers without changing the source',
@@ -11733,7 +11944,7 @@ const EN_TEXT={
   '올바른 링크 주소를 입력해 주세요.':'Enter a valid link URL.','연결 문서 없음':'No linked documents','이 열 필터 및 정렬':'Filter and sort this column','오름차순 정렬':'Sort ascending','내림차순 정렬':'Sort descending','이 표 필터·정렬 초기화':'Reset filtering and sorting for this table','값 필터':'Value filter','값 검색':'Search values','전체 선택 / 해제':'Select / clear all','(빈 값)':'(Empty)','서식 필터':'Formatting filter',
   '셀 합치기':'Merge cells','이미 합쳐진 셀이 포함된 범위는 먼저 셀 나누기를 해주세요.':'Split existing merged cells before merging this range.','셀 나누기':'Split cells','선택한 셀을 지정한 행과 열로 나눕니다.':'Split the selected cell into the specified rows and columns.',
   '루트':'Root','단일문서':'Single document','폴더 이름을 입력해 주세요.':'Enter a folder name.','같은 이름의 폴더가 있습니다.':'A folder with that name already exists.','폴더 복제':'Duplicate folder','폴더 이름 변경':'Rename folder','이동할 수 없음':'Cannot move','대상 위치에 같은 이름의 파일 또는 폴더가 있습니다.':'A file or folder with the same name exists at the destination.',
-  '업로드된 MD에서 참조를 찾지 못했습니다.':'No references were found in the uploaded Markdown.','문서를 열면 제목과 문단 탐색이 표시됩니다.':'Open a document to browse its headings and paragraphs.','펼치기':'Expand','접기':'Collapse','제목 서식이 없습니다.':'No heading styles.','사용된 해시태그가 없습니다.':'No hashtags used.','해시태그 제거':'Remove hashtag',
+  '업로드된 MD에서 참조를 찾지 못했습니다.':'No references were found in the uploaded Markdown.','문서를 열면 제목과 문단 탐색이 표시됩니다.':'Open a document to browse its headings and paragraphs.','펼치기':'Expand','접기':'Collapse','제목 서식이 없습니다.':'No heading styles.','해시태그':'Hashtags','사용된 해시태그가 없습니다.':'No hashtags used.','해시태그 제거':'Remove hashtag',
   '파일 이름을 입력해 주세요.':'Enter a file name.','같은 위치에 동일한 이름의 파일이 있습니다.':'A file with the same name exists in this location.','PDF → MD 자동 선택':'PDF → MD selected automatically','MD → PDF 자동 선택':'MD → PDF selected automatically','목차':'Table of contents','PDF 변환':'PDF conversion','PDF 변환 완료':'PDF conversion complete','암호가 설정된 PDF입니다. 암호를 해제한 파일을 열어 주세요.':'This PDF is password-protected. Open an unlocked copy.','PDF 파일이 손상되었거나 올바른 PDF 형식이 아닙니다.':'The PDF is damaged or invalid.','파일과 네트워크 연결을 확인해 주세요.':'Check the file and network connection.','PDF 변환 실패':'PDF conversion failed','미니 프리뷰 닫기':'Close mini preview',
   '사용자 지정 글꼴':'Custom font','현재 지역 글꼴 확인':'Check local fonts','저장할 문서 없음':'No documents to save','조건에 맞는 마크다운 문서가 없습니다.':'No Markdown documents match the criteria.','ZIP 저장 준비 실패':'Could not prepare ZIP','ZIP 기능을 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.':'Could not load ZIP support. Check your internet connection and try again.','먼저 마크다운 문서를 열어 주세요.':'Open a Markdown document first.','선택한 문서 없음':'No documents selected','ZIP에 담을 문서를 하나 이상 선택해 주세요.':'Select at least one document for the ZIP.',
   '페이지 분할 기능을 초기화하지 못했습니다.':'Could not initialize pagination.','페이지 분할 모듈을 불러오지 못했습니다.':'Could not load the pagination module.','페이지를 나누는 중...':'Paginating…','PDF 준비 실패':'Could not prepare PDF','인쇄 페이지를 준비하지 못했습니다.':'Could not prepare pages for printing.','MD → PDF는 한 번에 문서 하나를 선택해 주세요.':'Select one document at a time for MD → PDF.','파일 목록 펼치기':'Expand file list','파일 목록 접기':'Collapse file list','드래그 업로드 실패':'Drag upload failed','파일이 이 컴퓨터에 다운로드되어 있는지 확인해 주세요.':'Check that the file is downloaded to this computer.',
@@ -11741,7 +11952,7 @@ const EN_TEXT={
   '텍스트를 선택해 주세요':'Select text','프리뷰에서 저장하거나 서식을 적용할 텍스트를 먼저 드래그해 주세요.':'Select text in Preview before saving or applying formatting.','사용자 지정 서식 수정':'Edit custom style','선택한 텍스트에 실제로 적용된 속성만 저장 항목으로 선택했습니다.':'Only properties applied to the selected text are selected for saving.','저장할 항목을 선택해 주세요':'Select properties to save','최소 하나 이상의 서식 항목을 선택해야 합니다.':'Select at least one formatting property.','프리뷰에서 서식을 적용할 텍스트를 먼저 드래그해 주세요.':'Select text in Preview before applying formatting.','새 서식 폴더':'New style folder','폴더명':'Folder name','서식 이름 수정':'Rename style','폴더 이름 수정':'Rename folder',
   '링크 이동':'Open link','열 수 있는 링크 주소가 아닙니다.':'This link cannot be opened.','세미콜론':'Semicolon','변환 미리보기':'Conversion preview','구분자를 확인하면 표 모양을 미리 볼 수 있습니다.':'Check the delimiter to preview the table.','표 만들기':'Create table','구분할 텍스트와 올바른 구분자를 입력해 주세요.':'Enter delimited text and a valid delimiter.',
   '변환 화면':'Convert workspace','변환 화면으로 이동':'Go to Convert','편집 화면':'Editor workspace','편집 화면으로 이동':'Go to Editor','병합 화면':'Merge workspace','문서 병합 화면으로 이동':'Go to Merge','현재 작업 결과 저장':'Save current result','다른 이름으로 저장':'Save as','편집 문서를 새 이름으로 저장':'Save the document with a new name','파일 또는 폴더 불러오기':'Open a file or folder','선택 작업 실행':'Run selected action','변환·병합 화면의 선택 작업 실행':'Run the selected Convert or Merge action','현재 화면에서 내용 찾기':'Find content on this screen','편집 화면에서 내용 바꾸기':'Replace content in the editor','인쇄·PDF 저장':'Print / Save PDF','현재 결과의 인쇄 창 열기':'Open the print dialog for the current result','실행 취소':'Undo','마지막 편집 되돌리기':'Undo the last edit','다시 실행':'Redo','되돌린 편집 다시 적용':'Redo the reverted edit','선택한 글자를 굵게 표시':'Make selected text bold','선택한 글자를 기울임꼴로 표시':'Italicize selected text','선택한 글자에 밑줄 적용':'Underline selected text','링크':'Link','선택한 글자에 링크 추가':'Add a link to selected text','저장한 사용자 서식 열기':'Open saved custom styles','미니 프리뷰 고정':'Pin mini preview','변환·병합 화면의 미니 프리뷰를 고정':'Pin the mini preview in Convert and Merge',
-  '화면 이동':'Navigation','변환·편집·병합 화면 전환':'Switch between Convert, Edit, and Merge','파일·실행':'Files and actions','열기, 저장, 인쇄와 작업 실행':'Open, save, print, and run actions','찾기·편집 기록':'Find and edit history','찾기와 실행 취소·다시 실행':'Find, undo, and redo','글자 서식':'Text formatting','선택한 글자의 모양과 링크 변경':'Change selected text formatting and links','미니 프리뷰':'Mini preview','문서 미리보기 표시와 고정':'Preview display and pinning','변경됨':'Changed','키 조합을 누르세요':'Press a key combination','Ctrl·Alt와 함께 입력':'Use with Ctrl or Alt',
+  '화면 이동':'Navigation','변환·편집·병합 화면 전환':'Switch between Convert, Edit, and Merge','파일·실행':'Files and actions','열기, 저장, 인쇄와 작업 실행':'Open, save, print, and run actions','찾기·편집 기록':'Find and edit history','찾기와 실행 취소·다시 실행':'Find, undo, and redo','글자 서식':'Text formatting','선택한 글자의 모양과 링크 변경':'Change selected text formatting and links','미니 프리뷰':'Mini preview','문서 미리보기 표시와 고정':'Preview display and pinning','팝업·미리보기':'Popups and previews','빠른 편집창과 미니 프리뷰 고정':'Pin quick editing and mini previews','빠른 편집창 고정':'Pin quick editor','문법 빠른 편집창을 열린 위치에 고정':'Pin the quick syntax editor in place','변경됨':'Changed','키 조합을 누르세요':'Press a key combination','Ctrl·Alt와 함께 입력':'Use with Ctrl or Alt',
   '삽입할 위치를 다시 선택한 뒤 시도해 주세요.':'Select the insertion point again and retry.','먼저 문서를 업로드하거나 만들어 주세요.':'Upload or create a document first.','미니 문서 삽입':'Insert embedded document','빈 줄':'Blank line','시작 지점을 선택하세요':'Select a starting point','자동 기록':'Automatic history','저장된 버전이 없습니다.':'No saved versions.','#ZZ 전용 블록':'#ZZ-specific blocks','MD에는 원문이 보존되지만 전용 카드·시트·미니 문서 모양은 #ZZ와 PDF에서만 표시됩니다.':'The source is preserved in MD, but custom cards, sheets, and embedded-document layouts appear only in #ZZ and PDF.','Obsidian 확장 문법':'Obsidian extended syntax','지원하지 않는 Markdown 앱에서는 일반 인용문이나 원문으로 보일 수 있습니다.':'Unsupported Markdown apps may display a regular quote or the source text.','MD에는 HTML로 저장됩니다. HTML을 제한하는 앱에서는 입력 개체가 숨겨질 수 있습니다.':'Saved as HTML in MD. Apps that restrict HTML may hide form controls.','문자 서식':'Text formatting','색상·배경색·크기는 HTML 허용 여부에 따라 다르게 보입니다.':'Color, background, and size may vary depending on HTML support.',
   '스프레드시트 삽입':'Insert spreadsheet','스프레드시트 모듈을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.':'Could not load spreadsheet support. Check your internet connection.','범위 없음':'No range','범위 오류':'Invalid range','A1:F20처럼 올바른 셀 범위를 입력해 주세요.':'Enter a valid cell range such as A1:F20.','편집할 문서를 먼저 열어 주세요.':'Open a document to edit first.','파일명':'File name','저장할 결과 없음':'No result to save','먼저 파일을 병합해 주세요.':'Merge files first.','MD → PDF는 Ctrl+Enter로 변환한 뒤 인쇄 창에서 PDF로 저장해 주세요.':'For MD → PDF, convert with Ctrl+Enter and save as PDF from the print dialog.','사이드바 펼치기':'Expand sidebar','테마 열기':'Open theme','테마 닫기':'Close theme'
   ,'변경할 단축키를 선택한 뒤 새 키 조합을 누르세요.':'Select a shortcut, then press a new key combination.','기본값':'Default','전체 초기화':'Reset all','브라우저 기본 글꼴이 운영체제 기본값과 다르게 설정되어 있습니다.':'The browser default font differs from the operating system default.'
@@ -11768,6 +11979,7 @@ function translatedUiText(value){
     const missingImageMessage=core.match(/^이 문서에서 참조한 이미지 파일을 찾을 수 없습니다:\s*(.+)$/);if(missingImageMessage)translated=`The following image files referenced by this document could not be found: ${missingImageMessage[1]}`;
     const savedFontCount=core.match(/^(\d+)개 저장됨 · TTF, OTF, WOFF, WOFF2 지원$/);if(savedFontCount)translated=`${savedFontCount[1]} font${savedFontCount[1]==='1'?'':'s'} saved · TTF, OTF, WOFF, WOFF2 supported`;
     const uploadedFontCount=core.match(/^(\d+)개 폰트를 업로드하고 문서에 적용했습니다\.$/);if(uploadedFontCount)translated=`Uploaded ${uploadedFontCount[1]} font${uploadedFontCount[1]==='1'?'':'s'} and applied ${uploadedFontCount[1]==='1'?'it':'them'} to the document.`;
+    const shortcutCount=core.match(/^(\d+)개 명령의 단축키를 확인하고 변경합니다\.$/);if(shortcutCount)translated=`Review and change shortcuts for ${shortcutCount[1]} commands.`;
     const untitledDocument=core.match(/^새 문서(?: (\d+))?\.md$/);if(untitledDocument)translated=`New document${untitledDocument[1]?` ${untitledDocument[1]}`:''}.md`;
     const copiedDocument=core.match(/^(.+) 복사본(?: \((\d+)\))?(\.(?:md|markdown))$/i);if(copiedDocument)translated=`${copiedDocument[1]} copy${copiedDocument[2]?` (${copiedDocument[2]})`:''}${copiedDocument[3]}`;
     const recovery=core.match(/^(.+)에 자동 저장된 문서 (\d+)개가 있습니다\.$/);if(recovery)translated=`${recovery[1]}: ${recovery[2]} auto-saved document${recovery[2]==='1'?'':'s'} available.`;
@@ -12003,7 +12215,7 @@ function showGuideReplayPicker(){
   wrap.querySelector('[data-guide-target]').focus();
 }
 async function showAppSettings(initialCategory='general'){
-  const settingsCategory=['general','document','language'].includes(initialCategory)?initialCategory:'general';
+  const settingsCategory=['general','document','language','about'].includes(initialCategory)?initialCategory:'general';
   await loadCustomFonts();
   document.querySelector('.edit-guide-overlay')?.remove();
   document.querySelector('.feature-guide-welcome')?.remove();
@@ -12011,7 +12223,7 @@ async function showAppSettings(initialCategory='general'){
   const wrap=document.createElement('div');wrap.className='modal-backdrop app-settings-modal';
   wrap.innerHTML=`<div class="modal-card app-settings-card" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
     <h3 id="app-settings-title">설정</h3>
-    <nav class="app-settings-categories" aria-label="설정 분류"><button type="button" class="${settingsCategory==='general'?'active':''}" data-settings-category="general">일반</button><button type="button" class="${settingsCategory==='document'?'active':''}" data-settings-category="document">문서</button><button type="button" class="${settingsCategory==='language'?'active':''}" data-settings-category="language">Language</button></nav>
+    <nav class="app-settings-categories" aria-label="설정 분류"><button type="button" class="${settingsCategory==='general'?'active':''}" data-settings-category="general">일반</button><button type="button" class="${settingsCategory==='document'?'active':''}" data-settings-category="document">문서</button><button type="button" class="${settingsCategory==='language'?'active':''}" data-settings-category="language">Language</button><button type="button" class="${settingsCategory==='about'?'active':''}" data-settings-category="about">프로그램 정보</button></nav>
     <section class="app-settings-group" data-settings-panel="language" ${settingsCategory==='language'?'':'hidden'}><h4>Language</h4>
       <p class="app-settings-language-copy">화면에 표시할 언어를 선택합니다.</p>
       <div class="app-settings-language" role="group" aria-label="Language">
@@ -12047,6 +12259,12 @@ async function showAppSettings(initialCategory='general'){
     </section>
     <section class="app-settings-group mobile-settings-only" data-settings-panel="general" ${settingsCategory==='general'?'':'hidden'}><h4>테마</h4>
       <button class="app-settings-replay mobile-settings-entry" type="button" data-theme-settings><span><b>화면 테마</b><small>라이트·다크 테마를 선택하거나 사용자 지정 색상을 편집합니다.</small></span><i>설정</i></button>
+    </section>
+    <section class="app-settings-group app-about" data-settings-panel="about" ${settingsCategory==='about'?'':'hidden'}>
+      <div class="app-about-icon" aria-hidden="true"><svg viewBox="0 0 64 64"><rect x="3" y="3" width="58" height="58" rx="14"></rect><path d="M23 13 18 51M45 13 40 51M11 26h42M9 40h43"></path></svg></div>
+      <h4>#ZZ.md</h4>
+      <p><span>작성부터 미리보기, 변환과 병합까지 한곳에서 이어가고</span><span>문서 작업을 편리하게 완성하는 Markdown 편집기입니다.</span></p>
+      <a class="app-about-github" href="https://github.com/RealZZIN/ZZ_Markdown_Editor" target="_blank" rel="noopener noreferrer" aria-label="GitHub 저장소로 이동" title="GitHub 저장소로 이동"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0Zm3.5 7.4V10.5L12 6l5.5 4.5v8.9M9.5 21v-6h5v6"></path></svg><span>GitHub</span></a>
     </section>
     <div class="modal-actions"><button class="tool primary" type="button" data-settings-close>닫기</button></div>
   </div>`;
@@ -12164,8 +12382,8 @@ function showShortcutSettings(){
     const held=[];if(event.ctrlKey||event.metaKey)held.push('Ctrl');if(event.altKey)held.push('Alt');if(event.shiftKey)held.push('Shift');
     const modifierOnly=['Control','Meta','Alt','Shift'].includes(event.key);
     if(modifierOnly){
-      if(recordingId==='previewPin'){
-        const value=shortcutFromEvent(event),conflict=SHORTCUT_DEFINITIONS.find(item=>item.id!==recordingId&&shortcutSettings[item.id]===value);
+      if(recordingId==='previewPin'||recordingId==='quickEditPin'){
+        const value=shortcutFromEvent(event),conflict=shortcutConflict(recordingId,value);
         if(conflict){recordingButton.textContent=`${conflict.name}와 중복`;recordingButton.classList.add('is-error');return}
         shortcutSettings[recordingId]=value;saveShortcutSettings();stopRecording();paint();return;
       }
@@ -12173,8 +12391,8 @@ function showShortcutSettings(){
     }
     const value=shortcutFromEvent(event);if(!value)return;
     recordingButton.textContent=value.replaceAll('+',' + ');
-    if(recordingId!=='previewPin'&&!event.ctrlKey&&!event.metaKey&&!event.altKey){recordingButton.textContent='Ctrl·Alt와 함께 입력';return}
-    const conflict=SHORTCUT_DEFINITIONS.find(item=>item.id!==recordingId&&shortcutSettings[item.id]===value);
+    if(!['previewPin','quickEditPin'].includes(recordingId)&&!event.ctrlKey&&!event.metaKey&&!event.altKey){recordingButton.textContent='Ctrl·Alt와 함께 입력';return}
+    const conflict=shortcutConflict(recordingId,value);
     if(conflict){recordingButton.textContent=`${conflict.name}와 중복`;recordingButton.classList.add('is-error');return}
     shortcutSettings[recordingId]=value;saveShortcutSettings();stopRecording();paint();
   };
@@ -12185,7 +12403,7 @@ function showShortcutSettings(){
     });
     wrap.querySelectorAll('[data-shortcut-reset]').forEach(button=>button.onclick=()=>{
       const id=button.dataset.shortcutReset,item=SHORTCUT_DEFINITIONS.find(definition=>definition.id===id),oldValue=shortcutSettings[id];
-      const conflict=SHORTCUT_DEFINITIONS.find(definition=>definition.id!==id&&shortcutSettings[definition.id]===item.defaultKey);
+      const conflict=shortcutConflict(id,item.defaultKey);
       if(conflict)shortcutSettings[conflict.id]=oldValue;
       shortcutSettings[id]=item.defaultKey;saveShortcutSettings();paint();
     });
@@ -12937,6 +13155,35 @@ $('ins-ol').onclick=()=>{if(insertPreviewList(true))return;orderedListPrefix()};
 
 // ── Real-time color (direct apply, no focus() to avoid OS picker conflict) ──
 let colorDragState=null;
+let colorTargetSnapshot=null;
+function captureColorTarget(){
+  const cells=[...els.preview.querySelectorAll('td.table-cell-selected,th.table-cell-selected')];
+  const selection=window.getSelection();
+  let range=null;
+  if(selection?.rangeCount){
+    const live=selection.getRangeAt(0);
+    if(els.preview.contains(live.commonAncestorContainer)&&!live.collapsed)range=live.cloneRange();
+  }
+  if(!range&&state.savedPreviewRange&&!state.savedPreviewRange.collapsed&&els.preview.contains(state.savedPreviewRange.commonAncestorContainer))range=state.savedPreviewRange.cloneRange();
+  const editorSelection=document.activeElement===els.editor||els.editor.selectionStart!==els.editor.selectionEnd
+    ?{start:els.editor.selectionStart,end:els.editor.selectionEnd}
+    :state.savedSelection&&state.savedSelection.start!==state.savedSelection.end?{...state.savedSelection}:null;
+  colorTargetSnapshot={cells,range,editorSelection,surface:cells.length||range?'preview':editorSelection?'editor':state.lastInsertionSurface};
+}
+function snapshotTableSelection(){
+  const snapshot=colorTargetSnapshot;
+  if(!snapshot||snapshot.surface!=='preview')return null;
+  return tableFormatTextParts(snapshot.range,snapshot.cells);
+}
+function restoreColorPreviewRange(){
+  const range=colorTargetSnapshot?.range;
+  if(!range||!els.preview.contains(range.commonAncestorContainer))return;
+  state.lastInsertionSurface='preview';
+  state.savedPreviewRange=range.cloneRange();
+}
+function revealAppliedColor(){
+  window.getSelection()?.removeAllRanges();
+}
 function initColorDrag(type){
   // capture mousedown on format-tools already saved state.savedSelection
   rememberPreviewRange();
@@ -12975,11 +13222,28 @@ function applyPickedColor(type,value){
   const prop=type==='text'?'color':'background-color';
   if(value)setHexInputValue(type==='text'?$('fmt-color'):$('fmt-bg'),value);
   syncColorButtons();
-  if(styleTableTextSelection(prop,value)){if(value)trackColor(type,value);return}
-  if(finalizeColor(type,value)){if(value)trackColor(type,value);return}
-  if(state.lastInsertionSurface==='preview'){
-    if(stylePreviewSelection(prop,value)&&value)trackColor(type,value);
+  // A selected equation is an explicit formatting target. Handle it before
+  // stale table/editor selections so the color command cannot be intercepted.
+  const math=selectedPreviewMath();
+  if(math){
+    styleSelectedMath(math,prop,value);
+    if(value)trackColor(type,value);
     return;
+  }
+  const snapTable=snapshotTableSelection();
+  if(snapTable&&styleTableTextSelection(prop,value,snapTable)){revealAppliedColor();if(value)trackColor(type,value);return}
+  if(!colorTargetSnapshot&&styleTableTextSelection(prop,value)){revealAppliedColor();if(value)trackColor(type,value);return}
+  if(finalizeColor(type,value)){if(value)trackColor(type,value);return}
+  if(colorTargetSnapshot?.surface==='preview')restoreColorPreviewRange();
+  if(colorTargetSnapshot?.surface==='preview'||state.lastInsertionSurface==='preview'){
+    const applied=stylePreviewSelection(prop,value);
+    if(applied)revealAppliedColor();
+    if(applied&&value)trackColor(type,value);
+    return;
+  }
+  if(colorTargetSnapshot?.surface==='editor'&&colorTargetSnapshot.editorSelection){
+    state.savedSelection={...colorTargetSnapshot.editorSelection};
+    styleSpan(prop,value);if(value)trackColor(type,value);return;
   }
   const saved=state.savedSelection;
   const hasEditorSelection=saved?saved.start!==saved.end:els.editor.selectionStart!==els.editor.selectionEnd;
@@ -13203,8 +13467,8 @@ $('save-custom-theme-color').onclick=e=>{e.stopPropagation();saveCustomThemeColo
 $('custom-theme-current').oncontextmenu=e=>{e.preventDefault();e.stopPropagation();saveCustomThemeColor()};
 $('save-text-color').onclick=e=>{e.stopPropagation();savePaletteColor('text',getHexInputValue($('fmt-color')))};
 $('save-bg-color').onclick=e=>{e.stopPropagation();savePaletteColor('bg',getHexInputValue($('fmt-bg')))};
-$('clear-text-color').onclick=e=>{e.stopPropagation();applyPickedColor('text','');closeAllPanels()};
-$('clear-bg-color').onclick=e=>{e.stopPropagation();applyPickedColor('bg','');closeAllPanels()};
+$('clear-text-color').onclick=e=>{e.preventDefault();e.stopPropagation();applyPickedColor('text','');closeAllPanels()};
+$('clear-bg-color').onclick=e=>{e.preventDefault();e.stopPropagation();applyPickedColor('bg','');closeAllPanels()};
 
 /* ── Extended persistence, compatibility, inserts, and custom fonts ── */
 const ZZ_DB_NAME='zz-md-workspace',ZZ_DB_VERSION=1;
@@ -13575,7 +13839,6 @@ async function insertFilesIntoDocument(fileList){
 }
 $('insert-file-toggle').onclick=()=>$('insert-file-input').click();
 $('insert-file-input').onchange=e=>{insertFilesIntoDocument(e.target.files);e.target.value=''};
-els.editor.addEventListener('input',scheduleWorkspaceSave);
 window.addEventListener('pagehide',saveWorkspaceSession);
 syncColorButtons();
 $('fmt-left').onclick=()=>applyAlign('left');$('fmt-center').onclick=()=>applyAlign('center');$('fmt-right').onclick=()=>applyAlign('right');
