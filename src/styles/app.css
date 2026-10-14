@@ -2553,10 +2553,14 @@ body.dark .preview pre code *::selection { background: #60a5fa; color: #111110; 
     border-bottom:3px solid var(--accent);
     border-radius:0 0 2px 0;
     background:transparent;
+    opacity:0;
   }
   .tbl-table-resize-handle.dragging::after { border-color:var(--ink); }
-  .tbl-resize-handle::after { content:''; position:absolute; top:0; bottom:0; left:9px; width:2px; background:color-mix(in srgb,var(--accent) 68%,transparent); }
-  .tbl-row-resize-handle::after { content:''; position:absolute; left:0; right:0; top:9px; height:2px; background:color-mix(in srgb,var(--accent) 68%,transparent); }
+  .tbl-resize-handle::after { content:''; position:absolute; top:0; bottom:0; left:9px; width:2px; background:color-mix(in srgb,var(--accent) 68%,transparent); opacity:0; }
+  .tbl-row-resize-handle::after { content:''; position:absolute; left:0; right:0; top:9px; height:2px; background:color-mix(in srgb,var(--accent) 68%,transparent); opacity:0; }
+  .preview table.table-selected :is(.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle)::after,
+  .preview table.table-cell-range-active :is(.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle)::after,
+  :is(.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle):is(:active,.dragging)::after { opacity:1; }
 }
 .preview table[data-resize-ready="1"] th,
 .preview table[data-resize-ready="1"] td { overflow:hidden; }
@@ -3343,7 +3347,7 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
   min-width: min-content;
 }
 .print-preview-sheets[data-truncated="true"]::after {
-  content: '미리보기는 처음 18쪽까지만 표시합니다. PDF 저장 시 전체 문서를 처리합니다.';
+  content: '미리보기는 처음 8쪽까지만 표시합니다. PDF 저장 시 전체 문서를 처리합니다.';
   position: sticky;
   bottom: 10px;
   justify-self: center;
@@ -3425,6 +3429,11 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
   page-break-inside: avoid;
   background: var(--white);
 }
+.print-flow-slice {
+  position: absolute;
+  inset: 6mm 7mm auto 7mm;
+  overflow: hidden;
+}
 .print-flow-columns.preview {
   position: absolute;
   inset: var(--flow-margin) auto auto var(--flow-margin);
@@ -3451,7 +3460,7 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
 .print-flow-columns .code-block { overflow: visible !important; }
 .print-flow-columns :is(img,svg,canvas,video) {
   max-width: 100% !important;
-  max-height: var(--flow-content-height) !important;
+  max-height: calc(var(--flow-content-height) - 12mm) !important;
   object-fit: contain;
 }
 .paged-render-staging {
@@ -4601,6 +4610,11 @@ body.dark .cp-swatch { border-color: rgba(255,255,255,.18); }
   }
   .print-root.print-nup-root .print-nup-sheet:last-child {
     break-after: auto;
+  }
+  .print-root.print-nup-root .print-flow-slice {
+    top: 6mm !important;
+    right: 7mm !important;
+    left: 7mm !important;
   }
   .print-root.print-nup-root .pagedjs_pages {
     display: contents !important;

@@ -5925,8 +5925,12 @@ function showInfoNotice(title,message){
   let closed=false;
   const close=()=>{if(closed)return;closed=true;document.removeEventListener('keydown',onKey);wrap.remove()};
   const onKey=e=>{if(e.key==='Escape'||e.key==='Enter')close()};
-  wrap.addEventListener('click',e=>{if(e.target===wrap||e.target.closest('[data-info-close]'))close()});
-  wrap.querySelector('[data-info-close]').addEventListener('pointerup',e=>{e.preventDefault();e.stopPropagation();close()});
+  wrap.addEventListener('click',e=>{
+    if(e.target!==wrap&&!e.target.closest('[data-info-close]'))return;
+    e.preventDefault();
+    e.stopPropagation();
+    close();
+  });
   document.addEventListener('keydown',onKey);
   document.body.appendChild(wrap);
   wrap.querySelector('button').focus();
@@ -6934,6 +6938,17 @@ function activePrintSource(){
 }
 function normalizePrintClone(root){
   resetTableFilterView(root);
+  // Preview virtualization deliberately contains each lazy section. That is
+  // useful while editing, but containment prevents the section from
+  // fragmenting into CSS columns and makes N-up think the whole document is
+  // one page. Print clones must always participate in normal page flow.
+  root.querySelectorAll('.lazy-doc-section').forEach(section=>{
+    section.classList.add('rendered');
+    section.style.setProperty('content-visibility','visible','important');
+    section.style.setProperty('contain','none','important');
+    section.style.setProperty('contain-intrinsic-size','none','important');
+    section.style.setProperty('min-height','0','important');
+  });
   root.querySelectorAll('.line-gutter,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.img-resize-handle,.block-move-handle,.form-move-handle').forEach(el=>el.remove());
   root.querySelectorAll('.img-selected,.table-selected,.move-selected,.moving-element,.move-drop-before,.move-drop-after').forEach(el=>{
     el.classList.remove('img-selected','table-selected','move-selected','moving-element','move-drop-before','move-drop-after');
@@ -6982,7 +6997,7 @@ function printScaledContentWidth(scale){
 }
 function printPagesPerSheetValue(value){
   const pages=Number(value);
-  return[1,2,4,6,9].includes(pages)?pages:1;
+  return pages===2?2:1;
 }
 function printSheetLayout(pages){
   return pages===2
@@ -7052,12 +7067,213 @@ async function arrangePagedPrintPages(pages,pagesPerSheet,target,totalPages=page
   target.replaceChildren(sheets);
   return sheets.children.length;
 }
+function makePrintFlowPage(recipe,index){
+  const page=document.createElement('div');
+  page.className='print-flow-page';
+  page.dataset.pageFlow='vertical';
+  const slice=document.createElement('div');
+  slice.className='print-flow-slice';
+  const start=recipe.pageOffsets[index];
+  const sliceEnd=index+1<recipe.pageOffsets.length?recipe.pageOffsets[index+1]:recipe.contentHeight;
+  slice.style.height=`${Math.min(recipe.pageHeightPx,Math.max(1,sliceEnd-start))*recipe.factor}px`;
+  const clone=recipe.flow.cloneNode(true);
+  clone.style.setProperty('position','absolute','important');
+  clone.style.setProperty('inset',`${-start*recipe.factor}px auto auto 0`,'important');
+  clone.style.setProperty('margin','0','important');
+  clone.style.transform=`scale(${recipe.factor})`;
+  slice.appendChild(clone);
+  page.appendChild(slice);
+  return page;
+}
+async function buildBlockPrintPages(source,scale,shouldCancel=null){
+  const factor=printScaleValue(scale)/100;
+  const pageWidth=210,pageHeight=297,marginX=7,marginTop=6,marginBottom=7;
+  const logicalWidth=(pageWidth-marginX*2)/factor;
+  const logicalHeight=(pageHeight-marginTop-marginBottom)/factor;
+  const staging=document.createElement('div');
+  staging.className='paged-render-staging print-block-staging';
+  staging.style.setProperty('width',`${logicalWidth}mm`,'important');
+  const sourceClone=source?source.cloneNode(true):document.createElement('article');
+  sourceClone.removeAttribute('id');
+  sourceClone.removeAttribute('contenteditable');
+  normalizePrintClone(sourceClone);
+  const blocks=[];
+  [...sourceClone.children].forEach(child=>{
+    if(child.classList.contains('lazy-doc-section'))blocks.push(...child.children);
+    else blocks.push(child);
+  });
+  const pages=[];
+  let measureBody=null;
+  const newMeasurePage=()=>{
+    measureBody=document.createElement('article');
+    measureBody.className='preview print-flow-static';
+    measureBody.style.setProperty('width',`${logicalWidth}mm`,'important');
+    measureBody.style.setProperty('max-width','none','important');
+    measureBody.style.setProperty('height','auto','important');
+    measureBody.style.setProperty('min-height','0','important');
+    measureBody.style.setProperty('padding','0','important');
+    measureBody.style.setProperty('margin','0','important');
+    staging.replaceChildren(measureBody);
+  };
+  const waitForMedia=async root=>{
+    await Promise.all([...root.querySelectorAll('img')].map(image=>image.complete?Promise.resolve():image.decode?.().catch(()=>{})||Promise.resolve()));
+  };
+  const pageLimit=()=>logicalHeight*(Math.max(1,measureBody.clientWidth)/logicalWidth);
+  const visualContentHeight=()=>{
+    const bodyTop=measureBody.getBoundingClientRect().top;
+    let bottom=0;
+    [...measureBody.children].forEach(child=>{
+      const rect=child.getBoundingClientRect();
+      const marginBottom=parseFloat(getComputedStyle(child).marginBottom)||0;
+      bottom=Math.max(bottom,rect.bottom-bodyTop+marginBottom);
+    });
+    return Math.max(0,bottom);
+  };
+  const overflows=()=>visualContentHeight()>pageLimit()+2;
+  const hasPrintableContent=body=>Boolean(body?.textContent.trim()||body?.querySelector('img,svg,canvas,video,table,pre,.code-block,.zz-math-block,.mermaid,.obsidian-callout'));
+  const finalizePage=()=>{
+    if(!measureBody?.children.length||!hasPrintableContent(measureBody))return;
+    const page=document.createElement('div');
+    page.className='print-flow-page print-block-page';
+    page.dataset.pageFlow='blocks';
+    const slice=document.createElement('div');
+    slice.className='print-flow-slice print-block-slice';
+    slice.style.height=`${pageHeight-marginTop-marginBottom}mm`;
+    const body=measureBody.cloneNode(true);
+    body.style.setProperty('width',`${logicalWidth}mm`,'important');
+    body.style.transform=`scale(${factor})`;
+    body.style.transformOrigin='top left';
+    slice.appendChild(body);
+    page.appendChild(slice);
+    pages.push(page);
+  };
+  const startNextPage=()=>{finalizePage();newMeasurePage()};
+  const appendAndMeasure=async node=>{
+    measureBody.appendChild(node);
+    await waitForMedia(node);
+  };
+  const appendTableByRows=async table=>{
+    const rows=[...table.querySelectorAll('tbody tr')];
+    if(!rows.length){await appendAndMeasure(table.cloneNode(true));return}
+    const shell=table.cloneNode(true);
+    shell.querySelectorAll('tbody').forEach(body=>body.replaceChildren());
+    let placedTable=shell.cloneNode(true);
+    await appendAndMeasure(placedTable);
+    let targetBody=placedTable.querySelector('tbody');
+    for(const row of rows){
+      const rowClone=row.cloneNode(true);
+      targetBody.appendChild(rowClone);
+      if(overflows()){
+        rowClone.remove();
+        if(targetBody.children.length){
+          startNextPage();
+          placedTable=shell.cloneNode(true);
+          await appendAndMeasure(placedTable);
+          targetBody=placedTable.querySelector('tbody');
+          targetBody.appendChild(row.cloneNode(true));
+        }else{
+          placedTable.remove();
+          if(measureBody.children.length)startNextPage();
+          placedTable=shell.cloneNode(true);
+          await appendAndMeasure(placedTable);
+          targetBody=placedTable.querySelector('tbody');
+          targetBody.appendChild(row.cloneNode(true));
+        }
+      }
+    }
+  };
+  const appendListByItems=async list=>{
+    const items=[...list.children].filter(item=>item.matches('li'));
+    if(!items.length){await appendAndMeasure(list.cloneNode(true));return}
+    const shell=list.cloneNode(false);
+    if(list.matches('ol')&&list.hasAttribute('start'))shell.setAttribute('start',list.getAttribute('start'));
+    let placedList=shell.cloneNode(false);
+    await appendAndMeasure(placedList);
+    for(let itemIndex=0;itemIndex<items.length;itemIndex++){
+      const item=items[itemIndex].cloneNode(true);
+      placedList.appendChild(item);
+      if(overflows()){
+        item.remove();
+        if(placedList.children.length){
+          startNextPage();
+          placedList=shell.cloneNode(false);
+          if(placedList.matches('ol'))placedList.setAttribute('start',String((Number(list.getAttribute('start'))||1)+itemIndex));
+          await appendAndMeasure(placedList);
+          placedList.appendChild(items[itemIndex].cloneNode(true));
+        }else{
+          placedList.remove();
+          if(hasPrintableContent(measureBody))startNextPage();
+          placedList=shell.cloneNode(false);
+          await appendAndMeasure(placedList);
+          placedList.appendChild(items[itemIndex].cloneNode(true));
+        }
+      }
+    }
+  };
+  document.body.appendChild(staging);
+  newMeasurePage();
+  try{
+    await document.fonts.ready;
+    for(let index=0;index<blocks.length;index++){
+      if(shouldCancel?.())return[];
+      const block=blocks[index];
+      const clone=block.cloneNode(true);
+      const mediaNodes=[...(clone.matches?.('img,svg,canvas,video')?[clone]:[]),...(clone.querySelectorAll?.('img,svg,canvas,video')||[])];
+      mediaNodes.forEach(media=>{
+        media.style.setProperty('max-width','100%','important');
+        media.style.setProperty('max-height',`${logicalHeight*.9}mm`,'important');
+        media.style.setProperty('object-fit','contain');
+      });
+      if(clone.matches('table')){
+        await appendAndMeasure(clone);
+        if(overflows()){
+          clone.remove();
+          if(measureBody.children.length)startNextPage();
+          await appendTableByRows(block);
+        }
+      }else if(clone.matches('ul,ol')){
+        await appendAndMeasure(clone);
+        if(overflows()){
+          clone.remove();
+          await appendListByItems(block);
+        }
+      }else{
+        const usedBefore=visualContentHeight();
+        await appendAndMeasure(clone);
+        const cloneRect=clone.getBoundingClientRect();
+        const cloneStyle=getComputedStyle(clone);
+        const ownHeight=cloneRect.height+(parseFloat(cloneStyle.marginTop)||0)+(parseFloat(cloneStyle.marginBottom)||0);
+        const fitsByOwnSize=usedBefore+ownHeight<=pageLimit()+2;
+        if(overflows()&&!fitsByOwnSize&&measureBody.children.length>1){
+          clone.remove();
+          startNextPage();
+          await appendAndMeasure(clone);
+        }
+      }
+      if(index&&index%12===0)await yieldPrintRender();
+    }
+    finalizePage();
+    return pages;
+  }finally{staging.remove()}
+}
 async function renderNupPrintSheets(source,scale,pagesPerSheet,target,pageCache=null,maxPreviewPages=Infinity,shouldCancel=null){
   await yieldPrintRender();
   if(shouldCancel?.())return 0;
   const pageCacheKey=String(printScaleValue(scale));
-  const cachedPages=pageCache?.get(pageCacheKey);
-  if(cachedPages){
+  const cachedEntry=pageCache?.get(pageCacheKey);
+  if(cachedEntry){
+    if(cachedEntry.recipe){
+      const renderCount=Math.min(cachedEntry.totalPages,maxPreviewPages);
+      const pages=[];
+      for(let index=0;index<renderCount;index++){
+        if(shouldCancel?.())return 0;
+        pages.push(makePrintFlowPage(cachedEntry.recipe,index));
+        if(index&&index%2===0)await yieldPrintRender();
+      }
+      return arrangePagedPrintPages(pages,pagesPerSheet,target,cachedEntry.totalPages);
+    }
+    const cachedPages=Array.isArray(cachedEntry)?cachedEntry:cachedEntry.pages;
+    const cachedTotal=Array.isArray(cachedEntry)?cachedEntry.length:cachedEntry.totalPages;
     const visible=cachedPages.slice(0,maxPreviewPages);
     const pages=[];
     for(let index=0;index<visible.length;index++){
@@ -7065,8 +7281,16 @@ async function renderNupPrintSheets(source,scale,pagesPerSheet,target,pageCache=
       pages.push(visible[index].cloneNode(true));
       if(index&&index%2===0)await yieldPrintRender();
     }
-    return arrangePagedPrintPages(pages,pagesPerSheet,target,cachedPages.length);
+    return arrangePagedPrintPages(pages,pagesPerSheet,target,cachedTotal);
   }
+  const blockPages=await buildBlockPrintPages(source,scale,shouldCancel);
+  if(shouldCancel?.())return 0;
+  if(pageCache){
+    if(pageCache.size>=5)pageCache.delete(pageCache.keys().next().value);
+    pageCache.set(pageCacheKey,{pages:blockPages.map(page=>page.cloneNode(true)),totalPages:blockPages.length});
+  }
+  return arrangePagedPrintPages(blockPages.slice(0,maxPreviewPages),pagesPerSheet,target,blockPages.length);
+  /* Legacy continuous-slice fallback retained below for reference. */
   const staging=document.createElement('div');
   staging.className='paged-render-staging';
   const factor=printScaleValue(scale)/100;
@@ -7085,6 +7309,16 @@ async function renderNupPrintSheets(source,scale,pagesPerSheet,target,pageCache=
   flow.style.setProperty('--flow-gap',`${flowGap}mm`);
   flow.style.setProperty('--flow-content-width',`${flowContentWidth}mm`);
   flow.style.setProperty('--flow-content-height',`${flowContentHeight}mm`);
+  // Measure one continuous A4-width document. CSS multi-column pagination
+  // silently stops fragmenting when contained sections, large media, and
+  // tables are mixed, which left N-up with only page one. Explicit vertical
+  // slices are predictable for every preview structure.
+  flow.style.setProperty('position','relative','important');
+  flow.style.setProperty('inset','auto','important');
+  flow.style.setProperty('height','auto','important');
+  flow.style.setProperty('column-width','auto','important');
+  flow.style.setProperty('column-count','1','important');
+  flow.style.setProperty('margin',`${flowMargin}mm`,'important');
   staging.style.width=`${logicalWidth}mm`;
   staging.appendChild(flow);
   document.body.appendChild(staging);
@@ -7095,29 +7329,96 @@ async function renderNupPrintSheets(source,scale,pagesPerSheet,target,pageCache=
     ));
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
     if(shouldCancel?.())return 0;
-    const columnWidth=Math.max(1,flow.clientWidth);
-    const gapWidth=columnWidth*(flowGap/flowContentWidth);
-    const horizontalPageCount=Math.max(1,Math.ceil((flow.scrollWidth+gapWidth-1)/(columnWidth+gapWidth)));
-    const verticalPageCount=Math.max(1,Math.ceil(flow.scrollHeight/Math.max(1,flow.clientHeight)));
-    const verticalFlow=horizontalPageCount===1&&verticalPageCount>1;
-    const pageCount=verticalFlow?verticalPageCount:horizontalPageCount;
+    const pixelsPerMm=Math.max(1,flow.clientWidth)/flowContentWidth;
+    const pageHeightPx=Math.max(1,flowContentHeight*pixelsPerMm);
+    // Prefer fitting a crossing image into the useful remainder of the page
+    // over leaving most of that page empty. The lower bound prevents tiny,
+    // unreadable thumbnails; those images move to the next page instead.
+    for(let pass=0;pass<2;pass++){
+      let resized=false;
+      const currentTop=flow.getBoundingClientRect().top;
+      for(const image of flow.querySelectorAll('img,svg,canvas,video')){
+        const rect=image.getBoundingClientRect();
+        const top=Math.max(0,rect.top-currentTop),bottom=Math.max(0,rect.bottom-currentTop);
+        const boundary=(Math.floor(top/pageHeightPx)+1)*pageHeightPx;
+        const available=boundary-top-8;
+        if(bottom>boundary+2&&rect.height<pageHeightPx*.98&&available>=pageHeightPx*.42){
+          const ratio=Math.min(1,available/Math.max(1,rect.height));
+          image.style.setProperty('width',`${Math.max(1,rect.width*ratio)}px`,'important');
+          image.style.setProperty('height','auto','important');
+          image.style.setProperty('max-height',`${available}px`,'important');
+          resized=true;
+        }
+      }
+      if(!resized)break;
+      await new Promise(resolve=>requestAnimationFrame(resolve));
+    }
+    const contentHeight=Math.max(1,flow.scrollHeight);
+    const flowTop=flow.getBoundingClientRect().top;
+    const protectedBlocks=[...flow.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote,pre,.code-block,table,tr,figure,img,svg,canvas,video,.zz-math-block,.mermaid,.obsidian-callout,.zz-sync-block,.zz-toc')]
+      .filter(block=>block.matches('table,tr')||!block.closest('table'))
+      .map(block=>{
+        const rect=block.getBoundingClientRect();
+        return{
+          top:Math.max(0,rect.top-flowTop),
+          bottom:Math.max(0,rect.bottom-flowTop),
+          heading:/^H[1-6]$/.test(block.tagName),
+          strong:block.matches('img,svg,canvas,video,figure,table,tr,pre,.code-block,.zz-math-block,.mermaid,.obsidian-callout,.zz-sync-block,.zz-toc'),
+          row:block.matches('tr')
+        };
+      })
+      .filter(block=>block.bottom>block.top);
+    const pageOffsets=[0];
+    let pageStart=0;
+    while(pageStart+pageHeightPx<contentHeight-1){
+      const idealEnd=pageStart+pageHeightPx;
+      const minBreak=pageStart+pageHeightPx*.42;
+      let nextStart=idealEnd;
+      const crossing=protectedBlocks
+        .filter(block=>{
+          if(!(block.top<idealEnd-2&&block.bottom>idealEnd+2))return false;
+          const blockHeight=block.bottom-block.top;
+          // Media, normal-sized tables, code, and formulas are moved as one
+          // unit even when they began near the top of the current page. An
+          // oversized table falls back to its row boundaries.
+          if(block.strong&&blockHeight<=pageHeightPx*.96)return block.top>=minBreak;
+          if(block.row)return block.top>pageStart+2;
+          return block.top>=minBreak;
+        })
+        .sort((a,b)=>Number(b.strong&&b.bottom-b.top<=pageHeightPx*.96)-Number(a.strong&&a.bottom-a.top<=pageHeightPx*.96)||Number(b.row)-Number(a.row)||b.top-a.top)[0];
+      if(crossing)nextStart=Math.max(pageStart+2,crossing.top);
+      else{
+        const orphanHeading=protectedBlocks
+          .filter(block=>block.heading&&block.top>=pageStart+pageHeightPx*.82&&block.top<idealEnd)
+          .sort((a,b)=>a.top-b.top)[0];
+        if(orphanHeading)nextStart=Math.max(pageStart+2,orphanHeading.top);
+      }
+      if(nextStart<=pageStart+2)nextStart=idealEnd;
+      pageOffsets.push(nextStart);
+      pageStart=nextStart;
+    }
+    // Final safety pass: no generated boundary may remain inside a printable
+    // object. This also covers media whose final size changed after decoding.
+    for(let index=1;index<pageOffsets.length;index++){
+      const previous=pageOffsets[index-1];
+      const boundary=pageOffsets[index];
+      const covering=protectedBlocks
+        .filter(block=>block.strong&&block.top<boundary-2&&block.bottom>boundary+2&&block.top>previous+2)
+        .sort((a,b)=>a.top-b.top)[0];
+      if(covering)pageOffsets[index]=Math.max(previous+2,covering.top);
+    }
+    const pageCount=pageOffsets.length;
     const renderCount=Math.min(pageCount,maxPreviewPages);
+    const recipe={flow:flow.cloneNode(true),pageOffsets:[...pageOffsets],contentHeight,pageHeightPx,factor};
     const pages=[];
     for(let index=0;index<renderCount;index++){
       if(shouldCancel?.())return 0;
-      const page=document.createElement('div');
-      page.className='print-flow-page';
-      const clone=flow.cloneNode(true);
-      clone.style.transform=verticalFlow
-        ?`scale(${factor}) translateY(-${index*logicalHeight}mm)`
-        :`scale(${factor}) translateX(-${index*logicalWidth}mm)`;
-      page.appendChild(clone);
-      pages.push(page);
+      pages.push(makePrintFlowPage(recipe,index));
       if(index&&index%2===0)await yieldPrintRender();
     }
-    if(pageCache&&renderCount===pageCount){
+    if(pageCache){
       if(pageCache.size>=5)pageCache.delete(pageCache.keys().next().value);
-      pageCache.set(pageCacheKey,pages.map(page=>page.cloneNode(true)));
+      pageCache.set(pageCacheKey,{recipe,totalPages:pageCount});
     }
     return arrangePagedPrintPages(pages,pagesPerSheet,target,pageCount);
   }finally{
@@ -7134,7 +7435,7 @@ function showPrintScaleDialog(source){
       <div class="print-dialog-head">
         <h3 id="print-dialog-title">PDF 저장 미리보기</h3>
         <label class="print-scale-field">배율 <span class="print-scale-control"><span class="print-scale-input-wrap"><input id="print-scale-input" type="number" min="25" max="200" step="5" value="100" inputmode="numeric"><span class="print-scale-unit">%</span></span><span class="size-stepper print-scale-stepper" aria-label="PDF 배율 조절"><button class="size-up" type="button" data-print-scale-step="5" title="배율 높이기" aria-label="배율 5% 높이기"></button><button class="size-down" type="button" data-print-scale-step="-5" title="배율 낮추기" aria-label="배율 5% 낮추기"></button></span></span></label>
-        <label class="print-pages-field">시트당 페이지 <select id="print-pages-select"><option value="1">1쪽</option><option value="2">2쪽</option><option value="4">4쪽</option><option value="6">6쪽</option><option value="9">9쪽</option></select></label>
+        <label class="print-pages-field">시트당 페이지 <select id="print-pages-select"><option value="1">1쪽</option><option value="2">2쪽</option></select></label>
         <div class="print-dialog-actions"><button class="tool" type="button" data-print-action="cancel">취소</button><button class="tool primary" type="button" data-print-action="print">PDF 저장</button></div>
       </div>
       <div class="print-preview-stage"><div class="print-preview-surface"></div></div>
@@ -7209,7 +7510,7 @@ function showPrintScaleDialog(source){
         renderTimer=setTimeout(async()=>{
           try{
             const target=document.createElement('div');
-            await renderNupPrintSheets(article,scale,pagesPerSheet,target,nupPageCache,18,()=>job!==renderJob);
+            await renderNupPrintSheets(article,scale,pagesPerSheet,target,nupPageCache,8,()=>job!==renderJob);
             if(job===renderJob){
               surface.replaceChildren(...target.childNodes);
               const rendered=surface.querySelector('.print-preview-sheets');
@@ -7252,7 +7553,8 @@ function showPrintScaleDialog(source){
       const pagesPerSheet=printPagesPerSheetValue(pagesSelect.value);
       const previewSheets=pagesPerSheet>1?surface.querySelector('.print-preview-sheets'):null;
       const preparedSheets=previewSheets?.dataset.truncated==='false'?previewSheets.cloneNode(true):null;
-      finish({scale:printScaleValue(input.value),pagesPerSheet,preparedSheets});
+      const preparedRecipe=pagesPerSheet>1?nupPageCache.get(String(printScaleValue(input.value)))||null:null;
+      finish({scale:printScaleValue(input.value),pagesPerSheet,preparedSheets,preparedRecipe});
     };
     document.addEventListener('keydown',onKey);
     document.body.appendChild(wrap);
@@ -7262,7 +7564,7 @@ function showPrintScaleDialog(source){
     input.select();
   });
 }
-async function preparePrint(source=state.printSourceOverride||activePrintSource(),preparedSheets=null){
+async function preparePrint(source=state.printSourceOverride||activePrintSource(),preparedSheets=null,preparedRecipe=null){
   clearPreviewTransientState();
   materializeLazyPreview(source);
   const root=$('print-root');
@@ -7272,7 +7574,10 @@ async function preparePrint(source=state.printSourceOverride||activePrintSource(
   root.classList.toggle('print-nup-root',pagesPerSheet>1);
   if(pagesPerSheet>1){
     if(preparedSheets)root.replaceChildren(preparedSheets);
-    else await renderNupPrintSheets(source,scale,pagesPerSheet,root);
+    else{
+      const cached=preparedRecipe?new Map([[String(scale),preparedRecipe]]):null;
+      await renderNupPrintSheets(source,scale,pagesPerSheet,root,cached);
+    }
     const layout=printSheetLayout(pagesPerSheet);
     let pageStyle=$('dynamic-print-page-style');
     if(!pageStyle){
@@ -7306,7 +7611,7 @@ async function printDocument(title,source){
   state.printPagesPerSheet=settings.pagesPerSheet;
   state.printSourceOverride=printSource;
   try{
-    await preparePrint(printSource,settings.preparedSheets);
+    await preparePrint(printSource,settings.preparedSheets,settings.preparedRecipe);
   }catch(error){
     document.title=oldTitle;
     state.printSourceOverride=null;
@@ -14462,6 +14767,9 @@ $('side-handle').onclick=()=>{
 document.addEventListener('click',event=>{
   if(!els.app.classList.contains('mobile-sidebar-open'))return;
   if(event.target.closest('#sidebar,#side-handle'))return;
+  // Closing a modal opened from the sidebar must not be interpreted as a tap
+  // on the page backdrop after that modal removes itself from the document.
+  if(event.target.closest('.modal-backdrop,[role="dialog"]'))return;
   els.app.classList.remove('mobile-sidebar-open');
   syncSidebarHandle();
 });
