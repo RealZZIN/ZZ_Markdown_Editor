@@ -80,6 +80,13 @@ const sidebarUploadPaths=new WeakMap();
 state.sidebarFolders=[];
 state.sidebarOrder={};
 state.assetRoots={};
+function loadUploadedExtensionFilters(){
+  try{
+    const saved=JSON.parse(localStorage.getItem('md-uploaded-extension-filters')||'[]');
+    return new Set(Array.isArray(saved)?saved.filter(value=>typeof value==='string'):[]);
+  }catch{return new Set()}
+}
+let uploadedExtensionFilters=loadUploadedExtensionFilters();
 function pathOf(f){return(sidebarUploadPaths.get(f)||f.webkitRelativePath||f.name).replace(/\\/g,'/')}
 function dirOf(p){const a=p.split('/');return a.length>1?a.slice(0,-1).join('/'):''}
 function readText(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result||''));r.onerror=rej;r.readAsText(f)})}
@@ -3644,6 +3651,62 @@ function renderFileGroup(parent,dir,files,renderFile,collapsedState){
 }
 function fileTreeCount(node){return node.files.length+[...node.children.values()].reduce((sum,child)=>sum+fileTreeCount(child),0)}
 function addTreeFile(root,parts,file){let node=root;parts.filter(Boolean).forEach(part=>{if(!node.children.has(part))node.children.set(part,{name:part,children:new Map(),files:[]});node=node.children.get(part)});node.files.push(file)}
+function sidebarFileExtension(file){
+  const name=String(file.originalName||file.path||file.name||'').split('/').pop();
+  const match=name.match(/(\.[^.]+)$/);
+  return match?match[1].toLocaleLowerCase():'(없음)';
+}
+function filteredSidebarTree(node,predicate){
+  const copy={name:node.name,children:new Map(),files:node.files.filter(predicate)};
+  node.children.forEach((child,name)=>{
+    const next=filteredSidebarTree(child,predicate);
+    if(fileTreeCount(next))copy.children.set(name,next);
+  });
+  return copy;
+}
+function uploadedSidebarExtensions(node){
+  const counts=new Map();
+  sidebarFolderFiles(node).forEach(file=>{
+    const extension=sidebarFileExtension(file);
+    counts.set(extension,(counts.get(extension)||0)+1);
+  });
+  return [...counts].sort(([a],[b])=>a.localeCompare(b,'en'));
+}
+function saveUploadedExtensionFilters(){localStorage.setItem('md-uploaded-extension-filters',JSON.stringify([...uploadedExtensionFilters]))}
+function showUploadedExtensionFilter(event,node){
+  event.preventDefault();event.stopPropagation();
+  document.querySelectorAll('.sidebar-extension-filter-popup').forEach(menu=>menu.remove());
+  const extensions=uploadedSidebarExtensions(node),menu=document.createElement('div');
+  menu.className='file-context-menu sidebar-extension-filter-popup';
+  menu.innerHTML=`<div class="sidebar-extension-filter-head"><strong>${uiLanguage==='en'?'File extensions':'파일 확장자'}</strong><div class="sidebar-extension-filter-actions"><button type="button" data-extension-filter-clear>${uiLanguage==='en'?'Clear all':'모두 해제'}</button><button type="button" data-extension-filter-select-all>${uiLanguage==='en'?'Select all':'모두 선택'}</button></div></div><div class="sidebar-extension-filter-options"></div>`;
+  const options=menu.querySelector('.sidebar-extension-filter-options');
+  extensions.forEach(([extension,count])=>{
+    const label=document.createElement('label');
+    label.innerHTML=`<input type="checkbox" value="${htmlEsc(extension)}" ${uploadedExtensionFilters.has(extension)?'checked':''}><span>${htmlEsc(extension==='(없음)'?(uiLanguage==='en'?'No extension':'확장자 없음'):extension)}</span><small>${count}</small>`;
+    label.querySelector('input').onchange=inputEvent=>{
+      inputEvent.currentTarget.checked?uploadedExtensionFilters.add(extension):uploadedExtensionFilters.delete(extension);
+      saveUploadedExtensionFilters();renderList();
+    };
+    options.appendChild(label);
+  });
+  menu.querySelector('[data-extension-filter-clear]').onclick=()=>{
+    uploadedExtensionFilters.clear();
+    options.querySelectorAll('input').forEach(input=>input.checked=false);
+    saveUploadedExtensionFilters();renderList();
+  };
+  menu.querySelector('[data-extension-filter-select-all]').onclick=()=>{
+    uploadedExtensionFilters=new Set(extensions.map(([extension])=>extension));
+    options.querySelectorAll('input').forEach(input=>input.checked=true);
+    saveUploadedExtensionFilters();renderList();
+  };
+  document.body.appendChild(menu);
+  positionContextMenu(menu,event.clientX,event.clientY);
+  const close=closeEvent=>{
+    if(menu.contains(closeEvent.target))return;
+    menu.remove();document.removeEventListener('pointerdown',close,true);
+  };
+  setTimeout(()=>document.addEventListener('pointerdown',close,true),0);
+}
 function buildSidebarTrees(){
   const local={name:'로컬',children:new Map(),files:[]},uploaded={name:'업로드된 파일',children:new Map(),files:[]};
   const representedPaths=new Set();
@@ -3753,7 +3816,7 @@ function showSidebarFolderMenu(event,node,pathKey,isRoot){
   document.addEventListener('pointerdown',close);
 }
 function renderSidebarNode(parent,node,pathKey,isRoot=false,depth=0){
-  const count=fileTreeCount(node),collapsed=!!state.collapsedSidebarGroups[pathKey],wrap=document.createElement('div');
+  const count=fileTreeCount(node),total=node._filterTotal||count,collapsed=!!state.collapsedSidebarGroups[pathKey],wrap=document.createElement('div');
   wrap.className='folder-group'+(isRoot?' sidebar-root-group':'')+(collapsed?' collapsed':'');
   wrap.style.setProperty('--sidebar-sticky-top',`${depth?36+(depth-1)*30:-1}px`);
   wrap.style.setProperty('--sidebar-depth',String(depth));
@@ -3761,7 +3824,7 @@ function renderSidebarNode(parent,node,pathKey,isRoot=false,depth=0){
   wrap.style.setProperty('--sidebar-label-indent',`${9+Math.max(0,depth-1)*14}px`);
   wrap.dataset.uploadFolder=pathKey;
   wrap.dataset.sidebarKey=pathKey;
-  wrap.innerHTML=`<button class="folder-title" type="button" title="${htmlEsc(node.name)}"><span class="sidebar-root-chevron" aria-hidden="true"></span><span class="folder-label">${htmlEsc(node.name)}${isRoot?'':' <span class="folder-slash">/</span>'} <span class="folder-count">[${count}]</span></span></button><div class="folder-files"></div>`;
+  wrap.innerHTML=`${isRoot?'<div class="folder-title" role="button" tabindex="0"':'<button class="folder-title" type="button"'} title="${htmlEsc(node.name)}"><span class="sidebar-root-chevron" aria-hidden="true"></span><span class="folder-label">${htmlEsc(node.name)}${isRoot?'':' <span class="folder-slash">/</span>'} <span class="folder-count">[${node._filterActive?`${count}/${total}`:count}]</span></span>${isRoot?'</div>':'</button>'}<div class="folder-files"></div>`;
   const box=wrap.querySelector('.folder-files');
   let populated=false;
   const populate=()=>{
@@ -3777,7 +3840,17 @@ function renderSidebarNode(parent,node,pathKey,isRoot=false,depth=0){
     if(!next)populate();
     wrap.classList.toggle('collapsed',next);
   };
+  if(isRoot)folderTitle.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();folderTitle.click()}};
   folderTitle.oncontextmenu=e=>showSidebarFolderMenu(e,node,pathKey,isRoot);
+  if(isRoot&&pathKey==='업로드된 파일'){
+    const filterButton=document.createElement('button');
+    filterButton.type='button';filterButton.className='sidebar-extension-filter-button'+(uploadedExtensionFilters.size?' active':'');
+    filterButton.title=uiLanguage==='en'?'Filter by extension':'확장자 필터';
+    filterButton.setAttribute('aria-label',filterButton.title);
+    filterButton.innerHTML='<span aria-hidden="true"></span>'+(uploadedExtensionFilters.size?`<b>${uploadedExtensionFilters.size}</b>`:'');
+    filterButton.onclick=event=>showUploadedExtensionFilter(event,node._unfilteredNode||node);
+    folderTitle.appendChild(filterButton);
+  }
   if(!isRoot)enableSidebarDrag(folderTitle,{kind:'folder',key:pathKey});
   parent.appendChild(wrap);
 }
@@ -3856,8 +3929,10 @@ function renderSidebarContents(parent,node,pathKey,depth=0){
   entries.forEach(({child,file,name})=>{
     if(child){renderSidebarNode(parent,child,pathKey+'/'+name,false,depth+1);return}
     const index=state.files.indexOf(file),btn=document.createElement('button'),missing=!file.assetOnly&&missingImageWarningEnabled&&mdExt.test(file.name||file.path)?missingImageRefs(file):[];
-    btn.className='file-item'+(index===state.active?' active':'')+(missing.length?' has-missing-images':'');
-    btn.title=file.path;btn.innerHTML=`<div class="file-name">${htmlEsc(file.displayName||name)}</div>${missing.length?`<span class="missing-image-warning" tabindex="0" aria-label="누락된 이미지: ${htmlEsc(missing.join(', '))}" data-missing-images="${htmlEsc(missing.join('\n'))}">!</span>`:''}`;btn.dataset.sidebarKey=pathKey+'/'+name;
+    const conversionType=file.convertedFromCode?'CODE':file.convertedFromPdf?'MD':'',sidebarName=conversionType?(file.originalName||name):(file.displayName||name);
+    btn.className='file-item'+(index===state.active?' active':'')+(missing.length?' has-missing-images':'')+(conversionType?' has-conversion-type':'');
+    const conversionTitle=file.convertedFromCode?(uiLanguage==='en'?'Converted to a code block':'코드블록으로 변환됨'):(uiLanguage==='en'?'Converted to Markdown':'Markdown으로 변환됨');
+    btn.title=file.path;btn.innerHTML=`<div class="file-name">${htmlEsc(sidebarName)}</div>${conversionType?`<span class="sidebar-conversion-type" title="${conversionTitle}">${conversionType}</span>`:''}${missing.length?`<span class="missing-image-warning" tabindex="0" aria-label="누락된 이미지: ${htmlEsc(missing.join(', '))}" data-missing-images="${htmlEsc(missing.join('\n'))}">!</span>`:''}`;btn.dataset.sidebarKey=pathKey+'/'+name;
     const warning=btn.querySelector('.missing-image-warning');
     if(warning){
       const showMissing=event=>{event.preventDefault();event.stopPropagation();showInfoNotice('누락된 이미지',`이 문서에서 참조한 이미지 파일을 찾을 수 없습니다: ${missing.join(', ')}`)};
@@ -3869,7 +3944,17 @@ function renderSidebarContents(parent,node,pathKey,depth=0){
     enableSidebarDrag(btn,{kind:'file',key:pathKey+'/'+name,file});parent.appendChild(btn);
   });
 }
-function renderList(){const n=state.files.length;$('sidebar-files-tab').textContent=`파일 [${n}]`;els.count.textContent='';els.count.style.display='none';els.list.classList.toggle('sticky-subfolders-enabled',stickySubfolderEnabled);els.list.innerHTML='';buildSidebarTrees().forEach(node=>renderSidebarNode(els.list,node,node.name,true));renderSidebarImages()}
+function renderList(){
+  const n=state.files.length;$('sidebar-files-tab').textContent=`파일 [${n}]`;els.count.textContent='';els.count.style.display='none';els.list.classList.toggle('sticky-subfolders-enabled',stickySubfolderEnabled);els.list.innerHTML='';
+  buildSidebarTrees().forEach(node=>{
+    if(node.name==='업로드된 파일'&&uploadedExtensionFilters.size){
+      const filtered=filteredSidebarTree(node,file=>uploadedExtensionFilters.has(sidebarFileExtension(file)));
+      filtered._filterActive=true;filtered._filterTotal=fileTreeCount(node);filtered._unfilteredNode=node;
+      renderSidebarNode(els.list,filtered,filtered.name,true);
+    }else renderSidebarNode(els.list,node,node.name,true);
+  });
+  renderSidebarImages();
+}
 function rebuildSidebarImageIndex(){
   const oldUrls=new Set(Object.values(state.images));state.images={};
   state.assets.forEach((file,path)=>{sidebarUploadPaths.set(file,path);if(imageExt.test(path))addImage(file)});
@@ -8821,6 +8906,12 @@ function applyPreviewCommand(command,value=null){
   if(applySelectedMathCommand(command,value))return true;
   const range=previewRange();
   if(!range)return false;
+  if(align){
+    pushHistory(true);
+    if(!setPreviewRangeAlignment(range,align))return true;
+    const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
+    state.savedPreviewRange=range.cloneRange();syncFromPreview();return true;
+  }
   // A caret is not a formatting selection. Never insert a placeholder when a
   // mobile toolbar tap has collapsed the user's native text selection.
   if(range.collapsed)return true;
@@ -8833,6 +8924,21 @@ function applyPreviewCommand(command,value=null){
   rememberPreviewRange();
   syncFromPreview();
   return true;
+}
+function setPreviewRangeAlignment(range,align){
+  if(!range||!align)return false;
+  const blocks=new Set();
+  const addBlock=node=>{const block=closestPreviewBlock(node);if(block)blocks.add(block)};
+  addBlock(range.startContainer);addBlock(range.endContainer);
+  const root=range.commonAncestorContainer.nodeType===Node.TEXT_NODE?range.commonAncestorContainer.parentElement:range.commonAncestorContainer;
+  if(root){
+    const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let node;
+    while((node=walker.nextNode())){
+      try{if(range.intersectsNode(node))addBlock(node)}catch{}
+    }
+  }
+  blocks.forEach(block=>block.style.textAlign=align);
+  return blocks.size>0;
 }
 function closestStyleHost(node,range){
   let el=node.nodeType===1?node:node.parentElement;
@@ -9295,8 +9401,7 @@ function pastePreviewSelectionFormat(){
   };
   let next=selectInserted();
   if(fields.has('blockTag')&&copiedTextFormat.blockTag)document.execCommand('formatBlock',false,copiedTextFormat.blockTag);
-  const alignCommand={left:'justifyLeft',center:'justifyCenter',right:'justifyRight',start:'justifyLeft',end:'justifyRight'}[copiedTextFormat.textAlign];
-  if(fields.has('textAlign')&&alignCommand)document.execCommand(alignCommand,false,null);
+  if(fields.has('textAlign')&&copiedTextFormat.textAlign)setPreviewRangeAlignment(selectInserted(),copiedTextFormat.textAlign);
   if(span.isConnected)next=selectInserted();
   finishPreviewTextMutation(next);
   return true;
@@ -9309,6 +9414,7 @@ const CUSTOM_FORMAT_FIELD_LABELS={
 };
 let customFormatPanel=null;
 let customFormatRootCollapsed=false;
+let customFormatShortcutCache=null;
 function customFormatId(prefix='format'){
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
 }
@@ -9323,6 +9429,7 @@ function loadCustomFormats(){
 }
 function saveCustomFormats(store){
   localStorage.setItem(CUSTOM_FORMAT_STORAGE_KEY,JSON.stringify(store));
+  customFormatShortcutCache=new Map(store.presets.filter(preset=>preset.shortcut).map(preset=>[preset.shortcut,preset]));
 }
 function customFormatColor(value,fallback){
   if(value==='transparent')return 'transparent';
@@ -9436,7 +9543,7 @@ function renderCustomFormatPanel(){
       const item=document.createElement('div');
       item.className='custom-format-item';
       item.dataset.presetId=preset.id;
-      item.innerHTML=`<button class="custom-format-apply" type="button" data-custom-format-action="apply"><span class="custom-format-name">${htmlEsc(preset.name)}</span><span class="custom-format-sample" style="${htmlEsc(customFormatInlineStyle(preset))}">${htmlEsc(preset.previewText||'미리보기 텍스트')}</span></button><div class="custom-format-item-actions"><button type="button" data-custom-format-action="edit" title="서식 수정" aria-label="서식 수정">⚙</button><button type="button" data-custom-format-action="duplicate" title="복제" aria-label="복제">⧉</button><button type="button" data-custom-format-action="rename" title="이름 변경" aria-label="이름 변경">✎</button><button type="button" data-custom-format-action="delete" title="삭제" aria-label="삭제">×</button></div>`;
+      item.innerHTML=`<button class="custom-format-apply" type="button" data-custom-format-action="apply"><span class="custom-format-name">${htmlEsc(preset.name)}${preset.shortcut?`<kbd>${htmlEsc(preset.shortcut)}</kbd>`:''}</span><span class="custom-format-sample" style="${htmlEsc(customFormatInlineStyle(preset))}">${htmlEsc(preset.previewText||(uiLanguage==='en'?'Preview text':'미리보기 텍스트'))}</span></button><div class="custom-format-item-actions"><button type="button" data-custom-format-action="edit" title="서식 수정" aria-label="서식 수정">⚙</button><button type="button" data-custom-format-action="duplicate" title="복제" aria-label="복제"><svg class="custom-format-duplicate-icon" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect x="2" y="2" width="7" height="7" rx=".8"></rect><rect x="5" y="5" width="7" height="7" rx=".8"></rect></svg></button><button type="button" data-custom-format-action="delete" title="삭제" aria-label="삭제">×</button></div>`;
       items.appendChild(item);
     });
     if(!presets.length&&!query){
@@ -9495,7 +9602,8 @@ function customFormatEditor(preset=null,source=null){
   const initial={
     name:preset?.name||(uiLanguage==='en'?'New style':'새 서식'),
     folderId:preset?.folderId||'',
-    previewText:preset?.previewText||source?.previewText||'미리보기 텍스트',
+    previewText:uiLanguage==='en'&&preset?.previewText==='미리보기 텍스트'?'Preview text':preset?.previewText||source?.previewText||(uiLanguage==='en'?'Preview text':'미리보기 텍스트'),
+    shortcut:preset?.shortcut||'',
     fields:preset?.fields||(source?CUSTOM_FORMAT_FIELDS.filter(field=>source.available[field]):['blockTag','fontSize','color']),
     blockTag:preset?.blockTag||source?.values.blockTag||'p',
     fontSize:Number(preset?.fontSize||source?.values.fontSize||14),
@@ -9553,6 +9661,7 @@ function customFormatEditor(preset=null,source=null){
             <strong class="custom-format-editor-section-title">저장 정보</strong>
             <label><span>서식명</span><input type="text" maxlength="60" data-custom-meta="name"></label>
             <label class="custom-format-meta-field"><span>폴더</span><select data-custom-meta="folder"><option value="">개별 서식</option>${store.folders.map(folder=>`<option value="${htmlEsc(folder.id)}">${htmlEsc(folder.name)}</option>`).join('')}</select></label>
+            <label class="custom-format-meta-field"><span>단축키</span><button class="custom-format-shortcut-button" type="button" data-custom-shortcut-record></button><small class="custom-format-shortcut-help">버튼을 누른 뒤 원하는 키 조합을 입력하세요.</small></label>
           </section>
           <section class="custom-format-editor-section">
             <strong class="custom-format-editor-section-title">저장할 항목</strong>
@@ -9567,6 +9676,7 @@ function customFormatEditor(preset=null,source=null){
     const control=name=>wrap.querySelector(`[data-custom-control="${name}"]`);
     const meta=name=>wrap.querySelector(`[data-custom-meta="${name}"]`);
     const values={...initial};
+    let shortcut=initial.shortcut;
     meta('name').value=initial.name;
     meta('folder').value=initial.folderId;
     control('blockTag').value=initial.blockTag;
@@ -9575,6 +9685,55 @@ function customFormatEditor(preset=null,source=null){
     values.color=customFormatColor(initial.color,'#111111');
     values.backgroundColor=customFormatColor(initial.backgroundColor,'transparent');
     preview.textContent=initial.previewText;
+    const shortcutButton=wrap.querySelector('[data-custom-shortcut-record]');
+    const shortcutHelp=wrap.querySelector('.custom-format-shortcut-help');
+    const shortcutLabel=()=>shortcut||(uiLanguage==='en'?'Not set':'설정 안 함');
+    let recordingShortcut=false;
+    const stopShortcutRecording=()=>{
+      recordingShortcut=false;
+      window.removeEventListener('keydown',recordShortcut,true);
+      shortcutButton.classList.remove('is-recording','is-error');
+      shortcutButton.classList.toggle('is-empty',!shortcut);
+      shortcutButton.textContent=shortcutLabel();
+    };
+    const recordShortcut=event=>{
+      event.preventDefault();event.stopImmediatePropagation();
+      if(event.key==='Escape'){stopShortcutRecording();return}
+      if(event.key==='Backspace'||event.key==='Delete'){
+        shortcut='';shortcutHelp.textContent=uiLanguage==='en'?'No shortcut assigned.':'단축키가 해제되었습니다.';stopShortcutRecording();return;
+      }
+      if(['Control','Meta','Alt','Shift'].includes(event.key))return;
+      const value=shortcutFromEvent(event);
+      if(!event.ctrlKey&&!event.metaKey&&!event.altKey&&!/^F(?:[1-9]|1[0-2])$/.test(value)){
+        shortcutButton.classList.remove('is-recording');shortcutButton.classList.add('is-error');
+        shortcutButton.textContent=uiLanguage==='en'?'Add Ctrl or Alt':'Ctrl 또는 Alt 필요';
+        shortcutHelp.textContent=uiLanguage==='en'?'Use Ctrl or Alt with another key.':'Ctrl 또는 Alt와 다른 키를 함께 입력하세요.';
+        recordingShortcut=false;window.removeEventListener('keydown',recordShortcut,true);return;
+      }
+      const commandConflict=SHORTCUT_DEFINITIONS.find(item=>shortcutSettings[item.id]===value);
+      const presetConflict=store.presets.find(item=>item.id!==preset?.id&&item.shortcut===value);
+      const rawConflictName=commandConflict?.name||presetConflict?.name;
+      const conflictName=uiLanguage==='en'&&commandConflict?translatedUiText(rawConflictName):rawConflictName;
+      if(conflictName){
+        shortcutButton.classList.remove('is-recording');shortcutButton.classList.add('is-error');
+        shortcutButton.textContent=uiLanguage==='en'?'Already in use':'이미 사용 중';
+        shortcutHelp.textContent=uiLanguage==='en'?`Used by: ${conflictName}`:`${conflictName}에서 사용 중입니다.`;
+        recordingShortcut=false;window.removeEventListener('keydown',recordShortcut,true);return;
+      }
+      shortcut=value;
+      shortcutHelp.textContent=uiLanguage==='en'?'Click to change it. Press Delete to clear.':'변경하려면 다시 누르세요. Delete를 누르면 해제됩니다.';
+      stopShortcutRecording();
+    };
+    shortcutButton.textContent=shortcutLabel();
+    shortcutButton.classList.toggle('is-empty',!shortcut);
+    shortcutButton.addEventListener('click',event=>{
+      event.preventDefault();
+      if(recordingShortcut){stopShortcutRecording();return}
+      recordingShortcut=true;shortcutButton.classList.remove('is-error');shortcutButton.classList.add('is-recording');
+      shortcutButton.textContent=uiLanguage==='en'?'Press keys…':'키 조합을 누르세요…';
+      shortcutHelp.textContent=uiLanguage==='en'?'Esc cancels; Delete clears the shortcut.':'Esc는 취소, Delete는 단축키 해제입니다.';
+      window.addEventListener('keydown',recordShortcut,true);
+    });
     const fieldInput=name=>wrap.querySelector(`[data-custom-field="${name}"]`);
     const setFieldChecked=(name,checked=true)=>{
       const input=fieldInput(name);
@@ -9788,7 +9947,7 @@ function customFormatEditor(preset=null,source=null){
       setFieldChecked(field,values[field]);
       refresh();
     }));
-    const close=result=>{wrap.remove();resolve(result)};
+    const close=result=>{window.removeEventListener('keydown',recordShortcut,true);wrap.remove();resolve(result)};
     wrap.addEventListener('click',event=>{
       if(event.target===wrap||event.target.closest('[data-custom-editor-action="cancel"]'))return close(null);
       if(!event.target.closest('[data-custom-editor-action="save"]'))return;
@@ -9800,7 +9959,8 @@ function customFormatEditor(preset=null,source=null){
         id:preset?.id||customFormatId(),
         ...values,
         name,folderId:meta('folder').value,
-        previewText:preview.textContent.trim()||'미리보기 텍스트',
+        previewText:preview.textContent.trim()||(uiLanguage==='en'?'Preview text':'미리보기 텍스트'),
+        shortcut,
         fields
       });
     });
@@ -9824,7 +9984,7 @@ async function createCustomFormat(){
   const store=loadCustomFormats();
   store.presets.push(preset);saveCustomFormats(store);renderCustomFormatPanel();
 }
-function applyCustomFormatPreset(preset){
+function applyCustomFormatPreset(preset,{deferSync=false}={}){
   let range=previewRange();
   if(!range||range.collapsed||!els.preview.contains(range.commonAncestorContainer)){
     showInfoNotice('텍스트를 선택해 주세요','프리뷰에서 서식을 적용할 텍스트를 먼저 드래그해 주세요.');
@@ -9852,7 +10012,9 @@ function applyCustomFormatPreset(preset){
       targets.forEach(cell=>cell.style.textAlign=preset.textAlign||'left');
     }
     if(!cells.length&&spans.length){const ordered=[...spans].reverse(),next=document.createRange();next.setStart(ordered[0].firstChild,0);next.setEnd(ordered.at(-1).lastChild,ordered.at(-1).lastChild.length);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);state.savedPreviewRange=next.cloneRange()}
-    syncFromPreview();pushHistory(true);return true;
+    if(deferSync)scheduleSyncFromPreview();
+    else{syncFromPreview();pushHistory(true)}
+    return true;
   }
   pushHistory(true);
   let selection=window.getSelection();
@@ -9874,11 +10036,23 @@ function applyCustomFormatPreset(preset){
   };
   let next=selectInserted();
   if(fields.has('blockTag')&&preset.blockTag)document.execCommand('formatBlock',false,preset.blockTag);
-  const alignCommand={left:'justifyLeft',center:'justifyCenter',right:'justifyRight',justify:'justifyFull'}[preset.textAlign];
-  if(fields.has('textAlign')&&alignCommand)document.execCommand(alignCommand,false,null);
+  if(fields.has('textAlign')&&preset.textAlign)setPreviewRangeAlignment(selectInserted(),preset.textAlign);
   if(span.isConnected)next=selectInserted();
-  finishPreviewTextMutation(next);
+  if(deferSync){
+    state.savedPreviewRange=next.cloneRange();
+    scheduleSyncFromPreview();
+  }else finishPreviewTextMutation(next);
   return true;
+}
+function customFormatPresetForShortcut(event){
+  if(!event.ctrlKey&&!event.metaKey&&!event.altKey&&!/^F(?:[1-9]|1[0-2])$/i.test(event.key))return null;
+  const value=shortcutFromEvent(event);
+  if(!value)return null;
+  if(!customFormatShortcutCache){
+    const store=loadCustomFormats();
+    customFormatShortcutCache=new Map(store.presets.filter(preset=>preset.shortcut).map(preset=>[preset.shortcut,preset]));
+  }
+  return customFormatShortcutCache.get(value)||null;
 }
 async function handleCustomFormatPanelClick(event){
   const actionButton=event.target.closest('[data-custom-format-action]');
@@ -9912,12 +10086,8 @@ async function handleCustomFormatPanelClick(event){
     store.presets[store.presets.findIndex(item=>item.id===preset.id)]=edited;saveCustomFormats(store);return renderCustomFormatPanel();
   }
   if(action==='duplicate'&&preset){
-    const copy={...preset,id:customFormatId(),name:`${preset.name} 복사본`};
+    const copy={...preset,id:customFormatId(),name:`${preset.name} 복사본`,shortcut:''};
     store.presets.push(copy);saveCustomFormats(store);return renderCustomFormatPanel();
-  }
-  if(action==='rename'&&preset){
-    const name=await requestCustomFormatName('서식 이름 수정',preset.name,'서식명');
-    if(!name)return;preset.name=name;saveCustomFormats(store);return renderCustomFormatPanel();
   }
   if(action==='delete'&&preset){
     store.presets=store.presets.filter(item=>item.id!==preset.id);saveCustomFormats(store);return renderCustomFormatPanel();
@@ -12466,6 +12636,9 @@ const EN_TEXT={
   '서식 설정':'Style settings','아래 값을 바꾸면 해당 속성이 자동으로 저장 항목에 포함됩니다.':'Changing a value below automatically includes that property in the saved style.',
   '정렬':'Alignment','없음':'None','미리보기':'Preview','문구를 직접 바꿔 저장 목록에서 보일 예시를 확인할 수 있습니다.':'Edit the text to preview how it will appear in the saved-style list.',
   '저장 정보':'Save information','서식명':'Style name','폴더':'Folder','저장할 항목':'Properties to save','체크한 속성만 텍스트에 적용됩니다.':'Only checked properties are applied to the text.',
+  '미리보기 텍스트':'Preview text','단축키가 해제되었습니다.':'No shortcut assigned.','변경하려면 다시 누르세요. Delete를 누르면 해제됩니다.':'Click to change it. Press Delete to clear.',
+  '버튼을 누른 뒤 원하는 키 조합을 입력하세요.':'Click the button, then press the shortcut you want.','Esc는 취소, Delete는 단축키 해제입니다.':'Esc cancels; Delete clears the shortcut.','Ctrl 또는 Alt와 다른 키를 함께 입력하세요.':'Use Ctrl or Alt with another key.',
+  '편집 화면에서 텍스트를 선택한 뒤 사용해 주세요.':'Select text in the editor before using this shortcut.',
   '글자 크기':'Font size','굵게':'Bold','기울임':'Italic','밑줄':'Underline',
   '확장 Markdown 저장 지원 안내':'Extended Markdown save support','Obsidian 계열 문법 저장 지원 안내':'Obsidian syntax save support',
   '[[문서!ALL]]':'[[Document!ALL]]','[[문서]]':'[[Document]]','![[파일]]':'![[File]]','==텍스트==':'==Text==','> 텍스트':'> Text','>> 텍스트':'>> Text','[@key]: 출처':'[@key]: Source','`코드`':'`code`','- 항목':'- Item','1. 항목':'1. Item',
@@ -14653,6 +14826,13 @@ for(const list of [els.convertList,els.mergeList]){
 document.addEventListener('keydown',e=>{
   if(e.isComposing||e.defaultPrevented)return;
   const modifier=e.ctrlKey||e.metaKey,key=e.key.toLowerCase(),command=shortcutCommand(e);
+  const customFormatPreset=customFormatPresetForShortcut(e);
+  if(customFormatPreset){
+    e.preventDefault();e.stopImmediatePropagation();
+    if(e.repeat||document.querySelector('.modal-backdrop'))return;
+    if(state.mode!=='edit'){showInfoNotice('사용자 지정 서식','편집 화면에서 텍스트를 선택한 뒤 사용해 주세요.');return}
+    rememberPreviewRange();applyCustomFormatPreset(customFormatPreset,{deferSync:true});return;
+  }
   if(command==='customFormat'){
     e.preventDefault();e.stopImmediatePropagation();if(e.repeat||document.querySelector('.modal-backdrop'))return;
     if(state.mode!=='edit')setMode('edit');rememberPreviewRange();toggleCustomFormatPanel(true);return;
