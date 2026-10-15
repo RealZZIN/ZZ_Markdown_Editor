@@ -1726,10 +1726,75 @@ function showImageContextMenu(e,image){
   menu.style.left=Math.max(6,Math.min(e.clientX,window.innerWidth-rect.width-6))+'px';
   menu.style.top=Math.max(6,Math.min(e.clientY,window.innerHeight-rect.height-6))+'px';
 }
+let horizontalRuleContextMenu=null,horizontalRuleContextTarget=null,copiedHorizontalRule='---';
+function hideHorizontalRuleContextMenu(){
+  if(horizontalRuleContextMenu)horizontalRuleContextMenu.hidden=true;
+  horizontalRuleContextTarget=null;
+}
+async function copyHorizontalRule(){
+  copiedHorizontalRule='---';
+  try{await navigator.clipboard?.writeText?.(copiedHorizontalRule)}catch{}
+  return true;
+}
+function removeHorizontalRule(rule){
+  if(!rule||!els.preview.contains(rule))return false;
+  pushHistory(true);
+  rule.remove();
+  syncFromPreview();
+  pushHistory(true);
+  return true;
+}
+function ensureHorizontalRuleContextMenu(){
+  if(horizontalRuleContextMenu)return horizontalRuleContextMenu;
+  horizontalRuleContextMenu=document.createElement('div');
+  horizontalRuleContextMenu.className='file-context-menu';
+  horizontalRuleContextMenu.hidden=true;
+  horizontalRuleContextMenu.innerHTML=`
+    <button type="button" data-horizontal-rule-action="cut">${uiLanguage==='en'?'Cut':'잘라내기'}</button>
+    <button type="button" data-horizontal-rule-action="copy">${uiLanguage==='en'?'Copy':'복사'}</button>
+    <hr>
+    <button type="button" class="danger" data-horizontal-rule-action="remove">${uiLanguage==='en'?'Delete':'삭제'}</button>`;
+  horizontalRuleContextMenu.addEventListener('mousedown',event=>event.preventDefault());
+  horizontalRuleContextMenu.addEventListener('click',async event=>{
+    const action=event.target.closest('[data-horizontal-rule-action]')?.dataset.horizontalRuleAction;
+    const rule=horizontalRuleContextTarget;
+    if(!action||!rule||!els.preview.contains(rule))return;
+    hideHorizontalRuleContextMenu();
+    if(action==='copy')await copyHorizontalRule();
+    else if(action==='cut'){
+      copyHorizontalRule();
+      if(rule.isConnected)removeHorizontalRule(rule);
+    }else if(action==='remove')removeHorizontalRule(rule);
+  });
+  document.addEventListener('mousedown',event=>{
+    if(!horizontalRuleContextMenu.hidden&&!horizontalRuleContextMenu.contains(event.target))hideHorizontalRuleContextMenu();
+  });
+  document.addEventListener('keydown',event=>{if(event.key==='Escape')hideHorizontalRuleContextMenu()});
+  window.addEventListener('resize',hideHorizontalRuleContextMenu);
+  document.addEventListener('scroll',hideHorizontalRuleContextMenu,true);
+  document.body.appendChild(horizontalRuleContextMenu);
+  return horizontalRuleContextMenu;
+}
+function showHorizontalRuleContextMenu(event,rule){
+  event.preventDefault();event.stopPropagation();event.stopImmediatePropagation();
+  clearClickMove();hideImageContextMenu();hideMathContextMenu();hideUniqueBlockContextMenu();hideTextContextMenu();
+  horizontalRuleContextTarget=rule;
+  const menu=ensureHorizontalRuleContextMenu();
+  menu.hidden=false;
+  menu.style.left=event.clientX+'px';menu.style.top=event.clientY+'px';
+  const rect=menu.getBoundingClientRect();
+  menu.style.left=Math.max(6,Math.min(event.clientX,window.innerWidth-rect.width-6))+'px';
+  menu.style.top=Math.max(6,Math.min(event.clientY,window.innerHeight-rect.height-6))+'px';
+}
 function usesMobileObjectGesture(){
   return matchMedia('(pointer:coarse)').matches||innerWidth<=680;
 }
 document.addEventListener('contextmenu',e=>{
+  const horizontalRule=e.target.closest('#preview hr');
+  if(horizontalRule){
+    showHorizontalRuleContextMenu(e,horizontalRule);
+    return;
+  }
   const form=e.target.closest('#preview .zz-form-control');
   if(form){
     e.preventDefault();
@@ -2937,6 +3002,23 @@ function addTableResize(container){
     requestAnimationFrame(()=>updateTableCellOverflow(table));
   });
 }
+function preserveTableGeometry(table){
+  if(!table||!els.preview.contains(table)||table.style.tableLayout==='fixed')return false;
+  const tableWidth=table.getBoundingClientRect().width;
+  const firstRow=table.rows?.[0];
+  const cells=Array.from(firstRow?.cells||[]);
+  if(!tableWidth||!cells.length)return false;
+  const widths=cells.map(cell=>cell.getBoundingClientRect().width);
+  // Keep a responsive 100% table responsive; preserve an explicitly sized
+  // table in pixels. Fixed layout prevents font-size/content edits in one cell
+  // from changing the outer width or pushing the opposite edge.
+  if(!table.style.width)table.style.width=`${Math.round(tableWidth)}px`;
+  table.style.tableLayout='fixed';
+  cells.forEach((cell,index)=>{
+    if(!cell.style.width&&widths[index])cell.style.width=`${(widths[index]/tableWidth*100).toFixed(4)}%`;
+  });
+  return true;
+}
 function stripReadOnlyTableResizeArtifacts(container){
   if(!container)return;
   container.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle').forEach(handle=>handle.remove());
@@ -3063,7 +3145,13 @@ document.addEventListener('pointercancel',finishTableResize);
       window.getSelection()?.removeAllRanges();
     }
   }
-  function tableCells(table){return Array.from(table?.querySelectorAll('tr')||[]).map(tr=>Array.from(tr.children).filter(cell=>cell.matches('th,td')))}
+  function tableCells(table){
+    // querySelectorAll('tr') also picks up rows from a table nested in a cell.
+    // That makes a selected column's coordinates drift and can make column
+    // insertion appear to do nothing. HTMLTableElement.rows contains only the
+    // rows owned by this table (including its thead/tbody/tfoot sections).
+    return Array.from(table?.rows||[]).map(row=>Array.from(row.cells||[]));
+  }
   function cellPoint(cell){
     const table=cell?.closest('table'),rows=tableCells(table),r=rows.findIndex(row=>row.includes(cell));
     return table&&r>=0?{table,r,c:rows[r].indexOf(cell)}:null;
@@ -3327,7 +3415,14 @@ document.addEventListener('pointercancel',finishTableResize);
       }
     }else if(op==='col-left'||op==='col-right'){
       const targetColumn=op==='col-left'?cStart:cEnd+1;
-      matrix.forEach(row=>{const rowElement=row[0]?.parentElement;if(!rowElement)return;const before=row[targetColumn]||null,tag=rowElement.parentElement?.tagName==='THEAD'?'th':'td';rowElement.insertBefore(makeEmptyCell(tag),before)});
+      // Resolve each insertion point from the live row instead of the stale
+      // selection matrix. This keeps "add left/right" deterministic for a
+      // whole-column selection and for tables containing nested tables.
+      Array.from(table.rows).forEach(rowElement=>{
+        const cells=Array.from(rowElement.cells),before=cells[targetColumn]||null;
+        const tag=rowElement.parentElement?.tagName==='THEAD'?'th':'td';
+        rowElement.insertBefore(makeEmptyCell(tag),before);
+      });
     }else if(op==='del-row'){
       if(matrix.length>1)for(let index=rEnd;index>=rStart;index--)if(table.querySelectorAll('tr').length>1)matrix[index]?.[0]?.parentElement?.remove();
     }else if(op==='del-col'){
@@ -3569,38 +3664,48 @@ function cancelPostRenderEnhancements(){
 function schedulePostRenderEnhancements(text){
   cancelPostRenderEnhancements();
   const token=postRenderEnhancementToken;
+  let stage=0;
   els.preview.setAttribute('aria-busy','true');
+  const stages=[
+    ()=>fixSpanColors(els.preview),
+    ()=>runMermaid(els.preview),
+    ()=>runHighlight(els.preview),
+    ()=>{
+      const previewTables=els.preview.querySelectorAll('table');
+      if(previewTables.length>120)installLazyTableResize();
+      else addTableResize(els.preview);
+    },
+    ()=>addImageResize(els.preview),
+    ()=>addMovableElements(els.preview),
+    ()=>renderDocumentOutline(),
+    ()=>schedulePreviewLineNumbers()
+  ];
+  const scheduleNext=()=>{
+    if(token!==postRenderEnhancementToken)return;
+    if('requestIdleCallback' in window)postRenderEnhancementIdle=requestIdleCallback(enhance,{timeout:650});
+    else postRenderEnhancementDelay=setTimeout(()=>{postRenderEnhancementDelay=0;enhance()},0);
+  };
   const enhance=()=>{
     postRenderEnhancementIdle=0;
     if(token!==postRenderEnhancementToken||lastRenderedMarkdownText!==text)return;
-    if(document.querySelector('.modal-backdrop,.edit-guide-overlay,.form-insert-panel')){
+    if(stage===0&&document.querySelector('.modal-backdrop,.edit-guide-overlay,.form-insert-panel')){
       postRenderEnhancementDelay=setTimeout(()=>{
         postRenderEnhancementDelay=0;
         if(token!==postRenderEnhancementToken)return;
-        if('requestIdleCallback' in window)postRenderEnhancementIdle=requestIdleCallback(enhance,{timeout:900});
-        else setTimeout(enhance,0);
+        scheduleNext();
       },240);
       return;
     }
-    fixSpanColors(els.preview);
-    runMermaid(els.preview);
-    runHighlight(els.preview);
-    const previewTables=els.preview.querySelectorAll('table');
-    if(previewTables.length>120)installLazyTableResize();
-    else addTableResize(els.preview);
-    addImageResize(els.preview);
-    addMovableElements(els.preview);
-    renderDocumentOutline();
-    schedulePreviewLineNumbers();
-    els.preview.removeAttribute('aria-busy');
+    stages[stage++]?.();
+    if(stage<stages.length)scheduleNext();
+    else els.preview.removeAttribute('aria-busy');
   };
   // Let the freshly parsed document paint before running optional decoration
   // passes. Large restored/uploaded documents otherwise block the first frame.
   postRenderEnhancementFrame=requestAnimationFrame(()=>{
     postRenderEnhancementFrame=0;
     if(token!==postRenderEnhancementToken)return;
-    if('requestIdleCallback' in window)postRenderEnhancementIdle=requestIdleCallback(enhance,{timeout:450});
-    else setTimeout(enhance,0);
+    scheduleNext();
   });
 }
 function assignPreviewHeadingAnchors(root){
@@ -5194,15 +5299,21 @@ function syncActive(){
 }
 function cleanPreviewHtml(root){
   resetTableFilterView(root);
-  root.querySelectorAll('[data-quote-format-pending],[data-quote-format-allowed],[data-quote-format-dismissed]').forEach(node=>{
+  root.querySelectorAll('[data-quote-format-pending],[data-quote-format-allowed],[data-quote-format-dismissed],[data-list-format-pending],[data-list-format-allowed],[data-list-format-dismissed]').forEach(node=>{
     delete node.dataset.quoteFormatPending;delete node.dataset.quoteFormatAllowed;delete node.dataset.quoteFormatDismissed;
+    delete node.dataset.listFormatPending;delete node.dataset.listFormatAllowed;delete node.dataset.listFormatDismissed;
   });
   root.querySelectorAll('[data-code-surface]').forEach(el=>{el.removeAttribute('data-code-surface');el.style.removeProperty('--code-surface-fix')});
   root.querySelectorAll('[data-inline-code-ink]').forEach(el=>el.removeAttribute('data-inline-code-ink'));
   root.querySelectorAll('[data-chip-contrast]').forEach(chip=>chip.removeAttribute('data-chip-contrast'));
   const fragmentWalker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
-  const fragmentNodes=[];while(fragmentWalker.nextNode())fragmentNodes.push(fragmentWalker.currentNode);
-  fragmentNodes.forEach(node=>{node.data=node.data.replace(/\b(?:StartFragment|EndFragment)\b/gi,'')});
+  let fragmentNode;
+  // Do not assign node.data for every text node. Even assigning the same value
+  // creates mutation work and made a preview sync noticeably pause on large
+  // documents. Clipboard fragment markers are uncommon, so touch only matches.
+  while((fragmentNode=fragmentWalker.nextNode())){
+    if(/\b(?:StartFragment|EndFragment)\b/i.test(fragmentNode.data))fragmentNode.data=fragmentNode.data.replace(/\b(?:StartFragment|EndFragment)\b/gi,'');
+  }
   // Older builds allowed TOC links to be dragged out of their generated block.
   // They are generated navigation UI, never standalone document content.
   root.querySelectorAll('.zz-toc-link').forEach(link=>{
@@ -5388,6 +5499,29 @@ function previewHasMeaningfulContent(root){
 }
 let previewSyncTimer=null,previewSyncIdle=0;
 let lastPreviewEnterSplit=null;
+const previewHistorySnapshots=new Map();
+const PREVIEW_HISTORY_SNAPSHOT_LIMIT=6;
+const PREVIEW_HISTORY_SNAPSHOT_CHAR_LIMIT=180000;
+function cachePreviewHistorySnapshot(){
+  const source=els.editor.value;
+  // A DOM snapshot makes a small-document format undo instant, but cloning and
+  // cleaning a very large preview on the shortcut's keydown blocks the UI.
+  // Large documents already have a source history entry and can safely use the
+  // normal renderer when undone.
+  if(!source||source.length>PREVIEW_HISTORY_SNAPSHOT_CHAR_LIMIT||previewHistorySnapshots.has(source)||!els.preview.hasChildNodes())return;
+  const snapshot=els.preview.cloneNode(true);
+  snapshot.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.img-resize-handle').forEach(node=>node.remove());
+  snapshot.querySelectorAll('[data-resize-ready]').forEach(node=>node.removeAttribute('data-resize-ready'));
+  snapshot.querySelectorAll('img').forEach(img=>img.classList.remove('img-resizing','img-selected'));
+  previewHistorySnapshots.set(source,snapshot);
+  while(previewHistorySnapshots.size>PREVIEW_HISTORY_SNAPSHOT_LIMIT){
+    previewHistorySnapshots.delete(previewHistorySnapshots.keys().next().value);
+  }
+}
+function pushPreviewFormatHistory(){
+  pushHistory(true);
+  cachePreviewHistorySnapshot();
+}
 function syncFromPreview(){
   clearTimeout(previewSyncTimer);
   previewSyncTimer=null;
@@ -5425,15 +5559,16 @@ function scheduleSyncFromPreview(){
   if(previewSyncIdle&&'cancelIdleCallback' in window)cancelIdleCallback(previewSyncIdle);
   previewSyncIdle=0;
   const sourceLength=els.editor.value.length;
+  const syncDelay=sourceLength>500000?1200:sourceLength>180000?800:deferredEditorDelay(els.editor.value,220,560);
   previewSyncTimer=setTimeout(()=>{
     previewSyncTimer=null;
     if('requestIdleCallback' in window){
       previewSyncIdle=requestIdleCallback(()=>{previewSyncIdle=0;syncFromPreview()},{timeout:900});
     }else syncFromPreview();
-  },deferredEditorDelay(sourceLength,140,420));
+  },syncDelay);
 }
 let historyRestoreFrame=0,historyRestoreValue='';
-function restoreEditor(value){
+function restoreEditor(value,{onRendered}={}){
   state.restoring=true;
   clearTimeout(editorRenderTimer);editorRenderTimer=null;
   clearTimeout(previewSyncTimer);previewSyncTimer=null;
@@ -5445,10 +5580,26 @@ function restoreEditor(value){
   if(historyRestoreFrame)cancelAnimationFrame(historyRestoreFrame);
   historyRestoreFrame=requestAnimationFrame(()=>{
     historyRestoreFrame=0;
-    if(els.editor.value===historyRestoreValue)renderMarkdown(historyRestoreValue);
+    if(els.editor.value!==historyRestoreValue){onRendered?.(false);return}
+    const snapshot=previewHistorySnapshots.get(historyRestoreValue);
+    if(snapshot){
+      cancelPostRenderEnhancements();
+      lastRenderedMarkdownText=historyRestoreValue;
+      selectedPreviewImage=null;
+      const restored=snapshot.cloneNode(true);
+      els.preview.replaceChildren(...restored.childNodes);
+      assignPreviewHeadingAnchors(els.preview);
+      schedulePostRenderEnhancements(historyRestoreValue);
+    }else renderMarkdown(historyRestoreValue);
+    // Resolve after the restored preview has had a chance to paint. Version
+    // recovery can keep its progress surface visible until this point instead
+    // of closing it before the expensive render starts.
+    requestAnimationFrame(()=>onRendered?.(true));
   });
   state.restoring=false;
-  markDirty();updateUndoRedoButtons();scheduleLineNumbers();scheduleMarkdownHighlight(value);
+  // scheduleLineNumbers already coalesces source highlighting; scheduling both
+  // here caused the restored source layer to be queued twice.
+  markDirty();updateUndoRedoButtons();scheduleLineNumbers();
   if(typeof scheduleWorkspaceSave==='function')scheduleWorkspaceSave();
 }
 function trimFutureBudget(){
@@ -6923,7 +7074,10 @@ function styleSpan(styleName,value){
     const wrap=(text,style)=>text?(style?`<span style="${style}">${text}</span>`:text):'';
     const originalStyle=openSource[1];
     const clearing=value===''||value==null;
-    const selectedStyle=mergeStyle(originalStyle,styleName,clearing?sourceDefaultStyleValue(styleName):value);
+    // Rebuild the outer span as sibling runs, so the cleared middle no longer
+    // inherits the original background. Keeping a theme-colored replacement
+    // here made the "transparent" action look applied while remaining opaque.
+    const selectedStyle=mergeStyle(originalStyle,styleName,clearing?'':value);
     const selectedContent=stripInlineStyleFromHtml(selected,styleName);
     replaceRange(wrap(leading,originalStyle)+wrap(selectedContent,selectedStyle)+wrap(trailing,originalStyle),openIndex,contentEnd+7,true);
     return;
@@ -8235,6 +8389,27 @@ els.preview.addEventListener('paste',e=>{
   e.stopImmediatePropagation();
   insertPreviewHtml(holder.innerHTML);
 },true);
+function pastedHtmlWithoutFontFamily(html){
+  const holder=document.createElement('div');holder.innerHTML=String(html||'');
+  holder.querySelectorAll('script,style,meta,link,object,embed').forEach(node=>node.remove());
+  holder.querySelectorAll('*').forEach(node=>{
+    node.removeAttribute('face');
+    node.removeAttribute('font-family');
+    node.removeAttribute('data-mce-style');
+    node.style?.removeProperty('font-family');
+    [...node.attributes].forEach(attribute=>{if(/^on/i.test(attribute.name))node.removeAttribute(attribute.name)});
+    if(node.hasAttribute('style')&&!node.getAttribute('style')?.trim())node.removeAttribute('style');
+  });
+  return holder.innerHTML;
+}
+els.preview.addEventListener('paste',e=>{
+  if(e.defaultPrevented||selectedCells().length)return;
+  const clipboardHtml=e.clipboardData?.getData('text/html')||'';
+  if(!clipboardHtml||!/(?:font-family\s*:|[";]\s*font\s*:|\bface\s*=|\bfont-family\s*=|data-mce-style\s*=)/i.test(clipboardHtml))return;
+  const cleaned=pastedHtmlWithoutFontFamily(clipboardHtml);
+  e.preventDefault();e.stopImmediatePropagation();
+  insertPreviewHtml(cleaned);
+},true);
 els.preview.addEventListener('paste',e=>{
   if(!autoLinkEnabled)return;
   const rawPaste=e.clipboardData?.getData('text/plain')||'';
@@ -8252,6 +8427,15 @@ els.preview.addEventListener('paste',e=>{
 });
 let previewCompositionActive=false;
 els.preview.addEventListener('compositionstart',()=>{previewCompositionActive=true});
+els.preview.addEventListener('beforeinput',event=>{
+  const selection=window.getSelection();
+  const focusNode=selection?.focusNode;
+  const focusElement=focusNode?.nodeType===Node.ELEMENT_NODE?focusNode:focusNode?.parentElement;
+  // contenteditable dispatches beforeinput from the editing host (#preview),
+  // not necessarily from the td/th containing the caret.
+  const cell=event.target.closest?.('td,th')||focusElement?.closest?.('td,th');
+  if(cell)preserveTableGeometry(cell.closest('table'));
+},true);
 els.preview.addEventListener('input',e=>{
   if(e.target.closest?.('.zz-source-chip-editing')){
     rememberPreviewRange();
@@ -8285,8 +8469,8 @@ els.preview.addEventListener('compositionend',e=>{
   scheduleEditableCodeHighlight(previewCodeAtSelection());
   schedulePreviewMarkdownApply(e.target);
 });
-els.preview.addEventListener('mouseup',()=>{rememberPreviewRange();updatePreviewFontSize();updateFormatButtons()});
-els.preview.addEventListener('keyup',()=>{rememberPreviewRange();updatePreviewFontSize();updateFormatButtons()});
+els.preview.addEventListener('mouseup',()=>{rememberPreviewRange();scheduleFormatStateRefresh()});
+els.preview.addEventListener('keyup',()=>{rememberPreviewRange();scheduleFormatStateRefresh()});
 els.preview.addEventListener('mousedown',trackActivePreviewCode);
 els.preview.addEventListener('mousedown',trackActivePreviewLens);
 els.preview.addEventListener('mousedown',trackActivePreviewStructuredBlock,true);
@@ -8791,7 +8975,10 @@ function wrapTextPartStyle(part,styleName,value){
 }
 function inlineStyleHost(node,styleName,boundary){
   for(let element=node?.nodeType===1?node:node?.parentElement;element&&element!==boundary;element=element.parentElement){
-    if(element.matches?.('span,font,mark')&&(element.style.getPropertyValue(styleName)||(styleName==='background-color'&&(element.matches('mark')||element.style.background))))return element;
+    const legacyColor=styleName==='color'&&element.matches?.('font[color]');
+    const explicitStyle=element.style?.getPropertyValue(styleName)||(styleName==='background-color'&&element.style?.background);
+    const highlight=styleName==='background-color'&&element.matches?.('mark');
+    if(legacyColor||explicitStyle||highlight)return element;
   }
   return null;
 }
@@ -8805,7 +8992,11 @@ function splitInlineStyleHost(host,startNode,startOffset,endNode,endOffset,style
     if(!contents.childNodes.length||(!contents.textContent&&![...contents.childNodes].some(node=>node.nodeType===1)))return null;
     let clone=host.cloneNode(false);
     if(clear&&styleName==='background-color'&&host.matches('mark')){const span=document.createElement('span');for(const attr of [...clone.attributes])if(attr.name!=='class')span.setAttribute(attr.name,attr.value);clone=span}
-    if(clear)removeInlineStyleProperty(clone,styleName);clone.append(contents);fragment.append(clone);return clone;
+    if(clear){
+      removeInlineStyleProperty(clone,styleName);
+      if(styleName==='color'&&clone.matches?.('font[color]'))clone.removeAttribute('color');
+    }
+    clone.append(contents);fragment.append(clone);return clone;
   };
   append(before.cloneContents());const cleared=append(middle.cloneContents(),true);append(after.cloneContents());host.replaceWith(fragment);return cleared;
 }
@@ -8836,6 +9027,11 @@ function clearTableTextStyle(selection,styleName){
 }
 function styleTableTextSelection(styleName,value,selection=tableFormatTextParts()){
   if(!selection)return false;
+  const selectedTables=new Set([
+    ...selection.cells.map(cell=>cell.closest('table')),
+    ...selection.parts.map(part=>part.node.parentElement?.closest('table'))
+  ].filter(Boolean));
+  selectedTables.forEach(preserveTableGeometry);
   if((styleName==='background-color'||styleName==='color')&&(value===''||value==null))return clearTableTextStyle(selection,styleName);
   const {parts,cells}=selection;
   // Explicit cell ranges are formatted at cell level. This avoids extracting
@@ -8879,7 +9075,7 @@ function applyPreviewCommand(command,value=null){
   const align={justifyLeft:'left',justifyCenter:'center',justifyRight:'right',justifyFull:'justify'}[command];
   if(tableSelection&&(align||command==='formatBlock')){
     const cells=tableSelection.cells.length?tableSelection.cells:[...new Set(tableSelection.parts.map(part=>part.node.parentElement.closest('td,th')).filter(Boolean))];
-    pushHistory(true);
+    pushPreviewFormatHistory();
     const saved=previewRange();
     for(const cell of cells){
       if(align){cell.style.textAlign=align;cell.querySelectorAll('p,div,h1,h2,h3,h4,h5,h6').forEach(block=>block.style.textAlign=align)}
@@ -8907,7 +9103,7 @@ function applyPreviewCommand(command,value=null){
   const range=previewRange();
   if(!range)return false;
   if(align){
-    pushHistory(true);
+    pushPreviewFormatHistory();
     if(!setPreviewRangeAlignment(range,align))return true;
     const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
     state.savedPreviewRange=range.cloneRange();syncFromPreview();return true;
@@ -8919,7 +9115,7 @@ function applyPreviewCommand(command,value=null){
   const sel=window.getSelection();
   sel.removeAllRanges();
   sel.addRange(range);
-  pushHistory(true);
+  pushPreviewFormatHistory();
   document.execCommand(command,false,value);
   rememberPreviewRange();
   syncFromPreview();
@@ -8955,7 +9151,7 @@ function applyPreviewStyleToExisting(range,styleName,value){
   // Reuse an inline wrapper only when all of its text is selected.
   // A styled cell/block or a partially selected span must not expand the range.
   if(!host||!host.matches('span,font')||range.toString()!==host.textContent)return false;
-  pushHistory(true);
+  pushPreviewFormatHistory();
   const prop=styleName.replace(/-([a-z])/g,(_,c)=>c.toUpperCase());
   if(value===''||value==null){
     host.style[prop]='';
@@ -8987,7 +9183,8 @@ function styleWholePreview(styleName,value){
   const property=styleName.replace(/-([a-z])/g,(_,c)=>c.toUpperCase());
   const children=[...els.preview.children].filter(node=>!node.matches('.line-gutter,.preview-arrival-marker'));
   if(!children.length)return false;
-  pushHistory(true);
+  if(styleName==='font-size')els.preview.querySelectorAll('table').forEach(preserveTableGeometry);
+  pushPreviewFormatHistory();
   children.forEach(node=>{
     node.style[property]=value||'';
     if(!node.getAttribute('style'))node.removeAttribute('style');
@@ -9008,7 +9205,17 @@ function styleWholePreview(styleName,value){
 }
 function clearPreviewInlineStyle(range,styleName){
   if(!range||range.collapsed||!range.toString())return false;
-  pushHistory(true);
+  const boundary=closestPreviewBlock(range.commonAncestorContainer)?.parentElement||els.preview;
+  const host=inlineStyleHost(range.startContainer,styleName,boundary);
+  if(host&&host.contains(range.endContainer)){
+    pushPreviewFormatHistory();
+    const cleared=splitInlineStyleHost(host,range.startContainer,range.startOffset,range.endContainer,range.endOffset,styleName);
+    if(!cleared)return false;
+    const next=document.createRange();next.selectNodeContents(cleared);
+    const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);
+    state.savedPreviewRange=next.cloneRange();syncFromPreview();return true;
+  }
+  pushPreviewFormatHistory();
   const fragment=removeNestedInlineStyle(range.extractContents(),styleName);
   const first=fragment.firstChild,last=fragment.lastChild;
   if(!first||!last)return false;
@@ -9035,7 +9242,7 @@ function stylePreviewSelection(styleName,value){
   const rangeNode=range.commonAncestorContainer.nodeType===Node.ELEMENT_NODE?range.commonAncestorContainer:range.commonAncestorContainer.parentElement;
   const chipLabel=rangeNode?.closest?.('.zz-source-chip-label');
   if(chipLabel&&els.preview.contains(chipLabel)){
-    pushHistory(true);
+    pushPreviewFormatHistory();
     const cleanupRoot=rangeNode.closest?.('p,li,blockquote,td,th')||els.preview;
     const span=document.createElement('span');
     span.style[styleName.replace(/-([a-z])/g,(_,c)=>c.toUpperCase())]=value;
@@ -9050,7 +9257,7 @@ function stylePreviewSelection(styleName,value){
   if((value===''||value==null)&&!range.collapsed&&clearPreviewInlineStyle(range,styleName))return true;
   if(!range.collapsed&&applyPreviewStyleToExisting(range,styleName,value))return true;
   if(value===''||value==null)return false;
-  pushHistory(true);
+  pushPreviewFormatHistory();
   const cleanupRoot=rangeNode.closest?.('p,li,blockquote,td,th')||els.preview;
   const span=document.createElement('span');
   span.style[styleName.replace(/-([a-z])/g,(_,c)=>c.toUpperCase())]=value;
@@ -9993,6 +10200,10 @@ function applyCustomFormatPreset(preset,{deferSync=false}={}){
   const fields=new Set(preset.fields||[]);
   const tableSelection=tableFormatTextParts();
   if(tableSelection){
+    new Set([
+      ...tableSelection.cells.map(cell=>cell.closest('table')),
+      ...tableSelection.parts.map(part=>part.node.parentElement?.closest('table'))
+    ].filter(Boolean)).forEach(preserveTableGeometry);
     const styles={};
     if(fields.has('fontSize'))styles.fontSize=`${Number(preset.fontSize)||14}px`;
     if(fields.has('color'))styles.color=preset.color||'';
@@ -10001,7 +10212,7 @@ function applyCustomFormatPreset(preset,{deferSync=false}={}){
     if(fields.has('italic'))styles.fontStyle=preset.italic?'italic':'normal';
     if(fields.has('underline'))styles.textDecoration=preset.underline?'underline':'none';
     const {parts,cells}=tableSelection;if(!parts.length)return false;
-    pushHistory(true);const spans=[];
+    pushPreviewFormatHistory();const spans=[];
     for(const {node,start,end} of [...parts].reverse()){
       const part=document.createRange();part.setStart(node,start);part.setEnd(node,end);
       const span=document.createElement('span');Object.assign(span.style,styles);
@@ -10016,7 +10227,7 @@ function applyCustomFormatPreset(preset,{deferSync=false}={}){
     else{syncFromPreview();pushHistory(true)}
     return true;
   }
-  pushHistory(true);
+  pushPreviewFormatHistory();
   let selection=window.getSelection();
   selection.removeAllRanges();selection.addRange(range);
   const fragment=range.extractContents();
@@ -10423,8 +10634,20 @@ function confirmPreviewQuoteFormatLoss(){
     document.addEventListener('keydown',onKey);document.body.appendChild(wrap);wrap.querySelector('[data-quote-loss="keep"]').focus();
   });
 }
+function confirmPreviewListFormatLoss(){
+  return new Promise(resolve=>{
+    const wrap=document.createElement('div');wrap.className='modal-backdrop list-format-confirm';
+    const english=uiLanguage==='en';
+    wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="list-format-title"><h3 id="list-format-title">${english?'List formatting':'목록 서식'}</h3><p>${english?'Converting this line to a list can remove its current colors and emphasis.':'이 줄을 목록으로 바꾸면 현재 색상과 강조 서식이 제거될 수 있습니다.'}</p><div class="modal-actions"><button class="tool" type="button" data-list-format="remove">${english?'Remove formatting':'서식 제거'}</button><button class="tool primary" type="button" data-list-format="keep">${english?'Keep formatting':'서식 유지'}</button></div></div>`;
+    const finish=value=>{document.removeEventListener('keydown',onKey);wrap.remove();resolve(value)};
+    const onKey=event=>{if(event.key==='Escape')finish(null)};
+    wrap.onclick=event=>{const action=event.target.closest('[data-list-format]')?.dataset.listFormat;if(action)finish(action)};
+    document.addEventListener('keydown',onKey);document.body.appendChild(wrap);wrap.querySelector('[data-list-format="keep"]').focus();
+  });
+}
 function previewBlockHasInlineFormatting(block){
-  return !!block.querySelector('strong,b,em,i,u,span[style],font[color],mark,code,a,s,del,[style*="color"],[style*="font"]');
+  return block.matches?.('[style*="color"],[style*="background"],[style*="font"],strong,b,em,i,u,mark,code,a,s,del')
+    ||!!block.querySelector('strong,b,em,i,u,span[style],font[color],mark,code,a,s,del,[style*="color"],[style*="font"]');
 }
 function removePreviewTextPrefix(block,count){
   const walker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,{acceptNode(node){
@@ -10464,6 +10687,34 @@ function applyPreviewQuoteKeepingFormat(block,text){
   quote.appendChild(makeMoveHandle('인용 위치 이동'));
   placeCaretAtPreviewEnd(caretTarget);
   rememberPreviewRange();syncFromPreview();
+  return true;
+}
+function previewListMarker(text){
+  const unordered=String(text||'').match(/^\s{0,3}([-+*])(?:\s+|$)/);
+  if(unordered)return{ordered:false,length:unordered[0].length,start:1};
+  const ordered=String(text||'').match(/^\s{0,3}(\d+)\.(?:\s+|$)/);
+  return ordered?{ordered:true,length:ordered[0].length,start:Math.max(1,Number(ordered[1])||1)}:null;
+}
+function applyPreviewListKeepingFormat(block,text){
+  const marker=previewListMarker(text);
+  if(!marker||!block?.isConnected||block.matches('li'))return false;
+  pushHistory(true);
+  removePreviewTextPrefix(block,marker.length);
+  block.querySelectorAll(':scope > .block-move-handle,:scope > .form-move-handle').forEach(handle=>handle.remove());
+  const list=document.createElement(marker.ordered?'ol':'ul'),item=document.createElement('li');
+  if(marker.ordered&&marker.start!==1)list.start=marker.start;
+  if(block.getAttribute('style'))item.setAttribute('style',block.getAttribute('style'));
+  while(block.firstChild)item.appendChild(block.firstChild);
+  const visible=(item.textContent||'').replace(/[\u200b\u00a0]/g,'').trim()||item.querySelector('img,table,hr,pre');
+  let caretTarget=item;
+  if(!visible){
+    const formatted=[...item.querySelectorAll('span,font,strong,b,em,i,u,mark,s,del')].at(-1);
+    caretTarget=formatted||item;
+    caretTarget.appendChild(document.createElement('br'));
+  }
+  list.appendChild(item);block.replaceWith(list);
+  addMovableElements(els.preview);placeCaretAtPreviewEnd(caretTarget);
+  rememberPreviewRange();syncFromPreview();pushHistory(true);
   return true;
 }
 function applyPreviewStructuralMarkdown(block,text){
@@ -10599,8 +10850,31 @@ function applyPreviewMarkdown(block){
   if(!previewMarkdownCandidate(text)){
     delete block.dataset.quoteFormatAllowed;
     delete block.dataset.quoteFormatDismissed;
+    delete block.dataset.listFormatAllowed;
+    delete block.dataset.listFormatDismissed;
     if(correctedSpacing){syncFromPreview();pushHistory(true);return true}
     return false;
+  }
+  const listCandidate=/^\s{0,3}(?:[-+*]\s*(?:\S.*)?|\d+\.\s+\S.*)$/.test(text);
+  if(listCandidate&&previewBlockHasInlineFormatting(block)){
+    if(block.dataset.listFormatDismissed==='1')return false;
+    if(block.dataset.listFormatAllowed!=='1'){
+      if(block.dataset.listFormatPending==='1')return true;
+      block.dataset.listFormatPending='1';
+      confirmPreviewListFormatLoss().then(choice=>{
+        if(!block.isConnected)return;
+        delete block.dataset.listFormatPending;
+        if(!choice){block.dataset.listFormatDismissed='1';return}
+        if(choice==='keep'){
+          applyPreviewListKeepingFormat(block,previewBlockPlainText(block));
+          return;
+        }
+        block.dataset.listFormatAllowed='1';
+        applyPreviewMarkdown(block);
+      });
+      return true;
+    }
+    delete block.dataset.listFormatAllowed;
   }
   const quoteCandidate=/^\s{0,3}>\s+\S/.test(text);
   if(quoteCandidate&&previewBlockHasInlineFormatting(block)){
@@ -11097,6 +11371,13 @@ function preservePreviewFormatOnDelete(e){
   if(!range?.collapsed||!els.preview.contains(range.commonAncestorContainer))return false;
   const block=closestPreviewBlock(range.startContainer);
   if(!block||block.closest('pre,table'))return false;
+  const origin=range.startContainer.nodeType===Node.ELEMENT_NODE?range.startContainer:range.startContainer.parentElement;
+  const emptyListItem=origin?.closest?.('li');
+  if(backward&&previewListItemIsEmpty(emptyListItem)&&previewRangeSideIsEmpty(emptyListItem,range,true)){
+    e.preventDefault();
+    e.stopPropagation();
+    return exitEmptyPreviewListItem(emptyListItem);
+  }
   const previewScrollTop=els.preview.scrollTop;
   const split=lastPreviewEnterSplit;
   const mergeSplitBackward=backward&&split?.next===block&&split.previous===block.previousElementSibling&&previewRangeSideIsEmpty(block,range,true);
@@ -11703,15 +11984,25 @@ $('fmt-underline').onclick=()=>{
   }
   toggleWrap('<u>','</u>');
 };
-els.editor.addEventListener('mouseup',updateFormatButtons);
-els.editor.addEventListener('keyup',updateFormatButtons);
+let formatStateRefreshFrame=0;
+function scheduleFormatStateRefresh(){
+  if(formatStateRefreshFrame)return;
+  formatStateRefreshFrame=requestAnimationFrame(()=>{
+    formatStateRefreshFrame=0;
+    const selection=window.getSelection();
+    const range=selection?.rangeCount?selection.getRangeAt(0):null;
+    if(range&&els.preview.contains(range.commonAncestorContainer)){
+      updateFormatButtons();
+      updatePreviewFontSize();
+    }else if(document.activeElement===els.editor)updateFormatButtons();
+  });
+}
+els.editor.addEventListener('mouseup',scheduleFormatStateRefresh);
+els.editor.addEventListener('keyup',scheduleFormatStateRefresh);
 document.addEventListener('selectionchange',()=>{
   const selection=window.getSelection();
   const range=selection?.rangeCount?selection.getRangeAt(0):null;
-  if(range&&els.preview.contains(range.commonAncestorContainer)){
-    updateFormatButtons();
-    updatePreviewFontSize();
-  }else if(document.activeElement===els.editor)updateFormatButtons();
+  if(range&&els.preview.contains(range.commonAncestorContainer)||document.activeElement===els.editor)scheduleFormatStateRefresh();
 });
 // ── Color palette ──
 const MAX_CHIST=16,MAX_CSAVE=16,CUSTOM_THEME_HISTORY_MAX=16;
@@ -11835,12 +12126,102 @@ function renderAllSwatches(){
   renderSection('text-color-saved',cs.tSave,'md-c-ts',c=>applyPickedColor('text',c),true,'text');
   renderSection('bg-color-hist',cs.bHist,'md-c-bh',c=>applyPickedColor('bg',c),false,'bg');
   renderSection('bg-color-saved',cs.bSave,'md-c-bs',c=>applyPickedColor('bg',c),true,'bg');
+  renderSavedColorWindows();
 }
 function trackColor(type,color){
   if(type==='text'){pushHist(cs.tHist,color,MAX_CHIST);saveC('md-c-th',cs.tHist)}
   else{pushHist(cs.bHist,color,MAX_CHIST);saveC('md-c-bh',cs.bHist)}
   renderAllSwatches();
 }
+
+const savedColorWindows=new Map();
+function desktopSavedColorWindowEnabled(){
+  return innerWidth>680&&matchMedia('(pointer:fine)').matches;
+}
+function savedColorWindowValues(type){return type==='text'?cs.tSave:cs.bSave}
+function savedColorWindowLabel(type){
+  if(uiLanguage==='en')return type==='text'?'Saved text colors':'Saved background colors';
+  return type==='text'?'저장된 글자색':'저장된 배경색';
+}
+function renderSavedColorWindow(type){
+  const panel=savedColorWindows.get(type);
+  if(!panel)return;
+  panel.querySelector('[data-saved-color-title]').textContent=savedColorWindowLabel(type);
+  const colors=savedColorWindowValues(type),swatches=panel.querySelector('[data-saved-color-swatches]');
+  swatches.replaceChildren();
+  if(!colors.length){
+    const empty=document.createElement('span');empty.className='cp-empty';
+    empty.textContent=uiLanguage==='en'?'No saved colors':'저장된 색 없음';swatches.appendChild(empty);return;
+  }
+  colors.forEach(color=>{
+    const button=document.createElement('button');button.type='button';button.className='cp-swatch saved';
+    button.style.background=color;button.title=color;
+    button.onclick=event=>{event.stopPropagation();applyPickedColor(type,color)};
+    button.oncontextmenu=event=>{
+      event.preventDefault();event.stopPropagation();
+      const index=colors.indexOf(color);if(index>=0)colors.splice(index,1);
+      saveC(type==='text'?'md-c-ts':'md-c-bs',colors);renderAllSwatches();
+    };
+    swatches.appendChild(button);
+  });
+}
+function renderSavedColorWindows(){savedColorWindows.forEach((_,type)=>renderSavedColorWindow(type))}
+function closeSavedColorWindow(type){
+  savedColorWindows.get(type)?.remove();savedColorWindows.delete(type);
+}
+function openSavedColorWindow(type,anchor){
+  if(!desktopSavedColorWindowEnabled())return false;
+  let panel=savedColorWindows.get(type);
+  if(panel){panel.style.zIndex=String(10021+[...savedColorWindows.keys()].indexOf(type));renderSavedColorWindow(type);return true}
+  panel=document.createElement('section');panel.className='saved-color-window';panel.dataset.savedColorWindow=type;
+  panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','false');
+  panel.innerHTML=`<header><strong data-saved-color-title></strong><button type="button" data-saved-color-close aria-label="${uiLanguage==='en'?'Close':'닫기'}">×</button></header><div class="cp-swatches" data-saved-color-swatches></div><small>${uiLanguage==='en'?'Right-click a color to remove it.':'색을 우클릭하면 저장 목록에서 삭제됩니다.'}</small>`;
+  panel.querySelector('[data-saved-color-close]').onclick=event=>{event.stopPropagation();closeSavedColorWindow(type)};
+  panel.addEventListener('click',event=>event.stopPropagation());
+  document.body.appendChild(panel);savedColorWindows.set(type,panel);renderSavedColorWindow(type);
+  const rect=anchor.getBoundingClientRect(),panelRect=panel.getBoundingClientRect();
+  const offset=type==='bg'?18:0;
+  let left=Math.max(8,Math.min(rect.left+offset,innerWidth-panelRect.width-8));
+  let top=Math.max(8,Math.min(rect.bottom+8+offset,innerHeight-panelRect.height-8));
+  for(const other of savedColorWindows.values()){
+    if(other===panel)continue;
+    const otherRect=other.getBoundingClientRect();
+    const overlaps=left<otherRect.right+8&&left+panelRect.width>otherRect.left-8&&top<otherRect.bottom+8&&top+panelRect.height>otherRect.top-8;
+    if(!overlaps)continue;
+    const right=otherRect.right+10,leftOf=otherRect.left-panelRect.width-10;
+    if(right+panelRect.width<=innerWidth-8)left=right;
+    else if(leftOf>=8)left=leftOf;
+    else top=Math.max(8,Math.min(otherRect.bottom+10,innerHeight-panelRect.height-8));
+  }
+  panel.style.left=left+'px';panel.style.top=top+'px';
+  return true;
+}
+function bindSavedColorLongPress(type,element){
+  if(!element)return;
+  let timer=0,startX=0,startY=0,pointerId=null,opened=false;
+  const cancel=()=>{clearTimeout(timer);timer=0;pointerId=null};
+  element.addEventListener('pointerdown',event=>{
+    if(event.button!==0||!desktopSavedColorWindowEnabled())return;
+    startX=event.clientX;startY=event.clientY;pointerId=event.pointerId;opened=false;
+    timer=setTimeout(()=>{
+      timer=0;opened=openSavedColorWindow(type,element);
+      if(opened)closeAllPanels();
+    },560);
+  });
+  element.addEventListener('pointermove',event=>{
+    if(pointerId!==event.pointerId)return;
+    if(Math.hypot(event.clientX-startX,event.clientY-startY)>8)cancel();
+  });
+  ['pointerup','pointercancel','pointerleave'].forEach(name=>element.addEventListener(name,event=>{
+    if(pointerId===event.pointerId)cancel();
+  }));
+  element.addEventListener('click',event=>{
+    if(!opened)return;event.preventDefault();event.stopPropagation();opened=false;
+  },true);
+  element.addEventListener('contextmenu',event=>{if(desktopSavedColorWindowEnabled())event.preventDefault()});
+}
+bindSavedColorLongPress('text',$('text-color-current'));
+bindSavedColorLongPress('bg',$('bg-color-current'));
 
 // ── Panel positioning (fixed, escapes overflow:hidden) ──
 const tableSizePanel=document.createElement('div');
@@ -14423,7 +14804,9 @@ function scheduleWorkspaceSave(){
     if('requestIdleCallback' in window){
       autosaveIdle=requestIdleCallback(()=>{autosaveIdle=0;save()},{timeout:2500});
     }else setTimeout(save,0);
-  },900);
+  // Session snapshots include every open file. Give active typing and preview
+  // synchronization time to settle before doing that IndexedDB work.
+  },1600);
 }
 async function saveVersionSnapshot(reason='자동 기록'){
   const file=state.files[state.active];
@@ -14461,6 +14844,17 @@ function applyWorkspaceSnapshot(snapshot){
   updateUndoRedoButtons();
   return true;
 }
+function waitForActivePreviewRender(text=els.editor.value,timeout=5000){
+  const started=performance.now();
+  return new Promise(resolve=>{
+    const check=()=>{
+      if(lastRenderedMarkdownText===text)return requestAnimationFrame(()=>resolve(true));
+      if(performance.now()-started>=timeout)return resolve(false);
+      setTimeout(check,16);
+    };
+    check();
+  });
+}
 async function showVersionHistory(){
   const file=state.files[state.active];
   const snapshot=await zzStoreGet('session','latest').catch(()=>null);
@@ -14483,12 +14877,19 @@ async function showVersionHistory(){
       if(version){
         const finishBusy=beginBusyNotice(uiLanguage==='en'?'Restoring document…':'문서를 복원하는 중…',{immediate:true});
         wrap.remove();await waitForBusyNoticePaint();
-        try{restoreEditor(version.text);scheduleWorkspaceSave()}finally{finishBusy()}
+        try{
+          await new Promise(resolve=>restoreEditor(version.text,{onRendered:resolve}));
+        }finally{finishBusy()}
       }
     }else if(e.target.closest('[data-recover-workspace]')){
       const finishBusy=beginBusyNotice(uiLanguage==='en'?'Restoring workspace…':'작업을 복원하는 중…',{immediate:true});
       wrap.remove();await waitForBusyNoticePaint();
-      try{if(applyWorkspaceSnapshot(snapshot))scheduleWorkspaceSave()}finally{finishBusy()}
+      try{
+        if(applyWorkspaceSnapshot(snapshot)){
+          scheduleWorkspaceSave();
+          await waitForActivePreviewRender();
+        }
+      }finally{finishBusy()}
     }else if(e.target.closest('[data-close-version]'))wrap.remove();
   };
   document.body.appendChild(wrap);
@@ -14502,7 +14903,9 @@ async function restoreWorkspaceSession(){
   if(!dialog)return;
   const finishBusy=beginBusyNotice(uiLanguage==='en'?'Restoring workspace…':'작업을 복원하는 중…',{immediate:true});
   await waitForBusyNoticePaint();
-  try{applyWorkspaceSnapshot(snapshot)}finally{finishBusy()}
+  try{
+    if(applyWorkspaceSnapshot(snapshot))await waitForActivePreviewRender();
+  }finally{finishBusy()}
 }
 function exportCompatibilityIssues(text){
   const source=String(text||''),issues=[];
