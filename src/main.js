@@ -10134,7 +10134,7 @@ function customFormatEditor(preset=null,source=null){
     const colorType=()=>colorChannel==='color'?'text':'bg';
     const colorFallback=()=>colorChannel==='color'?'#111111':'transparent';
     const colorPalettes={
-      color:['#111111','#ffffff','#991b1b','#92400e','#166534','#1e40af','#5b21b6','#9d174d'],
+      color:['#111111','#ffffff','#ff0000','#ff7a00','#00c853','#0057ff','#7a00ff','#ff0080'],
       backgroundColor:['#111111','#ffffff','#f3f4f6','#f8f4e6','#e3d5d5','#cae4e8','#ddd6fe','#fce7f3']
     };
     const updateColorButtons=()=>wrap.querySelectorAll('[data-custom-color-open]').forEach(button=>{
@@ -10783,7 +10783,7 @@ function previewMarkdownCaretOffset(source,offset){
 }
 function previewMarkdownCandidate(text){
   return /(?:\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|`[^`\n]+`|!?\[[^\]\n]+\]\([^)\n]+\)|(?:^|\s)[*_][^*_\n]+[*_](?:\s|$))/.test(text)
-    || /^\s{0,3}(?:#{1,6}\s+\S|[-+*]\s*(?:\S.*)?|\d+\.\s+\S|>\s+\S|```|~~~|(?:---+|\*\*\*+)\s*$)/.test(text);
+    || /^\s{0,3}(?:#{1,6}\s+\S|[-+*](?:\s+|$)(?:\S.*)?|\d+\.(?:\s+|$)(?:\S.*)?|>\s+\S|```|~~~|(?:---+|\*\*\*+)\s*$)/.test(text);
 }
 function confirmPreviewQuoteFormatLoss(){
   return new Promise(resolve=>{
@@ -10884,18 +10884,11 @@ function applyPreviewListKeepingFormat(block,text){
   rememberPreviewRange();syncFromPreview();pushHistory(true);
   return true;
 }
-function applyPreviewStructuralMarkdown(block,text){
-  if(/^\s*-\s+$/.test(text)){
-    const list=document.createElement('ul');
-    const item=document.createElement('li');
-    item.appendChild(document.createElement('br'));
-    list.appendChild(item);
-    block.replaceWith(list);
-    addMovableElements(els.preview);
-    placeCaretInPreviewBlock(item);
-    syncFromPreview();
-    pushHistory(true);
-    return true;
+function applyPreviewStructuralMarkdown(block,text,removeListFormatting=false){
+  const listMarker=previewListMarker(text);
+  if(listMarker&&!text.slice(listMarker.length).trim()){
+    if(removeListFormatting)block.replaceChildren(document.createTextNode(text));
+    return applyPreviewListKeepingFormat(block,text);
   }
   if(/^\s*---\s*$/.test(text)){
     const rule=document.createElement('hr');
@@ -11022,7 +11015,8 @@ function applyPreviewMarkdown(block){
     if(correctedSpacing){syncFromPreview();pushHistory(true);return true}
     return false;
   }
-  const listCandidate=/^\s{0,3}(?:[-+*]\s*(?:\S.*)?|\d+\.\s+\S.*)$/.test(text);
+  const listCandidate=/^\s{0,3}(?:[-+*](?:\s+|$)(?:\S.*)?|\d+\.(?:\s+|$)(?:\S.*)?)$/.test(text);
+  let removeListFormatting=false;
   if(listCandidate&&previewBlockHasInlineFormatting(block)){
     if(block.dataset.listFormatDismissed==='1')return false;
     if(block.dataset.listFormatAllowed!=='1'){
@@ -11046,6 +11040,7 @@ function applyPreviewMarkdown(block){
       return true;
     }
     delete block.dataset.listFormatAllowed;
+    removeListFormatting=true;
   }
   const quoteCandidate=/^\s{0,3}>\s+\S/.test(text);
   if(quoteCandidate&&previewBlockHasInlineFormatting(block)){
@@ -11069,7 +11064,7 @@ function applyPreviewMarkdown(block){
     }
     delete block.dataset.quoteFormatAllowed;
   }
-  if(applyPreviewStructuralMarkdown(block,text))return true;
+  if(applyPreviewStructuralMarkdown(block,text,removeListFormatting))return true;
   if(applyPreviewBoldMarkup(block,caretOffset)){
     syncFromPreview();
     pushHistory(true);
@@ -12063,9 +12058,14 @@ function tableInsertHtml(rows=2,cols=3){
   const safeRows=Math.max(1,Math.min(100,Number(rows)||2));
   const safeCols=Math.max(1,Math.min(100,Number(cols)||3));
   const isEnglish=document.documentElement.lang==='en';
-  const headings=Array.from({length:safeCols},(_,i)=>`<th>${isEnglish?'Heading':'제목'} ${i+1}</th>`).join('');
-  const bodyRows=Array.from({length:Math.max(0,safeRows-1)},()=>`<tr>${`<td>${isEnglish?'Content':'내용'}</td>`.repeat(safeCols)}</tr>`).join('');
-  return `<table><thead><tr>${headings}</tr></thead>${bodyRows?`<tbody>${bodyRows}</tbody>`:''}</table><p><br></p>`;
+  const columnWidth=`${(100/safeCols).toFixed(4)}%`;
+  const cellStyle=`width:${columnWidth};min-width:0`;
+  const headings=Array.from({length:safeCols},(_,i)=>`<th style="${cellStyle}">${isEnglish?'Heading':'제목'} ${i+1}</th>`).join('');
+  const bodyRows=Array.from({length:Math.max(0,safeRows-1)},()=>`<tr>${Array.from({length:safeCols},()=>`<td style="${cellStyle}">${isEnglish?'Content':'내용'}</td>`).join('')}</tr>`).join('');
+  // Give the browser the final geometry before the table enters the document.
+  // Auto layout otherwise starts from the first parsed cell and visibly grows
+  // as the remaining cells participate in layout on large/slow documents.
+  return `<table style="width:100%;min-width:520px;table-layout:fixed"><thead><tr>${headings}</tr></thead>${bodyRows?`<tbody>${bodyRows}</tbody>`:''}</table><p><br></p>`;
 }
 function insertPreviewTable(rows=2,cols=3){
   // Insert the fully constructed table through the same preview path used by
@@ -14770,7 +14770,7 @@ function syncCustomThemePanel(){
   document.querySelectorAll('[data-theme-channel]').forEach(button=>button.classList.toggle('active',button.dataset.themeChannel===customThemeChannel));
   const palettes={
     background:['#111110','#ffffff','#f7f7f5','#242424','#374151','#cae4e8','#f8f4e6','#e3d5d5'],
-    text:['#111110','#ffffff','#991b1b','#92400e','#166534','#1e40af','#5b21b6','#9d174d']
+    text:['#111110','#ffffff','#ff0000','#ff7a00','#00c853','#0057ff','#7a00ff','#ff0080']
   };
   document.querySelectorAll('.cp-quick[data-color-target="theme"] button').forEach((button,index)=>{
     const quickColor=palettes[customThemeChannel][index];
