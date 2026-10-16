@@ -2684,7 +2684,13 @@ body.dark .preview pre { background: var(--code-bg) !important; border-color: va
 }
 .preview ul, .preview ol { margin: 0 0 .85em; padding-left: 1.4em; }
 .preview li { margin-bottom: .25em; }
-.preview hr { border: none; border-top: 1px solid var(--b1); margin: 1.5em 0; }
+.preview hr { height:25px;border:0;margin:calc(1.5em - 12px) 0;background:linear-gradient(to bottom,transparent 12px,var(--b1) 12px,var(--b1) 13px,transparent 13px);cursor:context-menu; }
+.preview hr.horizontal-rule-selected {
+  border-radius:4px;
+  background:linear-gradient(to bottom,transparent 11px,var(--accent) 11px,var(--accent) 14px,transparent 14px),color-mix(in srgb,var(--accent) 12%,transparent);
+  outline:1px solid color-mix(in srgb,var(--accent) 65%,transparent);
+  outline-offset:-2px;
+}
 .preview mark.obsidian-highlight {
   padding: .05em .2em;
   border-radius: 3px;
@@ -4047,15 +4053,16 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
   border: 1px solid var(--b1);
   border-radius: var(--r3);
 }
-@media (pointer:fine) and (min-width:681px) {
-  #text-color-current,
-  #bg-color-current { cursor: pointer; }
-}
 .saved-color-window {
   position: fixed;
   z-index: 10020;
   width: 238px;
   min-height: 108px;
+  min-width: 190px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  resize: both;
   padding: 0 12px 12px;
   border: 1px solid var(--b1);
   border-radius: var(--r);
@@ -4070,7 +4077,45 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
   gap: 8px;
   border-bottom: 1px solid var(--b1);
   margin-bottom: 12px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
 }
+.saved-color-window.is-dragging > header { cursor:grabbing; }
+.saved-custom-format-window {
+  position:fixed;
+  z-index:10020;
+  width:min(340px,calc(100vw - 16px));
+  height:min(320px,calc(100vh - 16px));
+  min-width:240px;
+  min-height:150px;
+  max-height:min(560px,calc(100vh - 16px));
+  max-width:calc(100vw - 16px);
+  overflow:auto;
+  resize:both;
+  display:flex;
+  flex-direction:column;
+  border:1px solid var(--b1);
+  border-radius:var(--r);
+  background:var(--white);
+  color:var(--t1);
+  box-shadow:0 10px 34px rgba(0,0,0,.24);
+}
+.saved-custom-format-window > header { display:flex;align-items:center;height:42px;padding:0 12px;border-bottom:1px solid var(--b1);cursor:grab;user-select:none;touch-action:none; }
+.saved-custom-format-window.is-dragging > header { cursor:grabbing; }
+.saved-custom-format-window > header strong { font-size:13px; }
+.saved-custom-format-window [data-saved-custom-format-close] { margin-left:auto;width:28px;height:28px;padding:0;border:0;border-radius:var(--r3);background:transparent;color:var(--t2);font-size:20px;line-height:1; }
+.saved-custom-format-window [data-saved-custom-format-close]:hover { background:var(--s2);color:var(--t1); }
+.saved-custom-format-window [data-saved-custom-format-list] { flex:1;min-height:0;overflow:auto;padding:10px; }
+.saved-custom-format-group { display:grid;gap:5px;margin-bottom:10px; }
+.saved-custom-format-group:last-child { margin-bottom:0; }
+.saved-custom-format-group > strong { padding:3px 5px;color:var(--t3);font-size:11px; }
+.saved-custom-format-apply { display:grid;gap:4px;width:100%;padding:8px 9px;border:1px solid transparent;border-radius:var(--r3);background:transparent;color:var(--t1);text-align:left; }
+.saved-custom-format-apply:hover { border-color:var(--b1);background:var(--s1); }
+.saved-custom-format-apply > span { display:flex;align-items:center;gap:7px;font-weight:700; }
+.saved-custom-format-apply kbd { margin-left:auto;color:var(--t3);font:10px var(--mono); }
+.saved-custom-format-apply > em { overflow:hidden;font-style:normal;white-space:nowrap;text-overflow:ellipsis; }
+@media (max-width:680px) { .saved-custom-format-window { display:none!important; } }
 .saved-color-window > header strong { font-size: 13px; }
 .saved-color-window [data-saved-color-close] {
   margin-left: auto;
@@ -4087,7 +4132,7 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
 .saved-color-window [data-saved-color-close]:hover { background: var(--s2);color: var(--t1); }
 .saved-color-window .cp-swatches { align-content: flex-start;min-height: 29px; }
 .saved-color-window > small { display:block;margin-top:10px;color:var(--t3);font-size:11px; }
-@media (pointer:coarse), (max-width:680px) {
+@media (max-width:680px) {
   .saved-color-window { display:none!important; }
 }
 .cp-picker-main {

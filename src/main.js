@@ -1286,7 +1286,9 @@ function addMovableElements(root){
     }
     if(el.matches('code')&&el.closest('.zz-math'))return;
     el.dataset.movable='1';
-    el.draggable=!el.matches('img,.zz-form-control');
+    // A one-pixel horizontal rule is primarily selected/context-clicked.
+    // Native HTML dragging can swallow its click/contextmenu events.
+    el.draggable=!el.matches('img,hr,.zz-form-control');
     if(el.matches('a.zz-source-chip')&&!el.querySelector(':scope > .zz-source-chip-edit')){
       const edit=document.createElement('button');
       edit.type='button';
@@ -1726,7 +1728,18 @@ function showImageContextMenu(e,image){
   menu.style.left=Math.max(6,Math.min(e.clientX,window.innerWidth-rect.width-6))+'px';
   menu.style.top=Math.max(6,Math.min(e.clientY,window.innerHeight-rect.height-6))+'px';
 }
-let horizontalRuleContextMenu=null,horizontalRuleContextTarget=null,copiedHorizontalRule='---';
+let horizontalRuleContextMenu=null,horizontalRuleContextTarget=null,selectedHorizontalRule=null,copiedHorizontalRule='---';
+function selectHorizontalRule(rule){
+  if(selectedHorizontalRule&&selectedHorizontalRule!==rule){
+    selectedHorizontalRule.classList.remove('horizontal-rule-selected');
+    selectedHorizontalRule.removeAttribute('aria-selected');
+  }
+  selectedHorizontalRule=rule&&els.preview.contains(rule)?rule:null;
+  if(selectedHorizontalRule){
+    selectedHorizontalRule.classList.add('horizontal-rule-selected');
+    selectedHorizontalRule.setAttribute('aria-selected','true');
+  }
+}
 function hideHorizontalRuleContextMenu(){
   if(horizontalRuleContextMenu)horizontalRuleContextMenu.hidden=true;
   horizontalRuleContextTarget=null;
@@ -1739,6 +1752,7 @@ async function copyHorizontalRule(){
 function removeHorizontalRule(rule){
   if(!rule||!els.preview.contains(rule))return false;
   pushHistory(true);
+  if(selectedHorizontalRule===rule)selectedHorizontalRule=null;
   rule.remove();
   syncFromPreview();
   pushHistory(true);
@@ -1778,6 +1792,7 @@ function ensureHorizontalRuleContextMenu(){
 function showHorizontalRuleContextMenu(event,rule){
   event.preventDefault();event.stopPropagation();event.stopImmediatePropagation();
   clearClickMove();hideImageContextMenu();hideMathContextMenu();hideUniqueBlockContextMenu();hideTextContextMenu();
+  selectHorizontalRule(rule);
   horizontalRuleContextTarget=rule;
   const menu=ensureHorizontalRuleContextMenu();
   menu.hidden=false;
@@ -1789,8 +1804,28 @@ function showHorizontalRuleContextMenu(event,rule){
 function usesMobileObjectGesture(){
   return matchMedia('(pointer:coarse)').matches||innerWidth<=680;
 }
+function previewHorizontalRuleAtEvent(event){
+  const direct=event.target.closest?.('#preview hr');
+  if(direct)return direct;
+  if(!els.preview.contains(event.target))return null;
+  // The painted rule is only one pixel high. Treat the surrounding visual row
+  // as the rule too, so a native right-click does not have to hit one exact px.
+  const x=event.clientX,y=event.clientY;
+  return [...els.preview.querySelectorAll('hr')].find(rule=>{
+    const rect=rule.getBoundingClientRect();
+    return x>=rect.left-4&&x<=rect.right+4&&y>=rect.top-10&&y<=rect.bottom+10;
+  })||null;
+}
+els.preview.addEventListener('mousedown',event=>{
+  if(event.button!==0)return;
+  const rule=previewHorizontalRuleAtEvent(event);
+  // Keep the thin rule easy to click, but let the click handler distinguish
+  // the first selection click from the second move-mode click.
+  if(rule){event.preventDefault();return}
+  if(selectedHorizontalRule&&!event.target.closest('.file-context-menu'))selectHorizontalRule(null);
+},true);
 document.addEventListener('contextmenu',e=>{
-  const horizontalRule=e.target.closest('#preview hr');
+  const horizontalRule=previewHorizontalRuleAtEvent(e);
   if(horizontalRule){
     showHorizontalRuleContextMenu(e,horizontalRule);
     return;
@@ -2688,6 +2723,21 @@ els.preview.addEventListener('click',e=>{
     return;
   }
   if(selectedPreviewImage)selectPreviewImage(null);
+  const horizontalRule=previewHorizontalRuleAtEvent(e);
+  if(horizontalRule){
+    e.preventDefault();e.stopPropagation();
+    const startMoving=selectedHorizontalRule===horizontalRule&&clickMoveElement!==horizontalRule;
+    clearClickMove();
+    selectHorizontalRule(horizontalRule);
+    if(startMoving){
+      clickMoveElement=horizontalRule;
+      horizontalRule.classList.add('move-selected');
+    }
+    horizontalRule.setAttribute('aria-selected','true');
+    els.preview.focus({preventScroll:true});
+    window.getSelection()?.removeAllRanges();
+    return;
+  }
   const handle=e.target.closest('.block-move-handle');
   if(handle){
     e.preventDefault();
@@ -3117,7 +3167,7 @@ document.addEventListener('pointerup',finishTableResize);
 document.addEventListener('pointercancel',finishTableResize);
 /* ── Table context menu ── */
 (function(){
-  let ctx=null,ctxTarget=null,selectedTable=null,copiedTableHtml='',cellAnchor=null,cellFocus=null,cellDragging=false;
+  let ctx=null,ctxTarget=null,selectedTable=null,copiedTableHtml='',cellAnchor=null,cellFocus=null,cellDragging=false,ctxActionTaken=false;
   function getMenu(){
     if(!ctx){
       ctx=document.createElement('div');ctx.id='tbl-ctx';
@@ -3400,11 +3450,22 @@ document.addEventListener('pointercancel',finishTableResize);
       return;
     }
     const matrix=tableCells(table),fallback=findCell(ctxTarget)||selectedCells()[0]||matrix[0]?.[0];if(!fallback)return;
+    const tableIndex=[...els.preview.querySelectorAll('table')].indexOf(table);
+    let insertedColumn=-1;
     const point=cellPoint(fallback);if(!point)return;
     const selectedHere=cellAnchor?.table===table&&cellFocus?.table===table;
     const rStart=selectedHere?Math.min(cellAnchor.r,cellFocus.r):point.r,rEnd=selectedHere?Math.max(cellAnchor.r,cellFocus.r):point.r;
     const cStart=selectedHere?Math.min(cellAnchor.c,cellFocus.c):point.c,cEnd=selectedHere?Math.max(cellAnchor.c,cellFocus.c):point.c;
     const makeEmptyCell=tag=>{const next=document.createElement(tag);next.appendChild(document.createElement('br'));return next};
+    if(op==='col-left'||op==='col-right'){
+      const now=performance.now();
+      // Some Windows pointer/touchpad combinations can emit a second menu
+      // activation for one physical action. Keep this guard on window so it is
+      // shared even if an older hot-reloaded listener is still alive.
+      const previous=window.__zzTableColumnInsertGuard||{at:-Infinity};
+      if(now-previous.at<900){hideMenu();return}
+      window.__zzTableColumnInsertGuard={at:now,op};
+    }
     pushHistory(true);
     if(op==='row-above'||op==='row-below'){
       const ref=matrix[op==='row-above'?rStart:rEnd],refRow=ref?.[0]?.parentElement;
@@ -3415,14 +3476,47 @@ document.addEventListener('pointercancel',finishTableResize);
       }
     }else if(op==='col-left'||op==='col-right'){
       const targetColumn=op==='col-left'?cStart:cEnd+1;
+      insertedColumn=targetColumn;
+      preserveTableGeometry(table);
+      const firstRowBefore=Array.from(table.rows?.[0]?.cells||[]);
+      const priorWidths=firstRowBefore.map(cell=>cell.getBoundingClientRect().width);
+      const tableWidth=table.getBoundingClientRect().width||priorWidths.reduce((sum,width)=>sum+width,0);
+      const tableHeight=table.getBoundingClientRect().height;
+      const rowHeights=Array.from(table.rows).map(row=>row.getBoundingClientRect().height);
+      const adjacentIndex=Math.max(0,Math.min(priorWidths.length-1,op==='col-left'?cStart:cEnd));
+      const adjacentWidth=priorWidths[adjacentIndex]||tableWidth/Math.max(1,priorWidths.length);
+      // Take only a small slice from the adjacent selected column. Giving the
+      // new blank column a full duplicate width shrank every existing column
+      // and changed wrapping/row height across the whole table.
+      const insertedBase=Math.max(24,Math.min(96,adjacentWidth*.25));
       // Resolve each insertion point from the live row instead of the stale
       // selection matrix. This keeps "add left/right" deterministic for a
       // whole-column selection and for tables containing nested tables.
       Array.from(table.rows).forEach(rowElement=>{
+        const countBefore=rowElement.cells.length;
         const cells=Array.from(rowElement.cells),before=cells[targetColumn]||null;
         const tag=rowElement.parentElement?.tagName==='THEAD'?'th':'td';
         rowElement.insertBefore(makeEmptyCell(tag),before);
+        // Structural invariant: a column command adds exactly one cell to
+        // every row, even if a browser dispatches an unusual duplicate event.
+        while(rowElement.cells.length>countBefore+1)rowElement.cells[targetColumn+1]?.remove();
       });
+      // The table already occupies its intended width. Reallocate that width
+      // among all columns so the inserted blank column is visible without
+      // growing the table or moving its left edge.
+      const bases=[...priorWidths];
+      bases[adjacentIndex]=Math.max(24,adjacentWidth-insertedBase);
+      bases.splice(targetColumn,0,insertedBase);
+      const baseTotal=bases.reduce((sum,width)=>sum+width,0)||1;
+      Array.from(table.rows).forEach(row=>Array.from(row.cells).forEach((cell,index)=>{
+        if(index<bases.length){cell.style.width=`${(bases[index]/baseTotal*100).toFixed(4)}%`;cell.style.minWidth='0'}
+      }));
+      table.style.width=`${tableWidth}px`;
+      if(tableHeight)table.style.height=`${tableHeight}px`;
+      Array.from(table.rows).forEach((row,index)=>{
+        if(rowHeights[index])row.style.height=`${rowHeights[index]}px`;
+      });
+      table.style.minWidth='0';table.style.tableLayout='fixed';
     }else if(op==='del-row'){
       if(matrix.length>1)for(let index=rEnd;index>=rStart;index--)if(table.querySelectorAll('tr').length>1)matrix[index]?.[0]?.parentElement?.remove();
     }else if(op==='del-col'){
@@ -3435,12 +3529,21 @@ document.addEventListener('pointercancel',finishTableResize);
     clearCellSelection();
     syncFromPreview();
     renderMarkdown(els.editor.value);
+    if(insertedColumn>=0){
+      const renderedTable=[...els.preview.querySelectorAll('table')][tableIndex];
+      const renderedRows=tableCells(renderedTable);
+      if(renderedTable&&renderedRows.length&&renderedRows.every(row=>row[insertedColumn])){
+        cellAnchor={table:renderedTable,r:0,c:insertedColumn};
+        cellFocus={table:renderedTable,r:renderedRows.length-1,c:insertedColumn};
+        paintCellSelection();
+      }
+    }
     pushHistory(true);
     hideMenu();
   }
   function showMenu(e,target){
     e.preventDefault();
-    const menu=getMenu();ctxTarget=target;
+    const menu=getMenu();ctxTarget=target;ctxActionTaken=false;
     const hasCells=selectedCells().length>0;
     menu.innerHTML=`
       <div class="tbl-ctx-selection-actions"><button data-op="select-all">전체 선택</button><button data-op="clear-selection">선택 해제</button></div><hr>
@@ -3456,7 +3559,12 @@ document.addEventListener('pointercancel',finishTableResize);
       <hr>
       <button data-op="reset-shape">표 형태 초기화</button>
     `;
-    menu.querySelectorAll('button').forEach(btn=>btn.onclick=()=>doOp(btn.dataset.op));
+    menu.querySelectorAll('button').forEach(btn=>btn.onclick=()=>{
+      if(ctxActionTaken)return;
+      ctxActionTaken=true;
+      menu.querySelectorAll('button').forEach(button=>button.disabled=true);
+      doOp(btn.dataset.op);
+    });
     menu.style.display='block';
     let x=e.clientX,y=e.clientY;
     menu.style.left=x+'px';menu.style.top=y+'px';
@@ -8389,24 +8497,28 @@ els.preview.addEventListener('paste',e=>{
   e.stopImmediatePropagation();
   insertPreviewHtml(holder.innerHTML);
 },true);
-function pastedHtmlWithoutFontFamily(html){
+function pastedHtmlWithoutForeignFormatting(html){
   const holder=document.createElement('div');holder.innerHTML=String(html||'');
   holder.querySelectorAll('script,style,meta,link,object,embed').forEach(node=>node.remove());
   holder.querySelectorAll('*').forEach(node=>{
-    node.removeAttribute('face');
-    node.removeAttribute('font-family');
-    node.removeAttribute('data-mce-style');
-    node.style?.removeProperty('font-family');
+    ['face','font-family','data-mce-style','color','bgcolor'].forEach(attribute=>node.removeAttribute(attribute));
+    ['font','font-family','font-size','font-stretch','font-style','font-variant','font-weight','line-height','letter-spacing','color','background','background-color','text-shadow'].forEach(property=>node.style?.removeProperty(property));
+    // External classes can reapply the same visual formatting through the
+    // current page's styles. Keep structure/links but inherit this document's
+    // typography and colors.
+    node.removeAttribute('class');
     [...node.attributes].forEach(attribute=>{if(/^on/i.test(attribute.name))node.removeAttribute(attribute.name)});
     if(node.hasAttribute('style')&&!node.getAttribute('style')?.trim())node.removeAttribute('style');
   });
+  [...holder.querySelectorAll('font')].reverse().forEach(node=>node.replaceWith(...node.childNodes));
   return holder.innerHTML;
 }
+function pastedHtmlWithoutFontFamily(html){return pastedHtmlWithoutForeignFormatting(html)}
 els.preview.addEventListener('paste',e=>{
   if(e.defaultPrevented||selectedCells().length)return;
   const clipboardHtml=e.clipboardData?.getData('text/html')||'';
-  if(!clipboardHtml||!/(?:font-family\s*:|[";]\s*font\s*:|\bface\s*=|\bfont-family\s*=|data-mce-style\s*=)/i.test(clipboardHtml))return;
-  const cleaned=pastedHtmlWithoutFontFamily(clipboardHtml);
+  if(!clipboardHtml)return;
+  const cleaned=pastedHtmlWithoutForeignFormatting(clipboardHtml);
   e.preventDefault();e.stopImmediatePropagation();
   insertPreviewHtml(cleaned);
 },true);
@@ -8434,7 +8546,7 @@ els.preview.addEventListener('beforeinput',event=>{
   // contenteditable dispatches beforeinput from the editing host (#preview),
   // not necessarily from the td/th containing the caret.
   const cell=event.target.closest?.('td,th')||focusElement?.closest?.('td,th');
-  if(cell)preserveTableGeometry(cell.closest('table'));
+  if(cell){cachePreviewHistorySnapshot();preserveTableGeometry(cell.closest('table'))}
 },true);
 els.preview.addEventListener('input',e=>{
   if(e.target.closest?.('.zz-source-chip-editing')){
@@ -9620,6 +9732,7 @@ const CUSTOM_FORMAT_FIELD_LABELS={
   bold:'굵게',italic:'기울임',underline:'밑줄',textAlign:'정렬'
 };
 let customFormatPanel=null;
+let customFormatSavedWindow=null;
 let customFormatRootCollapsed=false;
 let customFormatShortcutCache=null;
 function customFormatId(prefix='format'){
@@ -9637,6 +9750,7 @@ function loadCustomFormats(){
 function saveCustomFormats(store){
   localStorage.setItem(CUSTOM_FORMAT_STORAGE_KEY,JSON.stringify(store));
   customFormatShortcutCache=new Map(store.presets.filter(preset=>preset.shortcut).map(preset=>[preset.shortcut,preset]));
+  if(customFormatSavedWindow)renderCustomFormatSavedWindow();
 }
 function customFormatColor(value,fallback){
   if(value==='transparent')return 'transparent';
@@ -9787,6 +9901,48 @@ function toggleCustomFormatPanel(force){
   $('custom-format-toggle').setAttribute('aria-expanded',String(open));
   if(open){renderCustomFormatPanel();positionCustomFormatPanel()}
   else closeCustomFormatMenus();
+}
+function renderCustomFormatSavedWindow(){
+  if(!customFormatSavedWindow)return;
+  const store=loadCustomFormats(),list=customFormatSavedWindow.querySelector('[data-saved-custom-format-list]');
+  list.replaceChildren();
+  if(!store.presets.length){
+    const empty=document.createElement('div');empty.className='custom-format-empty';
+    empty.textContent=uiLanguage==='en'?'No saved styles':'저장된 서식이 없습니다.';list.appendChild(empty);return;
+  }
+  const folders=new Map(store.folders.map(folder=>[folder.id,folder.name]));
+  const grouped=new Map();
+  store.presets.forEach(preset=>{
+    const name=folders.get(preset.folderId)|| (uiLanguage==='en'?'Custom styles':'개별 서식');
+    const values=grouped.get(name)||[];values.push(preset);grouped.set(name,values);
+  });
+  grouped.forEach((presets,name)=>{
+    const group=document.createElement('section');group.className='saved-custom-format-group';
+    const title=document.createElement('strong');title.textContent=name;group.appendChild(title);
+    presets.forEach(preset=>{
+      const button=document.createElement('button');button.type='button';button.className='saved-custom-format-apply';
+      button.innerHTML=`<span>${htmlEsc(preset.name)}${preset.shortcut?`<kbd>${htmlEsc(preset.shortcut)}</kbd>`:''}</span><em style="${htmlEsc(customFormatInlineStyle(preset))}">${htmlEsc(preset.previewText||(uiLanguage==='en'?'Preview text':'미리보기 텍스트'))}</em>`;
+      button.addEventListener('mousedown',event=>event.preventDefault());
+      button.addEventListener('click',event=>{event.stopPropagation();applyCustomFormatPreset(preset)});
+      group.appendChild(button);
+    });
+    list.appendChild(group);
+  });
+}
+function openCustomFormatSavedWindow(anchor){
+  if(!desktopSavedColorWindowEnabled())return false;
+  if(customFormatSavedWindow){customFormatSavedWindow.style.zIndex=String(++savedColorWindowZ);renderCustomFormatSavedWindow();return true}
+  const panel=document.createElement('section');panel.className='saved-custom-format-window';
+  panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','false');
+  panel.innerHTML=`<header><strong>${uiLanguage==='en'?'Saved custom styles':'저장된 사용자 지정 서식'}</strong><button type="button" data-saved-custom-format-close aria-label="${uiLanguage==='en'?'Close':'닫기'}">×</button></header><div data-saved-custom-format-list></div>`;
+  panel.querySelector('[data-saved-custom-format-close]').onclick=event=>{event.stopPropagation();panel.remove();customFormatSavedWindow=null};
+  panel.addEventListener('click',event=>event.stopPropagation());
+  document.body.appendChild(panel);customFormatSavedWindow=panel;enableSavedColorWindowDrag(panel);renderCustomFormatSavedWindow();
+  const anchorRect=anchor.getBoundingClientRect(),rect=panel.getBoundingClientRect();
+  panel.style.left=`${Math.max(8,Math.min(innerWidth-rect.width-8,anchorRect.left))}px`;
+  panel.style.top=`${Math.max(8,Math.min(innerHeight-rect.height-8,anchorRect.bottom+8))}px`;
+  panel.style.zIndex=String(++savedColorWindowZ);
+  return true;
 }
 function requestCustomFormatName(title,value='',label='이름'){
   return new Promise(resolve=>{
@@ -10314,6 +10470,12 @@ async function handleCustomFormatPanelClick(event){
 }
 $('custom-format-toggle').addEventListener('mousedown',rememberPreviewRange);
 $('custom-format-toggle').addEventListener('click',()=>toggleCustomFormatPanel());
+$('custom-format-toggle').addEventListener('dblclick',event=>{
+  if(!desktopSavedColorWindowEnabled())return;
+  event.preventDefault();event.stopPropagation();
+  toggleCustomFormatPanel(false);
+  openCustomFormatSavedWindow(event.currentTarget);
+});
 document.addEventListener('mousedown',event=>{
   if(customFormatPanel&&!customFormatPanel.hidden&&!customFormatPanel.contains(event.target)&&!event.target.closest('#custom-format-toggle'))toggleCustomFormatPanel(false);
 });
@@ -10645,6 +10807,11 @@ function confirmPreviewListFormatLoss(){
     document.addEventListener('keydown',onKey);document.body.appendChild(wrap);wrap.querySelector('[data-list-format="keep"]').focus();
   });
 }
+function cancelPendingPreviewSync(){
+  clearTimeout(previewSyncTimer);previewSyncTimer=null;
+  if(previewSyncIdle&&'cancelIdleCallback' in window)cancelIdleCallback(previewSyncIdle);
+  previewSyncIdle=0;
+}
 function previewBlockHasInlineFormatting(block){
   return block.matches?.('[style*="color"],[style*="background"],[style*="font"],strong,b,em,i,u,mark,code,a,s,del')
     ||!!block.querySelector('strong,b,em,i,u,span[style],font[color],mark,code,a,s,del,[style*="color"],[style*="font"]');
@@ -10861,6 +11028,10 @@ function applyPreviewMarkdown(block){
     if(block.dataset.listFormatAllowed!=='1'){
       if(block.dataset.listFormatPending==='1')return true;
       block.dataset.listFormatPending='1';
+      // Keep the target DOM alive while the confirmation dialog is open.
+      // A deferred sync used to rerender it before "Keep formatting" was
+      // clicked, making that button appear to do nothing.
+      cancelPendingPreviewSync();
       confirmPreviewListFormatLoss().then(choice=>{
         if(!block.isConnected)return;
         delete block.dataset.listFormatPending;
@@ -10882,6 +11053,7 @@ function applyPreviewMarkdown(block){
     if(block.dataset.quoteFormatAllowed!=='1'){
       if(block.dataset.quoteFormatPending==='1')return true;
       block.dataset.quoteFormatPending='1';
+      cancelPendingPreviewSync();
       confirmPreviewQuoteFormatLoss().then(choice=>{
         if(!block.isConnected)return;
         delete block.dataset.quoteFormatPending;
@@ -11465,6 +11637,15 @@ function insertPlainPreviewParagraph(e){
     e.preventDefault();
     return exitEmptyPreviewListItem(listItem);
   }
+  const quote=origin?.closest?.('blockquote');
+  const quoteBlock=closestPreviewBlock(range.startContainer);
+  if(!e.shiftKey&&quote&&quoteBlock&&quoteBlock!==quote&&previewBlockIsEmpty(quoteBlock)){
+    e.preventDefault();
+    // Remove the empty line used as the exit gesture, then place a normal
+    // paragraph immediately outside the outermost quote.
+    quoteBlock.remove();
+    return exitPreviewStructuredBlock(quote);
+  }
   if(e.shiftKey){
     const inlineCode=origin?.closest?.('code');
     if(inlineCode&&!inlineCode.closest('pre')){
@@ -11887,19 +12068,11 @@ function tableInsertHtml(rows=2,cols=3){
   return `<table><thead><tr>${headings}</tr></thead>${bodyRows?`<tbody>${bodyRows}</tbody>`:''}</table><p><br></p>`;
 }
 function insertPreviewTable(rows=2,cols=3){
-  const range=previewRange();
-  if(!range)return false;
-  els.preview.focus();
-  const current=window.getSelection();
-  current.removeAllRanges();
-  current.addRange(range);
-  pushHistory(true);
-  document.execCommand('insertHTML',false,tableInsertHtml(rows,cols));
-  rememberPreviewRange();
-  syncFromPreview();
-  renderMarkdown(els.editor.value);
-  pushHistory(true);
-  return true;
+  // Insert the fully constructed table through the same preview path used by
+  // the size picker. Re-rendering the entire preview immediately afterwards
+  // briefly painted the browser's intrinsic one-cell-sized table before the
+  // final table styles and resize helpers were applied.
+  return insertPreviewHtml(tableInsertHtml(rows,cols));
 }
 function previewFormatElements(range){
   const elements=[];
@@ -12135,8 +12308,12 @@ function trackColor(type,color){
 }
 
 const savedColorWindows=new Map();
+let savedColorWindowZ=10020;
 function desktopSavedColorWindowEnabled(){
-  return innerWidth>680&&matchMedia('(pointer:fine)').matches;
+  // Hybrid Windows devices often report the primary pointer as coarse even
+  // while a mouse/trackpad is in use. any-pointer keeps the desktop feature
+  // available without enabling it on narrow mobile layouts.
+  return innerWidth>680&&(matchMedia('(any-pointer:fine)').matches||matchMedia('(hover:hover)').matches);
 }
 function savedColorWindowValues(type){return type==='text'?cs.tSave:cs.bSave}
 function savedColorWindowLabel(type){
@@ -12169,6 +12346,35 @@ function renderSavedColorWindows(){savedColorWindows.forEach((_,type)=>renderSav
 function closeSavedColorWindow(type){
   savedColorWindows.get(type)?.remove();savedColorWindows.delete(type);
 }
+function enableSavedColorWindowDrag(panel){
+  const handle=panel.querySelector('header');
+  if(!handle)return;
+  handle.addEventListener('pointerdown',event=>{
+    if(event.button!==0||event.target.closest('button'))return;
+    event.preventDefault();
+    panel.style.zIndex=String(++savedColorWindowZ);
+    const rect=panel.getBoundingClientRect();
+    const offsetX=event.clientX-rect.left,offsetY=event.clientY-rect.top;
+    handle.setPointerCapture?.(event.pointerId);
+    panel.classList.add('is-dragging');
+    const move=moveEvent=>{
+      const maxLeft=Math.max(8,innerWidth-panel.offsetWidth-8);
+      const maxTop=Math.max(8,innerHeight-panel.offsetHeight-8);
+      panel.style.left=`${Math.max(8,Math.min(maxLeft,moveEvent.clientX-offsetX))}px`;
+      panel.style.top=`${Math.max(8,Math.min(maxTop,moveEvent.clientY-offsetY))}px`;
+    };
+    const stop=()=>{
+      panel.classList.remove('is-dragging');
+      handle.removeEventListener('pointermove',move);
+      handle.removeEventListener('pointerup',stop);
+      handle.removeEventListener('pointercancel',stop);
+    };
+    handle.addEventListener('pointermove',move);
+    handle.addEventListener('pointerup',stop);
+    handle.addEventListener('pointercancel',stop);
+  });
+  panel.addEventListener('pointerdown',()=>{panel.style.zIndex=String(++savedColorWindowZ)});
+}
 function openSavedColorWindow(type,anchor){
   if(!desktopSavedColorWindowEnabled())return false;
   let panel=savedColorWindows.get(type);
@@ -12178,7 +12384,7 @@ function openSavedColorWindow(type,anchor){
   panel.innerHTML=`<header><strong data-saved-color-title></strong><button type="button" data-saved-color-close aria-label="${uiLanguage==='en'?'Close':'닫기'}">×</button></header><div class="cp-swatches" data-saved-color-swatches></div><small>${uiLanguage==='en'?'Right-click a color to remove it.':'색을 우클릭하면 저장 목록에서 삭제됩니다.'}</small>`;
   panel.querySelector('[data-saved-color-close]').onclick=event=>{event.stopPropagation();closeSavedColorWindow(type)};
   panel.addEventListener('click',event=>event.stopPropagation());
-  document.body.appendChild(panel);savedColorWindows.set(type,panel);renderSavedColorWindow(type);
+  document.body.appendChild(panel);savedColorWindows.set(type,panel);enableSavedColorWindowDrag(panel);renderSavedColorWindow(type);
   const rect=anchor.getBoundingClientRect(),panelRect=panel.getBoundingClientRect();
   const offset=type==='bg'?18:0;
   let left=Math.max(8,Math.min(rect.left+offset,innerWidth-panelRect.width-8));
@@ -12196,32 +12402,19 @@ function openSavedColorWindow(type,anchor){
   panel.style.left=left+'px';panel.style.top=top+'px';
   return true;
 }
-function bindSavedColorLongPress(type,element){
+function bindSavedColorDoubleClick(type,element){
   if(!element)return;
-  let timer=0,startX=0,startY=0,pointerId=null,opened=false;
-  const cancel=()=>{clearTimeout(timer);timer=0;pointerId=null};
-  element.addEventListener('pointerdown',event=>{
-    if(event.button!==0||!desktopSavedColorWindowEnabled())return;
-    startX=event.clientX;startY=event.clientY;pointerId=event.pointerId;opened=false;
-    timer=setTimeout(()=>{
-      timer=0;opened=openSavedColorWindow(type,element);
-      if(opened)closeAllPanels();
-    },560);
+  const label=type==='text'?'글자색':'배경색';
+  element.title=`${element.title||'색상 팔레트'} · PC에서 더블클릭하면 저장된 ${label} 창 열기`;
+  element.addEventListener('dblclick',event=>{
+    if(!desktopSavedColorWindowEnabled())return;
+    event.preventDefault();event.stopPropagation();
+    closeAllPanels();
+    openSavedColorWindow(type,element);
   });
-  element.addEventListener('pointermove',event=>{
-    if(pointerId!==event.pointerId)return;
-    if(Math.hypot(event.clientX-startX,event.clientY-startY)>8)cancel();
-  });
-  ['pointerup','pointercancel','pointerleave'].forEach(name=>element.addEventListener(name,event=>{
-    if(pointerId===event.pointerId)cancel();
-  }));
-  element.addEventListener('click',event=>{
-    if(!opened)return;event.preventDefault();event.stopPropagation();opened=false;
-  },true);
-  element.addEventListener('contextmenu',event=>{if(desktopSavedColorWindowEnabled())event.preventDefault()});
 }
-bindSavedColorLongPress('text',$('text-color-current'));
-bindSavedColorLongPress('bg',$('bg-color-current'));
+bindSavedColorDoubleClick('text',$('text-color-toggle'));
+bindSavedColorDoubleClick('bg',$('bg-color-toggle'));
 
 // ── Panel positioning (fixed, escapes overflow:hidden) ──
 const tableSizePanel=document.createElement('div');
@@ -12281,15 +12474,40 @@ function previewTableSize(rows=2,cols=3){
 function insertRequestedTable(rows,cols){
   const safeRows=Math.max(1,Math.min(100,Number(rows)||2));
   const safeCols=Math.max(1,Math.min(100,Number(cols)||3));
+  const context=tableInsertionContext||captureInsertionContext();
+  const scrollSnapshot=tableScrollSnapshot||captureTableInsertScroll();
   closeAllPanels();
-  if(insertPreviewTable(safeRows,safeCols))return;
+  restoreInsertionContext(context);
+  if(insertPreviewHtml(tableInsertHtml(safeRows,safeCols))){
+    restoreTableInsertScroll(scrollSnapshot);tableInsertionContext=null;tableScrollSnapshot=null;return;
+  }
   const isEnglish=document.documentElement.lang==='en';
   const header=`| ${Array.from({length:safeCols},(_,i)=>`${isEnglish?'Heading':'제목'} ${i+1}`).join(' | ')} |`;
   const divider=`| ${Array(safeCols).fill('---').join(' | ')} |`;
   const body=Array.from({length:Math.max(0,safeRows-1)},()=>`| ${Array(safeCols).fill(isEnglish?'Content':'내용').join(' | ')} |`).join('\n');
   insertBlock([header,divider,body].filter(Boolean).join('\n'));
+  restoreTableInsertScroll(scrollSnapshot);tableInsertionContext=null;tableScrollSnapshot=null;
 }
 previewTableSize();
+
+let tableInsertionContext=null,tableScrollSnapshot=null;
+function captureTableInsertScroll(){
+  const elements=[];
+  for(const seed of [els.preview,els.editor]){
+    for(let node=seed;node&&node!==document.body;node=node.parentElement){
+      if((node.scrollHeight>node.clientHeight||node.scrollWidth>node.clientWidth)&&!elements.includes(node))elements.push(node);
+    }
+  }
+  return{windowX:scrollX,windowY:scrollY,elements:elements.map(node=>({node,left:node.scrollLeft,top:node.scrollTop}))};
+}
+function restoreTableInsertScroll(snapshot){
+  if(!snapshot)return;
+  const restore=()=>{
+    snapshot.elements.forEach(item=>{if(item.node?.isConnected){item.node.scrollLeft=item.left;item.node.scrollTop=item.top}});
+    window.scrollTo(snapshot.windowX,snapshot.windowY);
+  };
+  restore();requestAnimationFrame(()=>{restore();requestAnimationFrame(restore)});
+}
 
 const PANELS=['text-color-panel','bg-color-panel','custom-theme-panel','ins-menu','syntax-menu','table-size-panel'];
 const TOGGLES=['text-color-toggle','bg-color-toggle','fmt-insert-toggle','fmt-syntax-toggle','fmt-table-toggle'];
@@ -12332,6 +12550,8 @@ $('bg-color-toggle').onclick=e=>{
 $('fmt-table-toggle').addEventListener('mousedown',e=>{
   e.preventDefault();
   rememberPreviewRange();
+  tableInsertionContext=captureInsertionContext();
+  tableScrollSnapshot=captureTableInsertScroll();
 });
 $('fmt-table-toggle').onclick=e=>{
   e.stopPropagation();
@@ -12431,11 +12651,17 @@ function parseDelimitedRows(text,kinds,custom=''){
 }
 function insertDelimitedTable(rows){
   if(!rows.length)return;
+  const context=tableInsertionContext||captureInsertionContext();
+  const scrollSnapshot=tableScrollSnapshot||captureTableInsertScroll();
   const html=`<table><thead><tr>${rows[0].map(value=>`<th>${htmlEsc(value)}</th>`).join('')}</tr></thead>${rows.length>1?`<tbody>${rows.slice(1).map(row=>`<tr>${row.map(value=>`<td>${htmlEsc(value)}</td>`).join('')}</tr>`).join('')}</tbody>`:''}</table><p><br></p>`;
   closeAllPanels();
-  if(insertPreviewHtml(html))return;
+  restoreInsertionContext(context);
+  if(insertPreviewHtml(html)){
+    restoreTableInsertScroll(scrollSnapshot);tableInsertionContext=null;tableScrollSnapshot=null;return;
+  }
   const md=rows.map((row,index)=>`| ${row.map(value=>String(value).replace(/\|/g,'\\|')).join(' | ')} |${index===0?`\n| ${row.map(()=>'---').join(' | ')} |`:''}`).join('\n');
   insertBlock(md);
+  restoreTableInsertScroll(scrollSnapshot);tableInsertionContext=null;tableScrollSnapshot=null;
 }
 $('table-delimited-submit').onclick=e=>{
   e.stopPropagation();
@@ -15274,7 +15500,13 @@ document.addEventListener('keydown',e=>{
   }
   if(command==='print'){consume();if(!e.repeat)printDocument(undefined,activeFindPreview());return}
   if(state.mode!=='edit')return;
-  if(command==='undo'||command==='redo'){consume();pushHistory(true);command==='redo'?redoEdit():undoEdit();return}
+  if(command==='undo'||command==='redo'){
+    consume();
+    // Commit a still-pending Preview edit before navigating history. Otherwise
+    // Ctrl+Z can skip the visible table edit and restore unrelated geometry.
+    if(command==='undo'&&(previewSyncTimer||previewSyncIdle||state.editingPreview))syncFromPreview();
+    pushHistory(true);command==='redo'?redoEdit():undoEdit();return;
+  }
   const button={bold:'fmt-bold',italic:'fmt-italic',underline:'fmt-underline',link:'fmt-link'}[command];
   if(button){
     consume();rememberPreviewRange();
