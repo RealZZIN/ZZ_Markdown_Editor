@@ -1472,7 +1472,7 @@ function ensureMathContextMenu(){
     <button type="button" data-math-context-action="copy">복사</button>
     <button type="button" data-math-context-action="paste">붙여넣기</button>
     <hr>
-    <button type="button" data-math-context-action="edit">변경</button>
+    <button type="button" data-math-context-action="edit">수식 변경</button>
     <button type="button" class="danger" data-math-context-action="remove">제거</button>`;
   mathContextMenu.addEventListener('mousedown',e=>e.preventDefault());
   mathContextMenu.addEventListener('click',async e=>{
@@ -1897,6 +1897,7 @@ function resolveBlockDrop(y){
   if(anchor)return{kind:'block',anchor,before:true,label:anchor===blocks[0]?'문서 맨 위에 배치':'이 블록 위에 배치'};
   return{kind:'block',anchor:blocks[blocks.length-1],before:false,label:'문서 맨 아래에 배치'};
 }
+function localizedMoveGuideLabel(label){return uiLanguage==='en'?translatedUiText(label):label}
 function showMoveGuide(block,before,label){
   const blockRect=block.getBoundingClientRect();
   const previewRect=els.preview.getBoundingClientRect();
@@ -1904,7 +1905,7 @@ function showMoveGuide(block,before,label){
   const right=Math.min(blockRect.right,previewRect.right-8);
   moveGuide=document.createElement('div');
   moveGuide.className='move-insertion-guide';
-  moveGuide.dataset.label=label;
+  moveGuide.dataset.label=localizedMoveGuideLabel(label);
   moveGuide.style.left=Math.round(left)+'px';
   moveGuide.style.top=Math.round(before?blockRect.top-2:blockRect.bottom-2)+'px';
   moveGuide.style.width=Math.max(80,Math.round(right-left))+'px';
@@ -1914,7 +1915,7 @@ function showEmptyMoveGuide(label){
   const previewRect=els.preview.getBoundingClientRect();
   moveGuide=document.createElement('div');
   moveGuide.className='move-insertion-guide';
-  moveGuide.dataset.label=label;
+  moveGuide.dataset.label=localizedMoveGuideLabel(label);
   moveGuide.style.left=Math.round(previewRect.left+8)+'px';
   moveGuide.style.top=Math.round(previewRect.top+12)+'px';
   moveGuide.style.width=Math.max(80,Math.round(previewRect.width-16))+'px';
@@ -1930,7 +1931,7 @@ function showInlineMoveGuide(x,y){
   moveDropTarget={kind:'inline',range:range.cloneRange()};
   moveGuide=document.createElement('div');
   moveGuide.className='move-insertion-guide inline';
-  moveGuide.dataset.label='이 글자 위치에 삽입';
+  moveGuide.dataset.label=localizedMoveGuideLabel('이 글자 위치에 삽입');
   moveGuide.style.left=Math.round(rect.left||x)+'px';
   moveGuide.style.top=Math.round(rect.top||y-lineHeight/2)+'px';
   moveGuide.style.height=Math.round(rect.height||lineHeight)+'px';
@@ -3284,24 +3285,106 @@ document.addEventListener('pointercancel',finishTableResize);
     return true;
   }
   function clearCellRange(){const cells=selectedCells();if(!cells.length)return false;pushHistory(true);cells.forEach(cell=>cell.replaceChildren(document.createElement('br')));syncFromPreview();pushHistory(true);paintCellSelection();return true}
+  function tableLogicalLayout(table){
+    const rows=tableCells(table),occupied=[],placements=new Map();
+    rows.forEach((row,rowIndex)=>{
+      let logicalColumn=0;
+      row.forEach(cell=>{
+        while(occupied[rowIndex]?.[logicalColumn])logicalColumn++;
+        const rowSpan=Math.max(1,cell.rowSpan||1),colSpan=Math.max(1,cell.colSpan||1);
+        placements.set(cell,{r:rowIndex,c:logicalColumn,rowSpan,colSpan});
+        for(let rr=rowIndex;rr<rowIndex+rowSpan;rr++){
+          if(!occupied[rr])occupied[rr]=[];
+          for(let cc=logicalColumn;cc<logicalColumn+colSpan;cc++)occupied[rr][cc]=cell;
+        }
+        logicalColumn+=colSpan;
+      });
+    });
+    return{rows,occupied,placements,rowCount:occupied.length,columnCount:Math.max(0,...occupied.map(row=>row.length))};
+  }
   function mergeCellRange(){
     if(!cellAnchor||!cellFocus)return false;
-    const rows=tableCells(cellAnchor.table),r0=Math.min(cellAnchor.r,cellFocus.r),r1=Math.max(cellAnchor.r,cellFocus.r),c0=Math.min(cellAnchor.c,cellFocus.c),c1=Math.max(cellAnchor.c,cellFocus.c);
+    const table=cellAnchor.table,rows=tableCells(table),r0=Math.min(cellAnchor.r,cellFocus.r),r1=Math.max(cellAnchor.r,cellFocus.r),c0=Math.min(cellAnchor.c,cellFocus.c),c1=Math.max(cellAnchor.c,cellFocus.c);
     if(r0===r1&&c0===c1)return false;
     const rangeRows=rows.slice(r0,r1+1).map(row=>row.slice(c0,c1+1));
-    if(rangeRows.some(row=>row.length!==c1-c0+1)||rangeRows.flat().some(cell=>cell.rowSpan>1||cell.colSpan>1)){showInfoNotice('셀 합치기','이미 합쳐진 셀이 포함된 범위는 먼저 셀 나누기를 해주세요.');return false}
-    const contents=rangeRows.map(cells=>cells.map(cell=>cell.innerText.trim()));
-    const keeper=rangeRows[0][0];pushHistory(true);keeper.replaceChildren();
-    contents.forEach((values,rowIndex)=>{
-      values.forEach((value,colIndex)=>{
-        keeper.appendChild(document.createTextNode(value));
-        if(colIndex<values.length-1)keeper.appendChild(document.createTextNode('\t'));
+    const selected=[...new Set(rangeRows.flat())],selectedSet=new Set(selected);
+    if(selected.length<2)return false;
+    // Map physical cells to their logical grid slots. This lets a cell that
+    // already has colspan/rowspan participate in another rectangular merge.
+    const{occupied,placements}=tableLogicalLayout(table);
+    const chosen=selected.map(cell=>placements.get(cell)).filter(Boolean);
+    const logicalTop=Math.min(...chosen.map(item=>item.r)),logicalLeft=Math.min(...chosen.map(item=>item.c));
+    const logicalBottom=Math.max(...chosen.map(item=>item.r+item.rowSpan-1)),logicalRight=Math.max(...chosen.map(item=>item.c+item.colSpan-1));
+    for(let rr=logicalTop;rr<=logicalBottom;rr++)for(let cc=logicalLeft;cc<=logicalRight;cc++){
+      if(!selectedSet.has(occupied[rr]?.[cc])){showInfoNotice('셀 합치기','빈틈 없이 직사각형으로 선택한 셀만 합칠 수 있습니다.');return false}
+    }
+    const ordered=selected.slice().sort((a,b)=>{const aa=placements.get(a),bb=placements.get(b);return aa.r-bb.r||aa.c-bb.c});
+    const contents=ordered.map(cell=>{
+      const fragment=document.createDocumentFragment();
+      [...cell.childNodes].forEach(node=>{
+        if(node.nodeType===1&&node.matches('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.block-move-handle,.table-filter-button'))return;
+        fragment.appendChild(node.cloneNode(true));
       });
-      if(rowIndex<rangeRows.length-1)keeper.appendChild(document.createElement('br'));
+      fragment.querySelectorAll?.('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.block-move-handle,.table-filter-button').forEach(node=>node.remove());
+      return fragment;
     });
-    keeper.colSpan=c1-c0+1;keeper.rowSpan=r1-r0+1;
-    rangeRows.flat().forEach(cell=>{if(cell!==keeper)cell.remove()});
-    syncFromPreview();renderMarkdown(els.editor.value);pushHistory(true);return true;
+    const keeper=ordered[0];pushHistory(true);keeper.replaceChildren();
+    let previousRow=placements.get(keeper).r;
+    contents.forEach((fragment,index)=>{
+      const row=placements.get(ordered[index]).r;
+      if(index)keeper.appendChild(row===previousRow?document.createTextNode('\t'):document.createElement('br'));
+      keeper.appendChild(fragment);
+      previousRow=row;
+    });
+    keeper.colSpan=logicalRight-logicalLeft+1;keeper.rowSpan=logicalBottom-logicalTop+1;
+    selected.forEach(cell=>{if(cell!==keeper)cell.remove()});
+    // Re-rendering immediately here round-trips through Markdown and flattens
+    // colspan/rowspan plus rich inline spans. Keep the edited preview DOM as
+    // the source of truth; syncFromPreview already records its HTML form.
+    syncFromPreview();
+    clearCellSelection();
+    setCellSelection(keeper);
+    // Structural merges can remove the cells that host the corner and move
+    // handles. Rebuild them once instead of leaving stale or missing controls.
+    table.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle').forEach(handle=>handle.remove());
+    table.removeAttribute('data-resize-ready');
+    addTableResize(els.preview);addMovableElements(els.preview);
+    pushHistory(true);return true;
+  }
+  function equalizeTableCells(table,axis){
+    if(!table)return false;
+    const layout=tableLogicalLayout(table),selected=selectedCells(),scope=selected.length>1?selected:[...layout.placements.keys()];
+    if(axis==='height'){
+      let indexes=new Set();
+      scope.forEach(cell=>{const item=layout.placements.get(cell);if(item)for(let r=item.r;r<item.r+item.rowSpan;r++)indexes.add(r)});
+      if(indexes.size<2)indexes=new Set(Array.from({length:layout.rowCount},(_,index)=>index));
+      if(indexes.size<2)return false;
+      const heights=Array.from({length:layout.rowCount},(_,row)=>table.rows[row]?.getBoundingClientRect().height||28);
+      const equal=[...indexes].reduce((sum,index)=>sum+heights[index],0)/indexes.size;
+      pushHistory(true);
+      indexes.forEach(index=>{const row=table.rows[index];if(row)row.style.height=`${equal}px`});
+    }else{
+      let indexes=new Set();
+      scope.forEach(cell=>{const item=layout.placements.get(cell);if(item)for(let c=item.c;c<item.c+item.colSpan;c++)indexes.add(c)});
+      if(indexes.size<2)indexes=new Set(Array.from({length:layout.columnCount},(_,index)=>index));
+      if(indexes.size<2)return false;
+      const columnWidths=Array(layout.columnCount).fill(0),samples=Array(layout.columnCount).fill(0);
+      layout.placements.forEach((item,cell)=>{
+        const perColumn=cell.getBoundingClientRect().width/item.colSpan;
+        for(let c=item.c;c<item.c+item.colSpan;c++){columnWidths[c]+=perColumn;samples[c]++}
+      });
+      columnWidths.forEach((width,index)=>{columnWidths[index]=samples[index]?width/samples[index]:1});
+      const equal=[...indexes].reduce((sum,index)=>sum+columnWidths[index],0)/indexes.size;
+      indexes.forEach(index=>{columnWidths[index]=equal});
+      const total=columnWidths.reduce((sum,width)=>sum+width,0)||1;
+      pushHistory(true);
+      preserveTableGeometry(table);table.style.tableLayout='fixed';
+      layout.placements.forEach((item,cell)=>{
+        const width=columnWidths.slice(item.c,item.c+item.colSpan).reduce((sum,value)=>sum+value,0);
+        cell.style.width=`${(width/total*100).toFixed(4)}%`;cell.style.minWidth='0';
+      });
+    }
+    syncFromPreview();addTableResize(els.preview);paintCellSelection();pushHistory(true);return true;
   }
   function unmergeCell(cell){
     const point=cellPoint(cell);if(!point)return[cell];const rs=cell.rowSpan||1,cs=cell.colSpan||1;
@@ -3315,24 +3398,47 @@ document.addEventListener('pointercancel',finishTableResize);
     return created;
   }
   function splitCellRange(rowParts=1,colParts=2){
-    let targets=selectedCells();if(!targets.length)return false;rowParts=Math.max(1,Math.min(20,Number(rowParts)||1));colParts=Math.max(1,Math.min(20,Number(colParts)||1));pushHistory(true);
-    targets=targets.flatMap(unmergeCell);
-    const byRow=new Map();targets.filter(cell=>cell.isConnected).forEach(cell=>{const row=cell.parentElement;if(!byRow.has(row))byRow.set(row,[]);byRow.get(row).push(cell)});
-    byRow.forEach((rowTargets,row)=>{
-      const targetSet=new Set(rowTargets),original=Array.from(row.children),newRows=[];
-      for(let r=1;r<rowParts;r++){const newRow=document.createElement('tr');row.parentElement.insertBefore(newRow,row.nextSibling);newRows.push(newRow)}
-      original.forEach(cell=>{
-        if(targetSet.has(cell)){
-          let cursor=cell;for(let c=1;c<colParts;c++){const next=document.createElement(cell.tagName.toLowerCase());next.appendChild(document.createElement('br'));cursor.after(next);cursor=next}
-          newRows.forEach(newRow=>{for(let c=0;c<colParts;c++){const next=document.createElement(cell.tagName.toLowerCase());next.appendChild(document.createElement('br'));newRow.appendChild(next)}});
-        }else if(rowParts>1)cell.rowSpan=(cell.rowSpan||1)*rowParts;
+    let targets=selectedCells();if(!targets.length)return false;rowParts=Math.max(1,Math.min(20,Number(rowParts)||1));colParts=Math.max(1,Math.min(20,Number(colParts)||1));
+    const table=targets[0].closest('table');
+    const initialTargets=new Set(targets);
+    if(tableCells(table).flat().some(cell=>!initialTargets.has(cell)&&(cell.rowSpan>1||cell.colSpan>1))){
+      showInfoNotice('셀 나누기','다른 합쳐진 셀이 있는 표에서는 해당 셀도 먼저 나눠 주세요.');
+      return false;
+    }
+    pushHistory(true);
+    preserveTableGeometry(table);
+    targets=targets.flatMap(unmergeCell).filter(cell=>cell.isConnected);
+    const targetSet=new Set(targets),originalRows=Array.from(table.rows),selectedColumns=new Set();
+    originalRows.forEach(row=>Array.from(row.cells).forEach((cell,column)=>{if(targetSet.has(cell))selectedColumns.add(column)}));
+    originalRows.forEach(row=>{
+      const originalCells=Array.from(row.cells),splitThisRow=originalCells.some(cell=>targetSet.has(cell));
+      const outputRows=Array.from({length:splitThisRow?rowParts:1},()=>document.createElement('tr'));
+      originalCells.forEach((cell,column)=>{
+        const selected=targetSet.has(cell);
+        if(selected){
+          const cellWidth=cell.getBoundingClientRect().width;
+          for(let rr=0;rr<rowParts;rr++)for(let cc=0;cc<colParts;cc++){
+            const next=rr===0&&cc===0?cell:document.createElement(cell.tagName.toLowerCase());
+            next.rowSpan=1;next.colSpan=1;
+            next.style.width=`${Math.max(24,cellWidth/colParts)}px`;
+            next.style.minWidth='0';
+            if(next!==cell)next.appendChild(document.createElement('br'));
+            outputRows[rr].appendChild(next);
+          }
+        }else{
+          cell.rowSpan=splitThisRow?rowParts:1;
+          cell.colSpan=selectedColumns.has(column)?colParts:1;
+          outputRows[0].appendChild(cell);
+        }
       });
+      row.replaceWith(...outputRows);
     });
+    table.style.tableLayout='fixed';table.style.minWidth='0';
     syncFromPreview();renderMarkdown(els.editor.value);pushHistory(true);return true;
   }
   function requestCellSplit(){
     const selected=selectedCells(),merged=selected.length===1&&(selected[0].rowSpan>1||selected[0].colSpan>1);
-    return new Promise(resolve=>{const wrap=document.createElement('div');wrap.className='modal-backdrop';wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true"><h3>셀 나누기</h3><p>${merged?'합쳐진 셀을 풀고 다시 나눕니다.':'선택한 셀을 지정한 행과 열로 나눕니다.'}</p><div class="insert-config-grid"><label>행 수<input type="number" min="1" max="20" value="1" data-split-rows></label><label>열 수<input type="number" min="1" max="20" value="2" data-split-cols></label></div><div class="modal-actions"><button class="tool" data-split-action="cancel">취소</button><button class="tool primary" data-split-action="apply">나누기</button></div></div>`;wrap.onclick=event=>{const action=event.target.closest('[data-split-action]')?.dataset.splitAction;if(!action)return;if(action==='apply')resolve({rows:wrap.querySelector('[data-split-rows]').value,cols:wrap.querySelector('[data-split-cols]').value});else resolve(null);wrap.remove()};document.body.appendChild(wrap);wrap.querySelector('[data-split-rows]').focus()});
+    return new Promise(resolve=>{const wrap=document.createElement('div');wrap.className='modal-backdrop';wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true"><h3>셀 나누기</h3><p>${merged?'합쳐진 셀을 풀고 다시 나눕니다.':'선택한 셀을 지정한 행과 열로 나눕니다.'}</p><div class="insert-config-grid split-cell-config"><label><span>행 수</span><span class="split-number-control"><input type="number" min="1" max="20" value="1" data-split-rows><span class="size-stepper split-stepper"><button class="size-up" type="button" data-split-step="1"></button><button class="size-down" type="button" data-split-step="-1"></button></span></span></label><label><span>열 수</span><span class="split-number-control"><input type="number" min="1" max="20" value="2" data-split-cols><span class="size-stepper split-stepper"><button class="size-up" type="button" data-split-step="1"></button><button class="size-down" type="button" data-split-step="-1"></button></span></span></label></div><div class="modal-actions"><button class="tool" data-split-action="cancel">취소</button><button class="tool primary" data-split-action="apply">나누기</button></div></div>`;wrap.querySelectorAll('[data-split-step]').forEach(button=>button.onclick=event=>{event.preventDefault();event.stopPropagation();const input=button.closest('.split-number-control').querySelector('input');input.value=String(Math.max(1,Math.min(20,(Number(input.value)||1)+Number(button.dataset.splitStep))))});wrap.onclick=event=>{const action=event.target.closest('[data-split-action]')?.dataset.splitAction;if(!action)return;if(action==='apply')resolve({rows:wrap.querySelector('[data-split-rows]').value,cols:wrap.querySelector('[data-split-cols]').value});else resolve(null);wrap.remove()};document.body.appendChild(wrap);wrap.querySelector('[data-split-rows]').focus()});
   }
   function parseClipboardGrid(e){
     const html=e?.clipboardData?.getData('text/html')||'',wrap=document.createElement('div');wrap.innerHTML=html;
@@ -3423,6 +3529,7 @@ document.addEventListener('pointercancel',finishTableResize);
     if(op==='clear-cells'){clearCellRange();hideMenu();return}
     if(op==='merge-cells'){hideMenu();mergeCellRange();return}
     if(op==='split-cells'){hideMenu();requestCellSplit().then(value=>{if(value)splitCellRange(value.rows,value.cols)});return}
+    if(op==='equal-height'||op==='equal-width'){equalizeTableCells(table,op==='equal-height'?'height':'width');hideMenu();return}
     if(op==='paste-cells'){
       hideMenu();
       navigator.clipboard?.readText?.().then(text=>overwriteCellRange(text.replace(/\r/g,'').split('\n').map(row=>row.split('\t'))));
@@ -3435,15 +3542,36 @@ document.addEventListener('pointercancel',finishTableResize);
     }
     if(op==='reset-shape'){
       pushHistory(true);
-      table.style.width='';
-      table.style.minWidth='';
-      table.style.tableLayout='';
-      table.querySelectorAll('tr,th,td').forEach(el=>{
-        el.style.width='';
-        el.style.height='';
-        el.style.minWidth='';
-        delete el.dataset.baseH;
+      // Restore the same baseline used when a table first enters Preview.
+      // Clearing only cell sizes leaves the bottom-right whole-table resize
+      // width/height behind (or falls back to content width), so reset both
+      // the outer table and every cached row/cell constraint.
+      table.style.removeProperty('width');
+      table.style.removeProperty('height');
+      table.style.removeProperty('min-width');
+      table.style.removeProperty('min-height');
+      table.style.removeProperty('max-width');
+      table.style.removeProperty('max-height');
+      table.style.removeProperty('table-layout');
+      Array.from(table.rows).forEach(row=>{
+        row.style.removeProperty('width');
+        row.style.removeProperty('height');
+        row.style.removeProperty('min-width');
+        row.style.removeProperty('min-height');
+        delete row.dataset.baseH;
+        Array.from(row.cells).forEach(cell=>{
+          cell.style.removeProperty('width');
+          cell.style.removeProperty('height');
+          cell.style.removeProperty('min-width');
+          cell.style.removeProperty('min-height');
+          cell.style.removeProperty('max-width');
+          cell.style.removeProperty('max-height');
+          delete cell.dataset.baseH;
+        });
       });
+      table.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle').forEach(handle=>handle.remove());
+      table.removeAttribute('data-resize-ready');
+      addTableResize(els.preview);
       syncFromPreview();
       pushHistory(true);
       hideMenu();
@@ -3547,7 +3675,7 @@ document.addEventListener('pointercancel',finishTableResize);
     const hasCells=selectedCells().length>0;
     menu.innerHTML=`
       <div class="tbl-ctx-selection-actions"><button data-op="select-all">전체 선택</button><button data-op="clear-selection">선택 해제</button></div><hr>
-      ${hasCells?'<button data-op="cut-cells">선택 셀 잘라내기</button><button data-op="copy-cells">선택 셀 복사</button><button data-op="paste-cells">선택 셀에 붙여넣기</button><button data-op="clear-cells">선택 셀 내용 지우기</button><hr><button data-op="merge-cells">선택 셀 합치기</button><button data-op="split-cells">선택 셀 나누기…</button><hr>':''}
+      ${hasCells?'<button data-op="cut-cells">선택 셀 잘라내기</button><button data-op="copy-cells">선택 셀 복사</button><button data-op="paste-cells">선택 셀에 붙여넣기</button><button data-op="clear-cells">선택 셀 내용 지우기</button><hr><button data-op="merge-cells">선택 셀 합치기</button><button data-op="split-cells">선택 셀 나누기…</button><button data-op="equal-height">셀 높이를 같게</button><button data-op="equal-width">셀 너비를 같게</button><hr>':''}
       <button data-op="row-above">위에 행 추가</button>
       <button data-op="row-below">아래에 행 추가</button>
       <button data-op="col-left">왼쪽에 열 추가</button>
@@ -4088,12 +4216,13 @@ function sidebarDropDestination(event){
 }
 function validSidebarDrop(item,destination){
   if(!item||!destination?.valid||!destination.parent)return false;
-  return item.key.split('/')[0]===destination.parent.split('/')[0];
+  if(item.kind==='folder'&&(destination.parent===item.key||destination.parent.startsWith(item.key+'/')))return false;
+  return true;
 }
 function normalizeSidebarPath(path){const parts=[];String(path).split('/').forEach(part=>{if(part==='..')parts.pop();else if(part&&part!=='.')parts.push(part)});return parts.join('/')}
 function repairMovedImageReferences(oldDirs,assetMoves){
   state.files.forEach(file=>{
-    const oldDir=oldDirs.get(file)||'',newDir=file.dir||'';
+    const oldDir=oldDirs.get(file)||'',newDir=file.dir||String(file.path||'').split('/').slice(0,-1).join('/');
     const rewrite=src=>{
       if(/^(?:[a-z]+:|\/|#)/i.test(src))return src;
       let decoded;try{decoded=decodeURIComponent(src)}catch{return src}
@@ -4115,7 +4244,7 @@ function moveSidebarItem(item,destination){
     showInfoNotice('이동할 수 없음','대상 위치에 같은 이름의 파일 또는 폴더가 있습니다.');return false;
   }
   if(state.active>=0)syncFileBeforeAction(state.active);
-  const oldDirs=new Map(state.files.map(f=>[f,f.dir||''])),assetMoves=new Map();
+  const oldDirs=new Map(state.files.map(f=>[f,f.dir||String(f.path||'').split('/').slice(0,-1).join('/')])),assetMoves=new Map();
   state.files.forEach(file=>{if((file.source==='local'?'로컬':'업로드된 파일')===oldRoot&&inside(file.path)){
     file.path=nextPath+file.path.slice(oldPath.length);file.dir=file.path.split('/').slice(0,-1).join('/');file.source=newRoot==='로컬'?'local':'uploaded';
   }});
@@ -8238,6 +8367,7 @@ let acEnabled=savedOption('md-option-autocorrect',true);
 let colorCorrectEnabled=savedOption('md-option-color-correct',true);
 let paragraphBreakEnabled=savedOption('md-option-paragraph-break',true);
 let previewMarkdownEnabled=localStorage.getItem('md-preview-markdown')!=='0';
+let listFormatConfirmEnabled=savedOption('md-option-list-format-confirm',true);
 let autoLinkEnabled=localStorage.getItem('md-auto-link')!=='0';
 let sourceSyntaxHoverEnabled=localStorage.getItem('md-source-syntax-hover')!=='0';
 let sourceSyntaxHoverDelaySeconds=Math.max(1,Math.min(30,Number(localStorage.getItem('md-source-syntax-hover-delay'))||5));
@@ -10800,7 +10930,7 @@ function confirmPreviewListFormatLoss(){
   return new Promise(resolve=>{
     const wrap=document.createElement('div');wrap.className='modal-backdrop list-format-confirm';
     const english=uiLanguage==='en';
-    wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="list-format-title"><h3 id="list-format-title">${english?'List formatting':'목록 서식'}</h3><p>${english?'Converting this line to a list can remove its current colors and emphasis.':'이 줄을 목록으로 바꾸면 현재 색상과 강조 서식이 제거될 수 있습니다.'}</p><div class="modal-actions"><button class="tool" type="button" data-list-format="remove">${english?'Remove formatting':'서식 제거'}</button><button class="tool primary" type="button" data-list-format="keep">${english?'Keep formatting':'서식 유지'}</button></div></div>`;
+    wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="list-format-title"><h3 id="list-format-title">${english?'List formatting':'목록 서식'}</h3><p>${english?'Converting this line to a list can remove its current colors and emphasis.':'이 줄을 목록으로 바꾸면 현재 색상과 강조 서식이 제거될 수 있습니다.'}</p><div class="modal-actions"><button class="tool" type="button" data-list-format="remove">${english?'Remove formatting':'서식 제거'}</button><button class="tool" type="button" data-list-format="never">${english?'Do not show again':'다시 보지 않기'}</button><button class="tool primary" type="button" data-list-format="keep">${english?'Keep formatting':'서식 유지'}</button></div></div>`;
     const finish=value=>{document.removeEventListener('keydown',onKey);wrap.remove();resolve(value)};
     const onKey=event=>{if(event.key==='Escape')finish(null)};
     wrap.onclick=event=>{const action=event.target.closest('[data-list-format]')?.dataset.listFormat;if(action)finish(action)};
@@ -10867,10 +10997,21 @@ function applyPreviewListKeepingFormat(block,text){
   if(!marker||!block?.isConnected||block.matches('li'))return false;
   pushHistory(true);
   removePreviewTextPrefix(block,marker.length);
+  const sizeWalker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT);
+  let firstVisibleText=null,sizeNode;
+  while((sizeNode=sizeWalker.nextNode())){
+    if(sizeNode.data.replace(/[\u200b\u00a0]/g,'').trim()){firstVisibleText=sizeNode;break}
+  }
+  const inheritedSize=firstVisibleText?getComputedStyle(firstVisibleText.parentElement).fontSize:'';
+  const blockSize=getComputedStyle(block).fontSize;
   block.querySelectorAll(':scope > .block-move-handle,:scope > .form-move-handle').forEach(handle=>handle.remove());
   const list=document.createElement(marker.ordered?'ol':'ul'),item=document.createElement('li');
   if(marker.ordered&&marker.start!==1)list.start=marker.start;
   if(block.getAttribute('style'))item.setAttribute('style',block.getAttribute('style'));
+  // Inline formatting often stores font-size on a child span. Copy that size
+  // to the list item as well so the browser-drawn marker (1., 2., •) does not
+  // fall back to the smaller surrounding quote size.
+  if(inheritedSize&&inheritedSize!==blockSize)item.style.fontSize=inheritedSize;
   while(block.firstChild)item.appendChild(block.firstChild);
   const visible=(item.textContent||'').replace(/[\u200b\u00a0]/g,'').trim()||item.querySelector('img,table,hr,pre');
   let caretTarget=item;
@@ -11018,6 +11159,7 @@ function applyPreviewMarkdown(block){
   const listCandidate=/^\s{0,3}(?:[-+*](?:\s+|$)(?:\S.*)?|\d+\.(?:\s+|$)(?:\S.*)?)$/.test(text);
   let removeListFormatting=false;
   if(listCandidate&&previewBlockHasInlineFormatting(block)){
+    if(!listFormatConfirmEnabled)return applyPreviewListKeepingFormat(block,text);
     if(block.dataset.listFormatDismissed==='1')return false;
     if(block.dataset.listFormatAllowed!=='1'){
       if(block.dataset.listFormatPending==='1')return true;
@@ -11030,7 +11172,12 @@ function applyPreviewMarkdown(block){
         if(!block.isConnected)return;
         delete block.dataset.listFormatPending;
         if(!choice){block.dataset.listFormatDismissed='1';return}
-        if(choice==='keep'){
+        if(choice==='keep'||choice==='never'){
+          if(choice==='never'){
+            listFormatConfirmEnabled=false;
+            localStorage.setItem('md-option-list-format-confirm','0');
+            if($('enable-list-format-confirm'))$('enable-list-format-confirm').checked=false;
+          }
           applyPreviewListKeepingFormat(block,previewBlockPlainText(block));
           return;
         }
@@ -12691,6 +12838,10 @@ const acPanelHtml=`
       <input type="checkbox" id="enable-preview-markdown" checked>
       <span><b>프리뷰 MD 문법 적용</b><div class="ac-desc">Preview에 입력한 Markdown 문법을 서식으로 변환</div></span>
     </label>
+    <label title="색상이나 강조가 있는 줄을 목록으로 바꿀 때 서식 유지 여부를 확인합니다.">
+      <input type="checkbox" id="enable-list-format-confirm" checked>
+      <span><b>목록 변환 전 서식 확인</b><div class="ac-desc">색상·강조가 있는 문장을 목록으로 바꿀 때 확인</div></span>
+    </label>
     <label title="URL을 붙여넣으면 클릭할 수 있는 링크 서식으로 자동 변환합니다.">
       <input type="checkbox" id="enable-auto-link" checked>
       <span><b>URL 자동 링크</b><div class="ac-desc">붙여넣은 주소를 링크로 자동 변환</div></span>
@@ -12798,6 +12949,7 @@ $('autocorrect-toggle').onclick=e=>{
 $('enable-autocorrect').checked=acEnabled;
 $('enable-color-correct').checked=colorCorrectEnabled;
 $('enable-paragraph-break').checked=paragraphBreakEnabled;
+$('enable-list-format-confirm').checked=listFormatConfirmEnabled;
 $('enable-sync-scroll').checked=syncScrollEnabled;
 $('enable-line-numbers').checked=savedOption('md-option-line-numbers',false);
 $('enable-table-filter').checked=savedOption('md-option-table-filter',false);
@@ -12810,6 +12962,7 @@ $('enable-line-numbers').onchange=e=>{setLineNumbers(e.target.checked);localStor
 $('enable-swap-panes').onchange=e=>{setSwapPanes(e.target.checked);localStorage.setItem('md-option-swap-panes',e.target.checked?'1':'0')};
 $('enable-hashtag-navigator').onchange=e=>{hashtagNavigatorEnabled=e.target.checked;localStorage.setItem('md-option-hashtag-navigator',hashtagNavigatorEnabled?'1':'0');renderDocumentOutline()};
 $('enable-paragraph-break').onchange=e=>{paragraphBreakEnabled=e.target.checked;localStorage.setItem('md-option-paragraph-break',paragraphBreakEnabled?'1':'0')};
+$('enable-list-format-confirm').onchange=e=>{listFormatConfirmEnabled=e.target.checked;localStorage.setItem('md-option-list-format-confirm',listFormatConfirmEnabled?'1':'0')};
 $('enable-preview-markdown').checked=previewMarkdownEnabled;
 $('enable-preview-markdown').onchange=e=>{
   previewMarkdownEnabled=e.target.checked;
@@ -13145,7 +13298,7 @@ const EN_TEXT={
   '라이트':'Light','다크':'Dark','사용자 지정':'Custom','테마 설정':'Theme settings','화면에 사용할 테마를 선택하세요.':'Choose a theme for the interface.',
   '사용자 지정 테마 편집':'Edit custom theme','배경색과 글자색을 직접 설정합니다.':'Set the background and text colors manually.',
   '언어':'Language','화면에 표시할 언어를 선택합니다.':'Choose the language used in the interface.','한국어':'한국어','영어':'English','프로그램 정보':'About','작성부터 미리보기, 변환과 병합까지 한곳에서 이어가고':'Write, preview, convert, and merge in one place,','문서 작업을 편리하게 완성하는 Markdown 편집기입니다.':'with a practical Markdown editor built for smooth document work.','GitHub 저장소로 이동':'Open GitHub repository',
-  '문서 폰트':'Document font','업로드 폰트 사용':'Use uploaded font','선택한 폰트를 Preview와 PDF 문서에 적용합니다.':'Apply the selected font to Preview and PDF documents.','이미지 검사':'Image check','누락 이미지 경고':'Missing image warnings','MD에서 참조하지만 업로드되지 않은 이미지가 있으면 파일 목록에 경고를 표시합니다.':'Show a warning in the file list when an MD file references an image that has not been uploaded.','누락된 이미지':'Missing images','파일 목록':'File list','스크롤 시 소폴더 고정':'Keep subfolder visible while scrolling','파일 목록을 스크롤할 때 현재 소폴더 이름을 위쪽에 표시합니다.':'Show the current subfolder name at the top while scrolling through the file list.',
+  '문서 폰트':'Document font','업로드 폰트 사용':'Use uploaded font','선택한 폰트를 Preview와 PDF 문서에 적용합니다.':'Apply the selected font to Preview and PDF documents.','이미지 검사':'Image check','누락 이미지 경고':'Missing image warnings','MD에서 참조하지만 업로드되지 않은 이미지가 있으면 파일 목록에 경고를 표시합니다.':'Show a warning in the file list when an MD file references an image that has not been uploaded.','누락된 이미지':'Missing images','파일 목록':'File list','스크롤 시 하위 폴더 고정':'Keep subfolder visible while scrolling','파일 목록을 스크롤할 때 현재 하위 폴더 이름을 위쪽에 표시합니다.':'Show the current subfolder name at the top while scrolling through the file list.',
   '문서 폰트 선택':'Select document font','폰트 업로드':'Upload font','삭제':'Delete','업로드한 폰트 없음':'No uploaded fonts',
   'TTF, OTF, WOFF, WOFF2 파일을 업로드할 수 있습니다.':'Upload TTF, OTF, WOFF, or WOFF2 font files.','폰트를 확인하고 저장하는 중...':'Checking and saving fonts...','폰트를 불러오지 못했습니다.':'Could not load the font.',
   '이미지':'Images','업로드한 이미지가 없습니다.':'No uploaded images.','이미지 정보':'Image details','파일명':'File name','확장자':'Extension','경로':'Path','파일 크기':'File size','이미지 크기':'Dimensions','확인 중...':'Checking...','확인할 수 없음':'Unavailable','사용 중인 업로드 MD':'Uploaded Markdown files using this image','업로드된 MD에서 이 이미지를 참조하지 않습니다.':'No uploaded Markdown file references this image.',
@@ -13153,6 +13306,7 @@ const EN_TEXT={
   '브라우저 저장소가 지워지기 전까지 이 기록을 복구할 수 있습니다.':'This workspace can be restored until the browser storage is cleared.',
   '작성 옵션':'Writing options','보기 옵션':'View options','Enter로 줄바꿈':'Line break with Enter','Enter를 누른 위치에서 바로 줄바꿈':'Insert a line break where Enter is pressed',
   '프리뷰 MD 문법 적용':'Render Markdown in Preview','Preview에 입력한 Markdown 문법을 서식으로 변환':'Render Markdown syntax entered in Preview',
+  '목록 변환 전 서식 확인':'Confirm formatting before list conversion','색상·강조가 있는 문장을 목록으로 바꿀 때 확인':'Ask before converting formatted text into a list',
   'URL 자동 링크':'Automatic URL links','붙여넣은 주소를 링크로 자동 변환':'Convert pasted URLs into links',
   '문법 빠른 편집':'Quick syntax editing','문장에 마우스를 올려 원문 수정':'Hover over a sentence to edit its source',
   '창 표시까지':'Show after','초':'sec','기호 공백 보정':'Fix syntax spacing','MD 기호 안의 불필요한 공백 제거':'Remove unnecessary spaces inside Markdown syntax',
@@ -13292,9 +13446,11 @@ const EN_TEXT={
   ,'스포이드 사용 불가':'Eyedropper unavailable','현재 브라우저에서는 화면 색 선택을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 사용해 주세요.':'Screen color picking is not supported in this browser. Use the latest Chrome or Edge.','스포이드 오류':'Eyedropper error','색을 선택하지 못했습니다. 브라우저에서 화면 색 선택이 허용되는지 확인해 주세요.':'Could not pick a color. Check that the browser allows screen color selection.',
   '직접 입력':'Enter manually','언어 적용':'Apply language','드래그해서 위치 이동':'Drag to move','코드블록 접기':'Collapse code block','코드블록 펼치기':'Expand code block','언어 없음':'No language','코드 블록 위치 이동':'Move code block','표 위치 이동':'Move table','인용 위치 이동':'Move quote','다중 보기':'Multiple views','각주·참고문헌':'Footnotes and bibliography','임베드':'Embed',
   '출처 문구 수정':'Edit source label','이 양식만 드래그해서 이동':'Drag to move only this control','양식 위치 이동':'Move form control','클릭해서 선택 · 드래그해서 위치 이동 · 우클릭해서 변경':'Click to select · drag to move · right-click to edit','왼쪽 손잡이로 이 양식만 이동':'Use the left handle to move only this control','양식 표시 문구':'Form control label',
-  '붙여넣기 실패':'Paste failed','클립보드의 텍스트를 읽을 수 없습니다.':'Could not read text from the clipboard.','제목 없음':'Untitled','문서 맨 아래에 배치':'Place at bottom of document','문서 맨 위에 배치':'Place at top of document','이 블록 위에 배치':'Place above this block','이 글자 위치에 삽입':'Insert at this text position','고정됨':'Pinned',
+  '붙여넣기 실패':'Paste failed','클립보드의 텍스트를 읽을 수 없습니다.':'Could not read text from the clipboard.','제목 없음':'Untitled','문서 맨 아래에 배치':'Place at bottom of document','문서 맨 위에 배치':'Place at top of document','이 블록 위에 배치':'Place above this block','이 글자 위치에 삽입':'Insert at this text position','첫 번째 양식 위치에 배치':'Place at the first form position','이 양식 앞에 배치':'Place before this form','이 양식 뒤에 배치':'Place after this form','고정됨':'Pinned',
   '올바른 링크 주소를 입력해 주세요.':'Enter a valid link URL.','연결 문서 없음':'No linked documents','이 열 필터 및 정렬':'Filter and sort this column','오름차순 정렬':'Sort ascending','내림차순 정렬':'Sort descending','이 표 필터·정렬 초기화':'Reset filtering and sorting for this table','값 필터':'Value filter','값 검색':'Search values','전체 선택 / 해제':'Select / clear all','(빈 값)':'(Empty)','서식 필터':'Formatting filter',
   '셀 합치기':'Merge cells','이미 합쳐진 셀이 포함된 범위는 먼저 셀 나누기를 해주세요.':'Split existing merged cells before merging this range.','셀 나누기':'Split cells','선택한 셀을 지정한 행과 열로 나눕니다.':'Split the selected cell into the specified rows and columns.',
+  '전체 선택':'Select all','선택 해제':'Clear selection','선택 셀 잘라내기':'Cut selected cells','선택 셀 복사':'Copy selected cells','선택 셀에 붙여넣기':'Paste into selected cells','선택 셀 내용 지우기':'Clear selected cells','선택 셀 합치기':'Merge selected cells','선택 셀 나누기…':'Split selected cells…','셀 높이를 같게':'Distribute rows evenly','셀 너비를 같게':'Distribute columns evenly','위에 행 추가':'Insert row above','아래에 행 추가':'Insert row below','왼쪽에 열 추가':'Insert column left','오른쪽에 열 추가':'Insert column right','현재 행 삭제':'Delete current row','현재 열 삭제':'Delete current column','표 삭제':'Delete table','표 형태 초기화':'Reset table shape',
+  '잘라내기':'Cut','복사':'Copy','붙여넣기':'Paste','제거':'Remove','삭제':'Delete','순서…':'Order…','수식 변경':'Edit equation','서식 복사':'Copy formatting','서식 붙여넣기':'Paste formatting','서식 제거':'Clear formatting','이미지 대체':'Replace image','이미지 삭제':'Delete image','행 수':'Rows','열 수':'Columns','나누기':'Split','합쳐진 셀을 풀고 다시 나눕니다.':'Unmerge the cell, then split it again.','다른 합쳐진 셀이 있는 표에서는 해당 셀도 먼저 나눠 주세요.':'Split the other merged cells in this table first.','빈틈 없이 직사각형으로 선택한 셀만 합칠 수 있습니다.':'Only a complete rectangular cell selection can be merged.',
   '루트':'Root','단일문서':'Single document','폴더 이름을 입력해 주세요.':'Enter a folder name.','같은 이름의 폴더가 있습니다.':'A folder with that name already exists.','폴더 복제':'Duplicate folder','폴더 이름 변경':'Rename folder','이동할 수 없음':'Cannot move','대상 위치에 같은 이름의 파일 또는 폴더가 있습니다.':'A file or folder with the same name exists at the destination.',
   '업로드된 MD에서 참조를 찾지 못했습니다.':'No references were found in the uploaded Markdown.','문서를 열면 제목과 문단 탐색이 표시됩니다.':'Open a document to browse its headings and paragraphs.','펼치기':'Expand','접기':'Collapse','제목 서식이 없습니다.':'No heading styles.','해시태그':'Hashtags','사용된 해시태그가 없습니다.':'No hashtags used.','해시태그 제거':'Remove hashtag',
   '파일 이름을 입력해 주세요.':'Enter a file name.','같은 위치에 동일한 이름의 파일이 있습니다.':'A file with the same name exists in this location.','PDF → MD 자동 선택':'PDF → MD selected automatically','MD → PDF 자동 선택':'MD → PDF selected automatically','목차':'Table of contents','PDF 변환':'PDF conversion','PDF 변환 완료':'PDF conversion complete','암호가 설정된 PDF입니다. 암호를 해제한 파일을 열어 주세요.':'This PDF is password-protected. Open an unlocked copy.','PDF 파일이 손상되었거나 올바른 PDF 형식이 아닙니다.':'The PDF is damaged or invalid.','파일과 네트워크 연결을 확인해 주세요.':'Check the file and network connection.','PDF 변환 실패':'PDF conversion failed','미니 프리뷰 닫기':'Close mini preview',
@@ -13308,7 +13464,7 @@ const EN_TEXT={
   '삽입할 위치를 다시 선택한 뒤 시도해 주세요.':'Select the insertion point again and retry.','먼저 문서를 업로드하거나 만들어 주세요.':'Upload or create a document first.','미니 문서 삽입':'Insert embedded document','빈 줄':'Blank line','시작 지점을 선택하세요':'Select a starting point','자동 기록':'Automatic history','저장된 버전이 없습니다.':'No saved versions.','#ZZ 전용 블록':'#ZZ-specific blocks','MD에는 원문이 보존되지만 전용 카드·시트·미니 문서 모양은 #ZZ와 PDF에서만 표시됩니다.':'The source is preserved in MD, but custom cards, sheets, and embedded-document layouts appear only in #ZZ and PDF.','Obsidian 확장 문법':'Obsidian extended syntax','지원하지 않는 Markdown 앱에서는 일반 인용문이나 원문으로 보일 수 있습니다.':'Unsupported Markdown apps may display a regular quote or the source text.','MD에는 HTML로 저장됩니다. HTML을 제한하는 앱에서는 입력 개체가 숨겨질 수 있습니다.':'Saved as HTML in MD. Apps that restrict HTML may hide form controls.','문자 서식':'Text formatting','색상·배경색·크기는 HTML 허용 여부에 따라 다르게 보입니다.':'Color, background, and size may vary depending on HTML support.',
   '스프레드시트 삽입':'Insert spreadsheet','스프레드시트 모듈을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.':'Could not load spreadsheet support. Check your internet connection.','범위 없음':'No range','범위 오류':'Invalid range','A1:F20처럼 올바른 셀 범위를 입력해 주세요.':'Enter a valid cell range such as A1:F20.','편집할 문서를 먼저 열어 주세요.':'Open a document to edit first.','파일명':'File name','저장할 결과 없음':'No result to save','먼저 파일을 병합해 주세요.':'Merge files first.','MD → PDF는 Ctrl+Enter로 변환한 뒤 인쇄 창에서 PDF로 저장해 주세요.':'For MD → PDF, convert with Ctrl+Enter and save as PDF from the print dialog.','사이드바 펼치기':'Expand sidebar','테마 열기':'Open theme','테마 닫기':'Close theme'
   ,'변경할 단축키를 선택한 뒤 새 키 조합을 누르세요.':'Select a shortcut, then press a new key combination.','기본값':'Default','전체 초기화':'Reset all','브라우저 기본 글꼴이 운영체제 기본값과 다르게 설정되어 있습니다.':'The browser default font differs from the operating system default.'
-  ,'파일 이름 변경':'Rename file','새 파일 이름':'New file name','변경':'Rename','개별 파일 저장':'Save file','파일 다운로드':'Download file','MD로 저장':'Save as MD','PDF로 저장':'Save as PDF',
+  ,'파일 이름 변경':'Rename file','새 파일 이름':'New file name','변경':'Rename','개별 파일 저장':'Save file','파일 다운로드':'Download file','저장 형식 선택':'Choose a save format','현재 문서를 어떤 형식으로 저장할까요?':'How would you like to save this document?','MD로 저장':'Save as MD','PDF로 저장':'Save as PDF','편집 가능한 마크다운 문서':'Editable Markdown document','인쇄 및 공유용 문서':'Document for printing and sharing',
   '전체 복원':'Restore all','복원':'Restore',
   '화면 테마는 PDF에 적용됩니다.\nMD 파일에는 테마 정보가 저장되지 않습니다.':'The display theme is applied to PDF output.\nTheme information is not saved in MD files.',
   '문서의 제목을 찾아 클릭 가능한 이동 목록을 만듭니다. 제목을 바꾸면 목차도 함께 바뀝니다.':'Creates a clickable navigation list from document headings. The table of contents updates when headings change.','포함할 제목':'Headings to include','큰 제목만 (제목 1-2)':'Major headings only (Heading 1–2)','일반 목차 (제목 2-4)':'Standard contents (Heading 2–4)','모든 제목 (제목 1-6)':'All headings (Heading 1–6)','숫자가 클수록 더 작은 하위 제목까지 포함합니다.':'Higher numbers include smaller nested headings.','항목 방향':'Item direction','세로':'Vertical','가로':'Horizontal','목차 항목이 이어지는 방향을 정합니다.':'Choose the direction in which contents items flow.','목차 모양':'Contents style','세로 목록':'Vertical list','간단한 2열':'Compact two-column','번호와 연결선':'Numbers and connector lines','문서 내용은 바뀌지 않고 목차의 모양만 달라집니다.':'Only the appearance of the contents changes; document content is unchanged.','1, 1.1처럼 번호 붙이기':'Number as 1, 1.1','현재 문서에서 보이는 항목':'Items visible in the current document','이 범위에 해당하는 제목이 없습니다.':'No headings match this range.','적용':'Apply',
@@ -13599,7 +13755,7 @@ async function showAppSettings(initialCategory='general'){
       <div class="app-settings-section"><div><strong>누락 이미지 경고</strong><p>MD에서 참조하지만 업로드되지 않은 이미지가 있으면 파일 목록에 경고를 표시합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-missing-image-warning ${missingImageWarningEnabled?'checked':''}><span></span></label></div>
     </section>
     <section class="app-settings-group app-settings-group-compact" data-settings-panel="document" ${settingsCategory==='document'?'':'hidden'}><h4>파일 목록</h4>
-      <div class="app-settings-section"><div><strong>스크롤 시 소폴더 고정</strong><p>파일 목록을 스크롤할 때 현재 소폴더 이름을 위쪽에 표시합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-sticky-subfolders ${stickySubfolderEnabled?'checked':''}><span></span></label></div>
+      <div class="app-settings-section"><div><strong>스크롤 시 하위 폴더 고정</strong><p>파일 목록을 스크롤할 때 현재 하위 폴더 이름을 위쪽에 표시합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-sticky-subfolders ${stickySubfolderEnabled?'checked':''}><span></span></label></div>
     </section>
     <section class="app-settings-group" data-settings-panel="general" ${settingsCategory==='general'?'':'hidden'}><h4>가이드</h4>
       <div class="app-settings-section"><div><strong>기능 가이드 표시</strong><p>설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-guide-enabled ${featureGuideEnabled?'checked':''}><span></span></label></div>
@@ -14782,11 +14938,25 @@ function syncCustomThemePanel(){
   renderCustomThemeHistory();
   renderCustomThemeSaved();
 }
+let customThemeLiveFrame=0;
+function syncCustomThemeLiveControls(color){
+  setHexInputValue($('custom-theme-color'),color);
+  $('custom-theme-current').style.background=color;
+  $('custom-theme-bg-chip').style.background=customTheme.background;
+  $('custom-theme-text-chip').style.background=customTheme.text;
+  syncColorSliders('theme',color);
+}
 function setCustomThemeColor(value,commit=false){
   const color=normalizeColorValue(value);
   if(!color)return false;
   customTheme[customThemeChannel]=color;
   state.theme='custom';
+  syncCustomThemeLiveControls(color);
+  if(!commit){
+    if(!customThemeLiveFrame)customThemeLiveFrame=requestAnimationFrame(()=>{customThemeLiveFrame=0;applyCustomThemeVars()});
+    return true;
+  }
+  if(customThemeLiveFrame){cancelAnimationFrame(customThemeLiveFrame);customThemeLiveFrame=0}
   localStorage.setItem('md-theme','custom');
   ['light','dark','custom'].forEach(name=>$(`theme-${name}`).classList.toggle('active',name==='custom'));
   applyCustomThemeVars();
@@ -15409,7 +15579,7 @@ const SHORTCUT_SAVE_FORMAT_KEY='md-shortcut-save-format';
 function showShortcutSaveFormatDialog(){
   return new Promise(resolve=>{
     const wrap=document.createElement('div');wrap.className='modal-backdrop';
-    wrap.innerHTML=`<div class="modal-card save-format-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcut-save-format-title"><h3 id="shortcut-save-format-title">저장 형식 선택</h3><p class="save-format-copy">현재 문서를 어떤 형식으로 저장할까요?</p><div class="save-format-choices"><button class="tool" type="button" data-save-format="md">MD로 저장</button><button class="tool" type="button" data-save-format="pdf">PDF로 저장</button></div><label class="save-format-remember"><input type="checkbox" data-save-format-remember> 다시는 보지 않기</label><div class="modal-actions"><button class="tool" type="button" data-save-format="cancel">취소</button></div></div>`;
+    wrap.innerHTML=`<div class="modal-card save-format-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcut-save-format-title"><div class="save-format-heading"><h3 id="shortcut-save-format-title">저장 형식 선택</h3><p class="save-format-copy">현재 문서를 어떤 형식으로 저장할까요?</p></div><div class="save-format-choices"><button type="button" data-save-format="md"><span class="save-format-extension" aria-hidden="true">.md</span><span class="save-format-choice-copy"><b>MD로 저장</b><small>편집 가능한 마크다운 문서</small></span></button><button type="button" data-save-format="pdf"><span class="save-format-extension" aria-hidden="true">.pdf</span><span class="save-format-choice-copy"><b>PDF로 저장</b><small>인쇄 및 공유용 문서</small></span></button></div><div class="save-format-footer"><label class="save-format-remember"><input type="checkbox" data-save-format-remember><span>다시는 보지 않기</span></label><button class="tool save-format-cancel" type="button" data-save-format="cancel">취소</button></div></div>`;
     const finish=format=>{document.removeEventListener('keydown',onKey);wrap.remove();if((format==='md'||format==='pdf')&&wrap.querySelector('[data-save-format-remember]').checked)localStorage.setItem(SHORTCUT_SAVE_FORMAT_KEY,format);resolve(format)};
     const onKey=e=>{if(e.key==='Escape')finish(null)};
     wrap.onclick=e=>{const format=e.target.closest('[data-save-format]')?.dataset.saveFormat;if(format)finish(format==='cancel'?null:format)};
