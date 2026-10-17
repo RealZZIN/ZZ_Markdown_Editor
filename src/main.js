@@ -1874,6 +1874,31 @@ document.addEventListener('contextmenu',e=>{
     editPreviewLink(link);
   }
 },true);
+let previewLongPressTimer=0,previewLongPressTarget=null,previewLongPressX=0,previewLongPressY=0,suppressPreviewLongPressClick=false;
+function cancelPreviewLongPress(){
+  clearTimeout(previewLongPressTimer);previewLongPressTimer=0;previewLongPressTarget=null;
+}
+els.preview.addEventListener('pointerdown',event=>{
+  if(event.pointerType!=='touch'||event.button!==0||event.target.closest('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.block-move-handle,.form-move-handle,input,select,button'))return;
+  const target=event.target.closest('hr,td,th,img,.zz-math,.zz-form-control,.zz-doc-embed,.zz-lens,.obsidian-callout,.zz-sync-block,.zz-toc');
+  if(!target)return;
+  cancelPreviewLongPress();previewLongPressTarget=target;previewLongPressX=event.clientX;previewLongPressY=event.clientY;
+  previewLongPressTimer=setTimeout(()=>{
+    if(!previewLongPressTarget)return;
+    suppressPreviewLongPressClick=true;
+    setTimeout(()=>{suppressPreviewLongPressClick=false},800);
+    previewLongPressTarget.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:previewLongPressX,clientY:previewLongPressY,button:2}));
+    navigator.vibrate?.(20);cancelPreviewLongPress();
+  },550);
+},{passive:true});
+els.preview.addEventListener('pointermove',event=>{
+  if(previewLongPressTarget&&Math.hypot(event.clientX-previewLongPressX,event.clientY-previewLongPressY)>10)cancelPreviewLongPress();
+},{passive:true});
+['pointerup','pointercancel','pointerleave'].forEach(type=>els.preview.addEventListener(type,cancelPreviewLongPress,{passive:true}));
+els.preview.addEventListener('click',event=>{
+  if(!suppressPreviewLongPressClick)return;
+  suppressPreviewLongPressClick=false;event.preventDefault();event.stopImmediatePropagation();
+},true);
 function clearMoveMarker(){
   if(moveMarker){
     moveMarker.classList.remove('move-drop-before','move-drop-after');
@@ -13262,11 +13287,23 @@ function bindFeatureGuide(target,key){
   target.dataset.featureGuide=key;
   const open=()=>{if(!featureGuideEnabled)return;clearTimeout(featureGuideCloseTimer);clearTimeout(featureGuideOpenTimer);featureGuideOpenTimer=setTimeout(()=>showFeatureGuide(target,key),400)};
   const close=()=>scheduleFeatureGuideClose();
+  let touchTimer=0,touchResetTimer=0,touchX=0,touchY=0,touchOpened=false;
+  const cancelTouch=()=>{clearTimeout(touchTimer);touchTimer=0};
   target.addEventListener('mouseenter',open);
   target.addEventListener('mouseleave',close);
   target.addEventListener('focus',open);
   target.addEventListener('blur',close);
-  target.addEventListener('click',()=>hideFeatureGuide(true));
+  target.addEventListener('pointerdown',event=>{
+    if(event.pointerType!=='touch'||!featureGuideEnabled)return;
+    cancelTouch();clearTimeout(featureGuideOpenTimer);touchX=event.clientX;touchY=event.clientY;
+    touchTimer=setTimeout(()=>{touchTimer=0;touchOpened=true;clearTimeout(touchResetTimer);touchResetTimer=setTimeout(()=>{touchOpened=false},900);showFeatureGuide(target,key);navigator.vibrate?.(20)},550);
+  },{passive:true});
+  target.addEventListener('pointermove',event=>{if(touchTimer&&Math.hypot(event.clientX-touchX,event.clientY-touchY)>10)cancelTouch()},{passive:true});
+  ['pointerup','pointercancel','pointerleave'].forEach(type=>target.addEventListener(type,cancelTouch,{passive:true}));
+  target.addEventListener('click',event=>{
+    if(touchOpened){touchOpened=false;clearTimeout(touchResetTimer);event.preventDefault();event.stopImmediatePropagation();return}
+    hideFeatureGuide(true);
+  },true);
 }
 function closeGuideModal(wrap){
   if(!wrap)return;
@@ -13302,15 +13339,15 @@ const EN_TEXT={
   '문서 목록에 추가':'Add to document list','현재 작업 목록에 새 문서로 추가합니다.':'Add it as a new document in the current workspace.',
   '둘 다':'Both','다운로드하고 문서 목록에도 추가합니다.':'Download it and add it to the document list.',
   'Markdown':'Markdown','Preview':'Preview','분할':'Split','보기':'Preview',
-  '가이드':'Guide','기능 가이드 표시':'Show feature guides','설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.':'Hover over a feature to see instructions and examples.',
+  '가이드':'Guide','기능 가이드 표시':'Show feature guides','설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.':'Hover over a feature to see instructions and examples.','설명이 필요한 기능을 길게 누르면 사용법과 예시를 보여줍니다.':'Press and hold a feature to see instructions and examples.',
   '가이드 다시 보기':'View guides again','목록에서 다시 볼 가이드를 선택합니다.':'Choose a guide to view again.',
   '단축키':'Shortcuts','단축키 설정':'Shortcut settings','17개 명령의 단축키를 확인하고 변경합니다.':'Review and change shortcuts for 17 commands.',
   '편집 설정':'Editor settings','작성·보기 옵션':'Writing and view options','자동 보정과 편집 화면 표시 기능을 설정합니다.':'Configure automatic corrections and editor display options.',
   '테마':'Theme','화면 테마':'Display theme','라이트·다크 테마를 선택하거나 사용자 지정 색상을 편집합니다.':'Choose a light or dark theme, or edit custom colors.',
   '라이트':'Light','다크':'Dark','사용자 지정':'Custom','테마 설정':'Theme settings','화면에 사용할 테마를 선택하세요.':'Choose a theme for the interface.',
   '사용자 지정 테마 편집':'Edit custom theme','배경색과 글자색을 직접 설정합니다.':'Set the background and text colors manually.',
-  '언어':'Language','화면에 표시할 언어를 선택합니다.':'Choose the language used in the interface.','한국어':'한국어','영어':'English','프로그램 정보':'About','작성부터 미리보기, 변환과 병합까지 한곳에서 이어가고':'Write, preview, convert, and merge in one place,','문서 작업을 편리하게 완성하는 Markdown 편집기입니다.':'with a practical Markdown editor built for smooth document work.','GitHub 저장소로 이동':'Open GitHub repository',
-  '문서 폰트':'Document font','업로드 폰트 사용':'Use uploaded font','선택한 폰트를 Preview와 PDF 문서에 적용합니다.':'Apply the selected font to Preview and PDF documents.','이미지 검사':'Image check','누락 이미지 경고':'Missing image warnings','MD에서 참조하지만 업로드되지 않은 이미지가 있으면 파일 목록에 경고를 표시합니다.':'Show a warning in the file list when an MD file references an image that has not been uploaded.','누락된 이미지':'Missing images','파일 목록':'File list','스크롤 시 하위 폴더 고정':'Keep subfolder visible while scrolling','파일 목록을 스크롤할 때 현재 하위 폴더 이름을 위쪽에 표시합니다.':'Show the current subfolder name at the top while scrolling through the file list.',
+  '언어':'Language','화면에 표시할 언어를 선택합니다.':'Choose the language used in the interface.','한국어':'한국어','영어':'English','프로그램 정보':'About','작성부터 미리보기, 변환과 병합까지 한 곳에서 이어가며':'Create, preview, convert, and merge documents—all in one place.','문서 작업을 편리하게 완성하는 Markdown 편집기입니다.':'A practical Markdown editor for a smoother workflow.','GitHub 저장소로 이동':'Open GitHub repository',
+  '문서 폰트':'Document font','업로드 폰트 사용':'Use uploaded font','선택한 폰트를 미리보기와 PDF 문서에 적용합니다.':'Apply the selected font to the preview and exported PDFs.','이미지 검사':'Image check','누락 이미지 경고':'Missing image warnings','MD에서 참조하지만 업로드되지 않은 이미지가 있으면 파일 목록에 경고를 표시합니다.':'Show a warning in the file list when an MD file references an image that has not been uploaded.','누락된 이미지':'Missing images','파일 목록':'File list','스크롤 시 하위 폴더 고정':'Keep subfolder visible while scrolling','파일 목록을 스크롤할 때 현재 하위 폴더 이름을 위쪽에 표시합니다.':'Show the current subfolder name at the top while scrolling through the file list.',
   '문서 폰트 선택':'Select document font','폰트 업로드':'Upload font','삭제':'Delete','업로드한 폰트 없음':'No uploaded fonts',
   'TTF, OTF, WOFF, WOFF2 파일을 업로드할 수 있습니다.':'Upload TTF, OTF, WOFF, or WOFF2 font files.','폰트를 확인하고 저장하는 중...':'Checking and saving fonts...','폰트를 불러오지 못했습니다.':'Could not load the font.',
   '이미지':'Images','업로드한 이미지가 없습니다.':'No uploaded images.','이미지 정보':'Image details','파일명':'File name','확장자':'Extension','경로':'Path','파일 크기':'File size','이미지 크기':'Dimensions','확인 중...':'Checking...','확인할 수 없음':'Unavailable','사용 중인 업로드 MD':'Uploaded Markdown files using this image','업로드된 MD에서 이 이미지를 참조하지 않습니다.':'No uploaded Markdown file references this image.',
@@ -13383,7 +13420,7 @@ const EN_TEXT={
   '병합 실행을 누르면 현재 선택한 문서로 결과가 갱신됩니다.':'Select Run merge to update the result from the current selection.',
   '완성된 결과는 저장하거나 편집 화면에서 계속 다듬을 수 있습니다.':'Save the finished result or continue refining it in the editor.',
   '문서 항목.md':'Document item.md','마우스':'Pointer','문서 미리보기':'Document preview','제목과 본문 내용을 열기 전에 확인합니다.':'Review the title and body before opening the document.',
-  '고급 기능을 더 쉽게 확인하세요':'Explore advanced features more easily','동기화 블록이나 사용자 지정 서식처럼 설명이 필요한 기능 위에 잠시 마우스를 올리면 사용법과 결과 예시가 나타납니다.':'Hover briefly over features such as synchronized blocks or custom formatting to see instructions and examples.',
+  '고급 기능을 더 쉽게 확인하세요':'Explore advanced features more easily','동기화 블록이나 사용자 지정 서식처럼 설명이 필요한 기능 위에 잠시 마우스를 올리면 사용법과 결과 예시가 나타납니다.':'Hover briefly over features such as synchronized blocks or custom formatting to see instructions and examples.','동기화 블록이나 사용자 지정 서식처럼 설명이 필요한 기능을 길게 누르면 사용법과 결과 예시가 나타납니다.':'Press and hold features such as synchronized blocks or custom formatting to see instructions and examples.',
   '동기화 블록':'Synchronized block','같은 ID의 내용 연결':'Link content with the same ID',
   '서식':'Style','크기':'Size','양식':'Form','구분':'Separator','문법':'Syntax',
   'Enter를 누르면 다음 줄이 바로 만들어집니다.':'Press Enter to create the next line immediately.','첫 번째 줄':'First line','두 번째 줄':'Second line',
@@ -13699,9 +13736,10 @@ function showFeatureGuideWelcome(force=false){
   if(!force&&(!featureGuideEnabled||localStorage.getItem(FEATURE_GUIDE_WELCOME_KEY)==='1'))return;
   document.querySelector('.feature-guide-welcome')?.remove();
   const wrap=document.createElement('div');wrap.className='modal-backdrop feature-guide-welcome';
+  const discoveryCopy=usesMobileObjectGesture()?'동기화 블록이나 사용자 지정 서식처럼 설명이 필요한 기능을 길게 누르면 사용법과 결과 예시가 나타납니다.':'동기화 블록이나 사용자 지정 서식처럼 설명이 필요한 기능 위에 잠시 마우스를 올리면 사용법과 결과 예시가 나타납니다.';
   wrap.innerHTML=`<div class="modal-card feature-guide-welcome-card" role="dialog" aria-modal="true" aria-labelledby="feature-guide-welcome-title">
     <span class="feature-guide-eyebrow">GUIDE</span><h3 id="feature-guide-welcome-title">고급 기능을 더 쉽게 확인하세요</h3>
-    <p>동기화 블록이나 사용자 지정 서식처럼 설명이 필요한 기능 위에 잠시 마우스를 올리면 사용법과 결과 예시가 나타납니다.</p>
+    <p>${discoveryCopy}</p>
     <button class="feature-guide-welcome-demo" type="button" data-guide-welcome-demo><i>↔</i><span><b>동기화 블록</b><small>같은 ID의 내용 연결</small></span></button>
     <label class="feature-guide-dismiss"><input type="checkbox" data-guide-never> 다시는 보지 않기</label>
     <div class="modal-actions"><button class="tool primary" type="button" data-guide-welcome-close>확인</button></div>
@@ -13760,6 +13798,7 @@ async function showAppSettings(initialCategory='general'){
   document.querySelector('.feature-guide-welcome')?.remove();
   closeGuideModal(document.querySelector('.app-settings-modal'));
   const wrap=document.createElement('div');wrap.className='modal-backdrop app-settings-modal';
+  const guideInteractionCopy=usesMobileObjectGesture()?'설명이 필요한 기능을 길게 누르면 사용법과 예시를 보여줍니다.':'설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.';
   wrap.innerHTML=`<div class="modal-card app-settings-card" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
     <h3 id="app-settings-title">설정</h3>
     <nav class="app-settings-categories" aria-label="설정 분류"><button type="button" class="${settingsCategory==='general'?'active':''}" data-settings-category="general">일반</button><button type="button" class="${settingsCategory==='document'?'active':''}" data-settings-category="document">문서</button><button type="button" class="${settingsCategory==='language'?'active':''}" data-settings-category="language">Language</button><button type="button" class="${settingsCategory==='about'?'active':''}" data-settings-category="about">프로그램 정보</button></nav>
@@ -13771,7 +13810,7 @@ async function showAppSettings(initialCategory='general'){
       </div>
     </section>
     <section class="app-settings-group" data-settings-panel="document" ${settingsCategory==='document'?'':'hidden'}><h4>문서 폰트</h4>
-      <div class="app-settings-section"><div><strong>업로드 폰트 사용</strong><p>선택한 폰트를 Preview와 PDF 문서에 적용합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-custom-font-enabled ${customFontEnabled&&customFonts.length?'checked':''} ${customFonts.length?'':'disabled'}><span></span></label></div>
+      <div class="app-settings-section"><div><strong>업로드 폰트 사용</strong><p>선택한 폰트를 미리보기와 PDF 문서에 적용합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-custom-font-enabled ${customFontEnabled&&customFonts.length?'checked':''} ${customFonts.length?'':'disabled'}><span></span></label></div>
       <input type="file" data-custom-font-input accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" multiple hidden>
       <div class="app-settings-font-controls">
         <select data-custom-font-select aria-label="문서 폰트 선택" ${customFonts.length?'':'disabled'}>${customFonts.length?customFonts.map(font=>`<option value="${htmlEsc(font.id)}" ${activeCustomFont()?.id===font.id?'selected':''}>${htmlEsc(font.name)}</option>`).join(''):'<option>업로드한 폰트 없음</option>'}</select>
@@ -13787,7 +13826,7 @@ async function showAppSettings(initialCategory='general'){
       <div class="app-settings-section"><div><strong>스크롤 시 하위 폴더 고정</strong><p>파일 목록을 스크롤할 때 현재 하위 폴더 이름을 위쪽에 표시합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-sticky-subfolders ${stickySubfolderEnabled?'checked':''}><span></span></label></div>
     </section>
     <section class="app-settings-group" data-settings-panel="general" ${settingsCategory==='general'?'':'hidden'}><h4>가이드</h4>
-      <div class="app-settings-section"><div><strong>기능 가이드 표시</strong><p>설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-guide-enabled ${featureGuideEnabled?'checked':''}><span></span></label></div>
+      <div class="app-settings-section"><div><strong>기능 가이드 표시</strong><p>${guideInteractionCopy}</p></div><label class="app-settings-switch"><input type="checkbox" data-guide-enabled ${featureGuideEnabled?'checked':''}><span></span></label></div>
       <button class="app-settings-replay" type="button" data-guide-picker><span>가이드 다시 보기</span><small>목록에서 다시 볼 가이드를 선택합니다.</small></button>
     </section>
     <section class="app-settings-group app-settings-shortcuts" data-settings-panel="general" ${settingsCategory==='general'?'':'hidden'}><h4>단축키</h4>
@@ -13802,7 +13841,7 @@ async function showAppSettings(initialCategory='general'){
     <section class="app-settings-group app-about" data-settings-panel="about" ${settingsCategory==='about'?'':'hidden'}>
       <div class="app-about-icon" aria-hidden="true"><svg viewBox="0 0 64 64"><rect x="3" y="3" width="58" height="58" rx="14"></rect><path d="M23 13 18 51M45 13 40 51M11 26h42M9 40h43"></path></svg></div>
       <h4>#ZZ.md</h4>
-      <p><span>작성부터 미리보기, 변환과 병합까지 한곳에서 이어가고</span><span>문서 작업을 편리하게 완성하는 Markdown 편집기입니다.</span></p>
+      <p><span>작성부터 미리보기, 변환과 병합까지 한 곳에서 이어가며</span><span>문서 작업을 편리하게 완성하는 Markdown 편집기입니다.</span></p>
       <a class="app-about-github" href="https://github.com/RealZZIN/ZZ_Markdown_Editor" target="_blank" rel="noopener noreferrer" aria-label="GitHub 저장소로 이동" title="GitHub 저장소로 이동"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0Zm3.5 7.4V10.5L12 6l5.5 4.5v8.9M9.5 21v-6h5v6"></path></svg><span>GitHub</span></a>
     </section>
     <div class="modal-actions"><button class="tool primary" type="button" data-settings-close>닫기</button></div>

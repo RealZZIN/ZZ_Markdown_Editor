@@ -4627,6 +4627,8 @@ body.dark .cp-swatch { border-color: rgba(255,255,255,.18); }
   .home-convert-workflow { border-right:0;border-bottom:1px solid var(--b1); }
   .home-side-stack { grid-template-columns:1fr 1fr;grid-template-rows:auto; }
   .home-start-card { border-right:1px solid var(--b1);border-bottom:0; }
+  .app-settings-card > .modal-actions { position:sticky;z-index:4;bottom:-16px;margin:16px -16px -16px;padding:12px 16px max(12px,env(safe-area-inset-bottom));border-top:1px solid var(--b1);background:var(--bg); }
+  .app-settings-card > .modal-actions .tool { min-height:42px; }
 }
 @media (max-width: 520px) {
   .top { grid-template-rows:auto auto auto; }
