@@ -3326,6 +3326,16 @@ document.addEventListener('pointercancel',finishTableResize);
     els.preview.querySelectorAll('.table-cell-selected').forEach(cell=>cell.classList.remove('table-cell-selected'));
     els.preview.querySelectorAll('.table-cell-range-active').forEach(table=>table.classList.remove('table-cell-range-active'));
   }
+  document.addEventListener('selectionchange',()=>{
+    if(!cellAnchor&&!selectedTable)return;
+    const selection=window.getSelection(),range=selection?.rangeCount?selection.getRangeAt(0):null;
+    if(!range||range.collapsed||!range.toString()||!els.preview.contains(range.commonAncestorContainer))return;
+    // A real text selection supersedes the old table/cell selection. This is
+    // especially important on mobile, where selection handles may not emit a
+    // new mousedown before Copy/Paste and stale cells would hijack the action.
+    clearCellSelection();
+    if(selectedTable){selectedTable.classList.remove('table-selected');selectedTable.removeAttribute('aria-selected');selectedTable=null}
+  });
   function setCellSelection(anchor,focus=anchor){cellAnchor=cellPoint(anchor);cellFocus=cellPoint(focus);selectedTable=null;els.preview.querySelectorAll('.table-selected').forEach(t=>t.classList.remove('table-selected'));paintCellSelection()}
   function selectAllTableCells(table){
     const rows=tableCells(table),columnCount=Math.max(0,...rows.map(row=>row.length));
