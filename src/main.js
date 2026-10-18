@@ -5667,10 +5667,34 @@ function setMode(mode,showHome=false){
   }else{renderHomeMergeList();updateHomeConvert();scheduleModeGuideWelcome('home')}
 }
 const HISTORY_MAX_ENTRIES=80,HISTORY_MIN_ENTRIES=8,HISTORY_CHAR_BUDGET=12_000_000;
+const historyLocations=new Map();
+function captureHistoryLocation(){
+  const editorStart=els.editor.selectionStart,editorEnd=els.editor.selectionEnd;
+  const location={surface:state.lastInsertionSurface,editorStart,editorEnd,editorTop:els.editor.scrollTop};
+  const range=previewRange();
+  if(range&&els.preview.contains(range.commonAncestorContainer)){
+    const block=previewTopLevelAnchor(range);
+    if(block){
+      const leaf=closestPreviewBlock(range.startContainer),offsetRoot=leaf&&block.contains(leaf)?leaf:block;
+      const before=document.createRange();before.selectNodeContents(offsetRoot);
+      try{before.setEnd(range.startContainer,range.startOffset);location.previewOffset=before.toString().replace(/\u200b/g,'').length}catch(_){}
+      location.previewBlock=[...els.preview.children].indexOf(block);location.previewTop=els.preview.scrollTop;
+      const path=[];
+      for(let node=leaf;node&&node!==block&&block.contains(node);node=node.parentElement)path.unshift([...node.parentElement.children].indexOf(node));
+      if(path.length)location.previewPath=path;
+    }
+  }
+  return location;
+}
+function trimHistoryLocations(){
+  const retained=new Set([...state.history,...state.future]);
+  historyLocations.forEach((_,value)=>{if(!retained.has(value))historyLocations.delete(value)});
+}
 function trimHistoryBudget(){
   while(state.history.length>HISTORY_MAX_ENTRIES)state.history.shift();
   let chars=state.history.reduce((sum,value)=>sum+value.length,0);
   while(state.history.length>HISTORY_MIN_ENTRIES&&chars>HISTORY_CHAR_BUDGET)chars-=state.history.shift().length;
+  trimHistoryLocations();
 }
 function pushHistory(force=false){
   if(state.restoring)return;
@@ -5678,6 +5702,7 @@ function pushHistory(force=false){
   const commit=()=>{
     state.historyTimer=null;
     const v=els.editor.value;
+    historyLocations.set(v,captureHistoryLocation());
     if(state.history[state.history.length-1]!==v){state.history.push(v);trimHistoryBudget();state.future=[]}
     updateUndoRedoButtons();
   };
@@ -6023,9 +6048,30 @@ function restoreEditor(value,{onRendered}={}){
 function trimFutureBudget(){
   let chars=state.future.reduce((sum,value)=>sum+value.length,0);
   while(state.future.length>HISTORY_MIN_ENTRIES&&chars>HISTORY_CHAR_BUDGET)chars-=state.future.shift().length;
+  trimHistoryLocations();
 }
-function undoEdit(){if(state.history.length<2)return;state.future.push(state.history.pop());trimFutureBudget();restoreEditor(state.history[state.history.length-1])}
-function redoEdit(){if(!state.future.length)return;const v=state.future.pop();state.history.push(v);trimHistoryBudget();restoreEditor(v)}
+function restoreHistoryLocation(location){
+  if(!location)return;
+  const view=currentEditView(),showPreview=view!=='md',block=showPreview&&Number.isInteger(location.previewBlock)?els.preview.children[location.previewBlock]:null;
+  if(block){
+    let target=block;
+    for(const index of location.previewPath||[])target=target?.children?.[index]||target;
+    placeCaretAtPreviewTextOffset(target,Number(location.previewOffset)||0);
+    target.scrollIntoView({block:'center',behavior:'smooth'});
+    state.lastInsertionSurface='preview';
+    return;
+  }
+  const start=Math.max(0,Math.min(els.editor.value.length,Number(location.editorStart)||0));
+  const end=Math.max(start,Math.min(els.editor.value.length,Number(location.editorEnd)||start));
+  els.editor.setSelectionRange(start,end);els.editor.focus({preventScroll:true});state.lastEditorSelection={start,end};state.lastInsertionSurface='editor';
+  scrollMarkdownToSource(start);
+}
+function restoreHistoryEntry(value){
+  const location=historyLocations.get(value);
+  restoreEditor(value,{onRendered:rendered=>{if(rendered)restoreHistoryLocation(location)}});
+}
+function undoEdit(){if(state.history.length<2)return;state.future.push(state.history.pop());trimFutureBudget();restoreHistoryEntry(state.history[state.history.length-1])}
+function redoEdit(){if(!state.future.length)return;const v=state.future.pop();state.history.push(v);trimHistoryBudget();restoreHistoryEntry(v)}
 function download(name,text,type='text/markdown;charset=utf-8'){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([text],{type}));a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),800)}
 // PDF layout reconstruction. Coordinates are normalized to the rendered page.
 function pdfMedian(values){
@@ -6700,6 +6746,7 @@ function showFindReplaceDialog(){
   const status=panel.querySelector('.find-replace-status');
   let cursor=-1;
   let previewMatches=[];
+  let editorMatches=[];
   const options=()=>({
     matchCase:panel.querySelector('[data-find-case]').checked,
     wholeWord:panel.querySelector('[data-find-whole]').checked,
@@ -6708,23 +6755,30 @@ function showFindReplaceDialog(){
   const refreshMatches=()=>{
     const {matchCase,wholeWord,includeSpaces}=options();
     previewMatches=previewFindMatches(find.value,matchCase,wholeWord,includeSpaces,searchRoot());
+    editorMatches=findOnly?[]:findTextMatches(els.editor.value,find.value,matchCase,wholeWord,includeSpaces);
     clearPreviewFindHighlights();
     if(previewMatches.length&&window.Highlight&&CSS.highlights){
       CSS.highlights.set('preview-find-all',new Highlight(...previewMatches.map(item=>item.range)));
     }
-    return previewMatches;
+    return findOnly?previewMatches:editorMatches;
   };
   const showCurrent=(index)=>{
-    const list=previewMatches.length?previewMatches:refreshMatches();
+    let list=findOnly?previewMatches:editorMatches;
+    if(!list.length)list=refreshMatches();
     if(!list.length){
       cursor=-1;
       status.textContent=find.value?'일치 항목 없음':'';
       return null;
     }
     cursor=(index+list.length)%list.length;
-    const item=list[cursor];
-    if(window.Highlight&&CSS.highlights)CSS.highlights.set('preview-find-current',new Highlight(item.range));
-    const element=item.range.startContainer.parentElement;
+    const item=list[cursor],previewItem=previewMatches[cursor];
+    if(previewItem&&window.Highlight&&CSS.highlights)CSS.highlights.set('preview-find-current',new Highlight(previewItem.range));
+    if(!findOnly){
+      els.editor.setSelectionRange(item.start,item.end);
+      state.savedSelection={start:item.start,end:item.end};
+      scrollMarkdownToSource(item.start);
+    }
+    const element=previewItem?.range.startContainer.parentElement;
     const root=searchRoot();
     if(element&&root){
       const rootRect=root.getBoundingClientRect();
@@ -6737,8 +6791,10 @@ function showFindReplaceDialog(){
   };
   const selectMatch=(direction=1)=>{
     if(!find.value){refreshMatches();status.textContent='';return null}
-    if(!previewMatches.length)refreshMatches();
-    return showCurrent(cursor<0?(direction>0?0:previewMatches.length-1):cursor+direction);
+    const list=findOnly?previewMatches:editorMatches;
+    if(!list.length)refreshMatches();
+    const current=findOnly?previewMatches:editorMatches;
+    return showCurrent(cursor<0?(direction>0?0:current.length-1):cursor+direction);
   };
   const sourceMatches=()=>{
     if(findOnly)return[];
@@ -6747,13 +6803,13 @@ function showFindReplaceDialog(){
   };
   const replaceCurrent=()=>{
     if(findOnly)return;
-    const visible=cursor>=0?previewMatches[cursor]:selectMatch(1);
+    const visible=cursor>=0?editorMatches[cursor]:selectMatch(1);
     if(!visible)return;
     const list=sourceMatches();
     const current=list[Math.min(cursor,list.length-1)];
     if(!current){status.textContent='원문에서 바꿀 위치를 찾지 못했습니다';return}
     replaceRange(replacementValue(),current.start,current.end,false);
-    requestAnimationFrame(()=>{refreshMatches();showCurrent(Math.min(cursor,previewMatches.length-1))});
+    requestAnimationFrame(()=>{refreshMatches();showCurrent(Math.min(cursor,editorMatches.length-1))});
   };
   const replaceAll=()=>{
     if(findOnly)return;
@@ -6771,7 +6827,7 @@ function showFindReplaceDialog(){
   let refreshTimer=0;
   const previewObserver=new MutationObserver(()=>{
     clearTimeout(refreshTimer);
-    refreshTimer=setTimeout(()=>{cursor=-1;refreshMatches();status.textContent=previewMatches.length?`${previewMatches.length}개 찾음`:find.value?'일치 항목 없음':''},90);
+    refreshTimer=setTimeout(()=>{cursor=-1;const matches=refreshMatches();status.textContent=matches.length?`${matches.length}개 찾음`:find.value?'일치 항목 없음':''},90);
   });
   if(searchRoot())previewObserver.observe(searchRoot(),{subtree:true,childList:true,characterData:true});
   const close=()=>{
@@ -6793,7 +6849,7 @@ function showFindReplaceDialog(){
     else if(action==='all')replaceAll();
     else if(action==='close')close();
   });
-  const reset=()=>{cursor=-1;refreshMatches();status.textContent=previewMatches.length?`${previewMatches.length}개 찾음`:find.value?'일치 항목 없음':''};
+  const reset=()=>{cursor=-1;const matches=refreshMatches();status.textContent=matches.length?`${matches.length}개 찾음`:find.value?'일치 항목 없음':''};
   const showSpaces=(input,output)=>{
     if(!input||!output)return;
     const value=input.value;
@@ -8780,6 +8836,19 @@ function isChatGptCitationLink(link){
   return link?.matches?.('[data-citation],[data-source],[class*="citation" i],[class*="source" i]')||false;
 }
 const INTERNAL_TABLE_CLIPBOARD_ATTRIBUTE='data-zz-table-copy';
+const INTERNAL_PREVIEW_CLIPBOARD_ATTRIBUTE='data-zz-preview-copy';
+function internalPreviewPasteHtml(html){
+  if(!html||!new RegExp(`\\b${INTERNAL_PREVIEW_CLIPBOARD_ATTRIBUTE}\\b`,'i').test(html))return'';
+  const holder=document.createElement('div');holder.innerHTML=html;
+  const payload=holder.querySelector(`[${INTERNAL_PREVIEW_CLIPBOARD_ATTRIBUTE}]`);
+  if(!payload)return'';
+  payload.querySelectorAll('script,style,meta,link,object,embed').forEach(node=>node.remove());
+  payload.querySelectorAll('*').forEach(node=>{
+    [...node.attributes].forEach(attribute=>{if(/^on/i.test(attribute.name))node.removeAttribute(attribute.name)});
+  });
+  payload.removeAttribute(INTERNAL_PREVIEW_CLIPBOARD_ATTRIBUTE);
+  return payload.innerHTML;
+}
 function internalTablePasteHtml(html){
   if(!html||!new RegExp(`\\b${INTERNAL_TABLE_CLIPBOARD_ATTRIBUTE}\\b`,'i').test(html))return'';
   const holder=document.createElement('div');holder.innerHTML=html;
@@ -8792,9 +8861,24 @@ function internalTablePasteHtml(html){
   });
   return table.outerHTML;
 }
+els.preview.addEventListener('copy',e=>{
+  if(e.defaultPrevented||els.preview.querySelector('.table-cell-selected')||els.preview.querySelector('.table-selected'))return;
+  const selection=window.getSelection(),range=selection?.rangeCount?selection.getRangeAt(0):null;
+  if(!range||range.collapsed||!els.preview.contains(range.commonAncestorContainer))return;
+  const copied=previewSelectionClipboardData(range);
+  e.preventDefault();
+  e.clipboardData?.setData('text/html',copied.html);
+  e.clipboardData?.setData('text/plain',copied.text);
+});
 els.preview.addEventListener('paste',e=>{
   if(e.defaultPrevented||els.preview.querySelector('.table-cell-selected'))return;
   const cleaned=internalTablePasteHtml(e.clipboardData?.getData('text/html')||'');
+  if(!cleaned)return;
+  e.preventDefault();e.stopImmediatePropagation();insertPreviewHtml(cleaned);
+},true);
+els.preview.addEventListener('paste',e=>{
+  if(e.defaultPrevented||els.preview.querySelector('.table-cell-selected'))return;
+  const cleaned=internalPreviewPasteHtml(e.clipboardData?.getData('text/html')||'');
   if(!cleaned)return;
   e.preventDefault();e.stopImmediatePropagation();insertPreviewHtml(cleaned);
 },true);
@@ -8983,20 +9067,64 @@ document.getElementById('format-tools').addEventListener('mousedown',e=>{
 // ── 스크롤 동기화 ──
 let syncScrollEnabled=savedOption('md-option-sync-scroll',false);
 let syncScrollLock=false;
+let scrollAnchorCache=null;
+function splitScrollAnchors(){
+  const source=els.editor.value,children=[...els.preview.children].filter(node=>!node.matches('.line-gutter,.preview-arrival-marker'));
+  if(scrollAnchorCache?.source===source&&scrollAnchorCache.childCount===children.length)return scrollAnchorCache.anchors;
+  let line=0,chunks=[];
+  try{
+    chunks=parser.lexer(source).filter(token=>token.raw).map(token=>{
+      const start=line,lines=Math.max(1,(token.raw.match(/\n/g)||[]).length);line+=lines;
+      return{start,end:Math.max(start,line)};
+    });
+  }catch{}
+  if(!chunks.length)chunks=source.split(/\r?\n/).map((_,index)=>({start:index,end:index+1}));
+  const count=Math.min(chunks.length,children.length);
+  const anchors=Array.from({length:count},(_,index)=>({...chunks[index],element:children[index]}));
+  scrollAnchorCache={source,childCount:children.length,anchors};
+  return anchors;
+}
+function previewElementTop(element){
+  const root=els.preview.getBoundingClientRect(),rect=element.getBoundingClientRect();
+  return els.preview.scrollTop+rect.top-root.top;
+}
+function syncPreviewToEditorAnchor(){
+  const anchors=splitScrollAnchors();if(anchors.length<2)return false;
+  const lineHeight=parseFloat(getComputedStyle(els.editor).lineHeight)||24;
+  const center=(els.editor.scrollTop+els.editor.clientHeight/2)/lineHeight;
+  let anchor=anchors.find(item=>center>=item.start&&center<=item.end)||anchors.reduce((best,item)=>Math.abs(item.start-center)<Math.abs(best.start-center)?item:best,anchors[0]);
+  const fraction=Math.max(0,Math.min(1,(center-anchor.start)/Math.max(1,anchor.end-anchor.start)));
+  const top=previewElementTop(anchor.element)+fraction*Math.max(1,anchor.element.getBoundingClientRect().height)-els.preview.clientHeight/2;
+  els.preview.scrollTop=Math.max(0,top);return true;
+}
+function syncEditorToPreviewAnchor(){
+  const anchors=splitScrollAnchors();if(anchors.length<2)return false;
+  const center=els.preview.scrollTop+els.preview.clientHeight/2;
+  let anchor=anchors.find(item=>{const top=previewElementTop(item.element);return center>=top&&center<=top+item.element.getBoundingClientRect().height})
+    ||anchors.reduce((best,item)=>Math.abs(previewElementTop(item.element)-center)<Math.abs(previewElementTop(best.element)-center)?item:best,anchors[0]);
+  const top=previewElementTop(anchor.element),height=Math.max(1,anchor.element.getBoundingClientRect().height);
+  const fraction=Math.max(0,Math.min(1,(center-top)/height));
+  const line=anchor.start+fraction*Math.max(1,anchor.end-anchor.start),lineHeight=parseFloat(getComputedStyle(els.editor).lineHeight)||24;
+  els.editor.scrollTop=Math.max(0,line*lineHeight-els.editor.clientHeight/2);return true;
+}
 function onEditorScroll(){
   if(!syncScrollEnabled||syncScrollLock)return;
   const editor=els.editor,preview=els.preview;
-  const ratio=editor.scrollTop/(editor.scrollHeight-editor.clientHeight||1);
   syncScrollLock=true;
-  preview.scrollTop=ratio*(preview.scrollHeight-preview.clientHeight);
+  if(currentEditView()!=='both'||!syncPreviewToEditorAnchor()){
+    const ratio=editor.scrollTop/(editor.scrollHeight-editor.clientHeight||1);
+    preview.scrollTop=ratio*(preview.scrollHeight-preview.clientHeight);
+  }
   requestAnimationFrame(()=>{syncScrollLock=false});
 }
 function onPreviewScroll(){
   if(!syncScrollEnabled||syncScrollLock)return;
   const editor=els.editor,preview=els.preview;
-  const ratio=preview.scrollTop/(preview.scrollHeight-preview.clientHeight||1);
   syncScrollLock=true;
-  editor.scrollTop=ratio*(editor.scrollHeight-editor.clientHeight);
+  if(currentEditView()!=='both'||!syncEditorToPreviewAnchor()){
+    const ratio=preview.scrollTop/(preview.scrollHeight-preview.clientHeight||1);
+    editor.scrollTop=ratio*(editor.scrollHeight-editor.clientHeight);
+  }
   requestAnimationFrame(()=>{syncScrollLock=false});
 }
 els.editor.addEventListener('scroll',onEditorScroll);
@@ -9381,6 +9509,7 @@ function alignSelectedMath(math,align){
     wrapper.appendChild(root);
   }
   wrapper.style.textAlign=align;
+  wrapper.style.width='100%';
   return finishMathFormat(math);
 }
 function applySelectedMathCommand(command,value=null){
@@ -9467,6 +9596,51 @@ function wrapTextPartStyle(part,styleName,value){
   const range=document.createRange();range.setStart(part.node,part.start);range.setEnd(part.node,part.end);
   const span=document.createElement('span');span.style.setProperty(styleName,value);
   span.appendChild(range.extractContents());range.insertNode(span);return span;
+}
+function previewRangeTextParts(range){
+  if(!range||range.collapsed||!els.preview.contains(range.commonAncestorContainer))return[];
+  const parts=[];
+  const root=range.commonAncestorContainer.nodeType===Node.TEXT_NODE
+    ?range.commonAncestorContainer.parentElement
+    :range.commonAncestorContainer;
+  const visit=node=>{
+    if(!node?.data||node.parentElement?.closest('.block-move-handle,.form-move-handle,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.code-head,.zz-math'))return;
+    try{if(!range.intersectsNode(node))return}catch{return}
+    const start=node===range.startContainer?range.startOffset:0;
+    const end=node===range.endContainer?range.endOffset:node.length;
+    if(end>start)parts.push({node,start,end});
+  };
+  if(root?.nodeType===Node.TEXT_NODE)visit(root);
+  else if(root){
+    const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let node;
+    while((node=walker.nextNode()))visit(node);
+  }
+  return parts;
+}
+function previewRangeCrossesBlocks(range){
+  if(!range||range.collapsed)return false;
+  const start=closestPreviewBlock(range.startContainer),end=closestPreviewBlock(range.endContainer);
+  if(start!==end)return true;
+  const root=range.commonAncestorContainer.nodeType===Node.ELEMENT_NODE?range.commonAncestorContainer:range.commonAncestorContainer.parentElement;
+  return !!root?.matches?.('table,thead,tbody,tfoot,tr,ul,ol,blockquote')||!!root?.querySelector?.('table,ul,ol,blockquote');
+}
+function applyStylesToPreviewTextParts(range,styles){
+  const parts=previewRangeTextParts(range);
+  if(!parts.length)return false;
+  const spans=[];
+  for(const part of [...parts].reverse()){
+    if(!part.node.isConnected)continue;
+    const selected=document.createRange();selected.setStart(part.node,part.start);selected.setEnd(part.node,part.end);
+    const span=document.createElement('span');
+    Object.entries(styles).forEach(([name,value])=>span.style.setProperty(name,value));
+    span.appendChild(selected.extractContents());selected.insertNode(span);spans.push(span);
+  }
+  if(!spans.length)return false;
+  const ordered=[...spans].reverse(),next=document.createRange();
+  next.setStart(ordered[0],0);next.setEnd(ordered.at(-1),ordered.at(-1).childNodes.length);
+  const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);
+  state.savedPreviewRange=next.cloneRange();
+  return true;
 }
 function inlineStyleHost(node,styleName,boundary){
   for(let element=node?.nodeType===1?node:node?.parentElement;element&&element!==boundary;element=element.parentElement){
@@ -9762,6 +9936,14 @@ function stylePreviewSelection(styleName,value){
   if((value===''||value==null)&&!range.collapsed&&clearPreviewInlineStyle(range,styleName))return true;
   if(!range.collapsed&&applyPreviewStyleToExisting(range,styleName,value))return true;
   if(value===''||value==null)return false;
+  // A span cannot legally contain paragraphs, list items, rows, or cells.
+  // Keep cross-block selections in place and style their leaf text instead.
+  if(previewRangeCrossesBlocks(range)){
+    pushPreviewFormatHistory();
+    if(!applyStylesToPreviewTextParts(range,{[styleName]:value}))return false;
+    syncFromPreview();
+    return true;
+  }
   pushPreviewFormatHistory();
   const cleanupRoot=rangeNode.closest?.('p,li,blockquote,td,th')||els.preview;
   const span=document.createElement('span');
@@ -9839,7 +10021,10 @@ function previewSelectionClipboardData(range){
   const host=document.createElement('div');
   host.appendChild(range.cloneContents());
   cleanPreviewHtml(host);
-  return{html:serializePreviewHtml(host),text:range.toString()};
+  const payload=document.createElement('div');
+  payload.setAttribute(INTERNAL_PREVIEW_CLIPBOARD_ATTRIBUTE,'1');
+  payload.innerHTML=serializePreviewHtml(host);
+  return{html:payload.outerHTML,text:range.toString()};
 }
 async function writePreviewSelectionClipboard(range){
   const data=previewSelectionClipboardData(range);
@@ -10744,12 +10929,12 @@ async function createCustomFormat(){
 }
 function applyCustomFormatPreset(preset,{deferSync=false}={}){
   let range=previewRange();
-  if(!range||range.collapsed||!els.preview.contains(range.commonAncestorContainer)){
+  const fields=new Set(preset.fields||[]);
+  const tableSelection=tableFormatTextParts();
+  if((!range||range.collapsed||!els.preview.contains(range.commonAncestorContainer))&&!tableSelection?.cells.length){
     showInfoNotice('텍스트를 선택해 주세요','프리뷰에서 서식을 적용할 텍스트를 먼저 드래그해 주세요.');
     return false;
   }
-  const fields=new Set(preset.fields||[]);
-  const tableSelection=tableFormatTextParts();
   if(tableSelection){
     new Set([
       ...tableSelection.cells.map(cell=>cell.closest('table')),
@@ -10762,9 +10947,20 @@ function applyCustomFormatPreset(preset,{deferSync=false}={}){
     if(fields.has('bold'))styles.fontWeight=preset.bold?'700':'400';
     if(fields.has('italic'))styles.fontStyle=preset.italic?'italic':'normal';
     if(fields.has('underline'))styles.textDecoration=preset.underline?'underline':'none';
-    const {parts,cells}=tableSelection;if(!parts.length)return false;
+    const {parts,cells}=tableSelection;if(!parts.length&&!cells.length)return false;
     pushPreviewFormatHistory();const spans=[];
-    for(const {node,start,end} of [...parts].reverse()){
+    if(cells.length){
+      const cellStyles={
+        ...(fields.has('fontSize')?{'font-size':`${Number(preset.fontSize)||14}px`}:{}),
+        ...(fields.has('color')?{color:preset.color||'inherit'}:{}),
+        ...(fields.has('backgroundColor')?{'background-color':preset.backgroundColor||'transparent'}:{}),
+        ...(fields.has('bold')?{'font-weight':preset.bold?'700':'400'}:{}),
+        ...(fields.has('italic')?{'font-style':preset.italic?'italic':'normal'}:{}),
+        ...(fields.has('underline')?{'text-decoration':preset.underline?'underline':'none'}:{})
+      };
+      cells.forEach(cell=>Object.entries(cellStyles).forEach(([name,value])=>applyStyleToWholeCell(cell,name,value)));
+    }
+    for(const {node,start,end} of cells.length?[]:[...parts].reverse()){
       const part=document.createRange();part.setStart(node,start);part.setEnd(node,end);
       const span=document.createElement('span');Object.assign(span.style,styles);
       span.appendChild(part.extractContents());part.insertNode(span);spans.push(span);
@@ -10779,6 +10975,22 @@ function applyCustomFormatPreset(preset,{deferSync=false}={}){
     return true;
   }
   pushPreviewFormatHistory();
+  if(previewRangeCrossesBlocks(range)){
+    const styles={
+      ...(fields.has('fontSize')?{'font-size':`${Number(preset.fontSize)||14}px`}:{}),
+      ...(fields.has('color')?{color:preset.color||'inherit'}:{}),
+      ...(fields.has('backgroundColor')?{'background-color':preset.backgroundColor||'transparent'}:{}),
+      ...(fields.has('bold')?{'font-weight':preset.bold?'700':'400'}:{}),
+      ...(fields.has('italic')?{'font-style':preset.italic?'italic':'normal'}:{}),
+      ...(fields.has('underline')?{'text-decoration':preset.underline?'underline':'none'}:{})
+    };
+    if(!applyStylesToPreviewTextParts(range,styles))return false;
+    const next=previewRange();
+    if(fields.has('textAlign')&&preset.textAlign)setPreviewRangeAlignment(next,preset.textAlign);
+    if(deferSync)scheduleSyncFromPreview();
+    else finishPreviewTextMutation(next);
+    return true;
+  }
   let selection=window.getSelection();
   selection.removeAllRanges();selection.addRange(range);
   const fragment=range.extractContents();
@@ -11725,11 +11937,22 @@ function exitEmptyPreviewListItem(item){
     parent=outer.parentElement?.closest?.('ul,ol');
   }
   pushHistory(true);
-  let target=outer.nextElementSibling;
-  if(!target||!target.matches('p')){
-    target=document.createElement('p');
-    target.innerHTML='<br>';
-    outer.insertAdjacentElement('afterend',target);
+  let target;
+  if(list===outer){
+    target=document.createElement('p');target.innerHTML='<br>';
+    const previous=item.previousElementSibling,next=item.nextElementSibling;
+    if(previous&&next){
+      const trailing=list.cloneNode(false);
+      if(list.matches('ol'))trailing.start=(Number(list.start)||1)+[...list.children].indexOf(item)+1;
+      while(item.nextElementSibling)trailing.appendChild(item.nextElementSibling);
+      list.after(target,trailing);
+    }else if(next)list.before(target);
+    else list.after(target);
+  }else{
+    target=outer.nextElementSibling;
+    if(!target||!target.matches('p')){
+      target=document.createElement('p');target.innerHTML='<br>';outer.insertAdjacentElement('afterend',target);
+    }
   }
   item.remove();
   let current=list;
@@ -11738,6 +11961,33 @@ function exitEmptyPreviewListItem(item){
     current.remove();
     current=parentList;
   }
+  placeCaretInPreviewBlock(target);
+  rememberPreviewRange();
+  syncFromPreview();
+  pushHistory(true);
+  return true;
+}
+function exitPopulatedPreviewListItem(item){
+  const list=item?.parentElement;
+  if(!list?.matches?.('ul,ol')||list.parentElement!==els.preview||previewListItemIsEmpty(item))return false;
+  pushHistory(true);
+  const target=document.createElement('p');
+  [...item.childNodes].forEach(node=>{
+    if(node.nodeType===Node.ELEMENT_NODE&&node.matches('ul,ol'))return;
+    if(node.nodeType===Node.ELEMENT_NODE&&node.matches('.block-move-handle,.form-move-handle'))return;
+    target.appendChild(node);
+  });
+  if(!target.textContent&&!target.querySelector('img,br'))target.appendChild(document.createElement('br'));
+  const trailing=list.cloneNode(false),index=[...list.children].indexOf(item);
+  if(list.matches('ol'))trailing.start=(Number(list.start)||1)+index+1;
+  while(item.nextElementSibling)trailing.appendChild(item.nextElementSibling);
+  const nested=[...item.children].filter(node=>node.matches('ul,ol'));
+  item.remove();
+  if(list.querySelector(':scope > li'))list.after(target);
+  else list.replaceWith(target);
+  let cursor=target;
+  nested.forEach(node=>{cursor.after(node);cursor=node});
+  if(trailing.querySelector(':scope > li'))cursor.after(trailing);
   placeCaretInPreviewBlock(target);
   rememberPreviewRange();
   syncFromPreview();
@@ -11963,6 +12213,11 @@ function preservePreviewFormatOnDelete(e){
     e.preventDefault();
     e.stopPropagation();
     return exitEmptyPreviewListItem(emptyListItem);
+  }
+  if(backward&&emptyListItem&&!previewListItemIsEmpty(emptyListItem)&&previewRangeSideIsEmpty(emptyListItem,range,true)){
+    e.preventDefault();
+    e.stopPropagation();
+    return exitPopulatedPreviewListItem(emptyListItem);
   }
   const previewScrollTop=els.preview.scrollTop;
   const split=lastPreviewEnterSplit;
@@ -12304,12 +12559,22 @@ function showMathDialog(initialLatex='',initialDisplay='inline'){
 }
 async function insertMathWithDialog(){
   rememberPreviewRange();
+  const context=captureInsertionContext();
   const editorText=els.editor.value.slice(els.editor.selectionStart,els.editor.selectionEnd).trim();
-  const initial=editorText.replace(/^\$\$?|\$\$?$/g,'');
-  const result=await showMathDialog(initial,editorText.startsWith('$$')?'block':'inline');
+  const selectedText=context?.kind==='preview'?context.text:editorText;
+  const initial=selectedText.replace(/^\$\$?|\$\$?$/g,'');
+  const result=await showMathDialog(initial,selectedText.startsWith('$$')?'block':'inline');
   if(!result)return;
   const marker=result.display==='block'?'$$':'$';
-  insertMarkdownSyntax(`${marker}${result.latex}${marker}`);
+  if(context?.kind==='preview'){
+    const before=new Set(els.preview.querySelectorAll('.zz-math'));
+    if(insertPreviewHtmlAtContext(renderMathHtml(result.latex,result.display==='block'),context)){
+      const inserted=[...els.preview.querySelectorAll('.zz-math')].find(math=>!before.has(math));
+      if(inserted){clickMoveElement=inserted;inserted.classList.add('move-selected');inserted.setAttribute('aria-selected','true');selectMathNode(inserted)}
+      return;
+    }
+  }
+  insertMarkdownSyntax(`${marker}${result.latex}${marker}`,context);
 }
 async function editPreviewMath(math){
   if(!math||!els.preview.contains(math))return;
