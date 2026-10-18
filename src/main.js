@@ -5,6 +5,7 @@ let customTheme={
   text:localStorage.getItem('md-custom-theme-text')||'#111110'
 };
 let customThemeChannel='background';
+let customThemeEditingLive=false;
 const savedOption=(key,fallback=false)=>{
   const value=localStorage.getItem(key);
   return value===null?fallback:value==='1';
@@ -1034,7 +1035,7 @@ const chipContrastObserver=new MutationObserver(mutations=>{
   const contains=(node,selector)=>node.nodeType===Node.ELEMENT_NODE&&(node.matches(selector)||node.querySelector(selector));
   for(const mutation of mutations){
     if(mutation.type==='attributes'){
-      if(mutation.target===document.body&&mutation.attributeName==='class')chipContrastNeedsCode=true;
+      if(mutation.target===document.body&&mutation.attributeName==='class'&&!customThemeEditingLive)chipContrastNeedsCode=true;
       continue;
     }
     for(const node of mutation.addedNodes){
@@ -2854,6 +2855,7 @@ function snapshotTableFilterView(root){
     return {
       filters:[...current.filters].map(([column,values])=>[column,[...values]]),
       formatFilters:[...(current.formatFilters||new Map())].map(([column,values])=>[column,[...values]]),
+      formatColorFilters:[...(current.formatColorFilters||new Map())].map(([column,values])=>[column,{...values}]),
       sort:current.sort?{...current.sort}:null
     };
   });
@@ -2866,6 +2868,7 @@ function restoreTableFilterView(root,snapshots){
     if(!saved||!current)return;
     current.filters=new Map(saved.filters.map(([column,values])=>[column,new Set(values)]));
     current.formatFilters=new Map(saved.formatFilters.map(([column,values])=>[column,new Set(values)]));
+    current.formatColorFilters=new Map((saved.formatColorFilters||[]).map(([column,values])=>[column,{...values}]));
     current.sort=saved.sort?{...saved.sort}:null;
     applyTableFilterView(table);
   });
@@ -2894,7 +2897,7 @@ function tableFilterModel(table){
     const start=i;let end=i+1;
     for(let j=i;j<end;j++)for(const cell of rows[j].cells)end=Math.min(rows.length,Math.max(end,j+cell.rowSpan));
     const groupGrid=grid.slice(start,end);
-    groups.push({rows:rows.slice(start,end),values:groupGrid.map(cells=>cells.map(cell=>{const clone=cell.cloneNode(true);clone.querySelectorAll('button,.block-move-handle,.tbl-resize-handle,.tbl-table-resize-handle').forEach(el=>el.remove());return clone.textContent.trim()})),formats:groupGrid.map(cells=>cells.map(tableCellFormatTraits))});i=end;
+    groups.push({rows:rows.slice(start,end),values:groupGrid.map(cells=>cells.map(cell=>{const clone=cell.cloneNode(true);clone.querySelectorAll('button,.block-move-handle,.tbl-resize-handle,.tbl-table-resize-handle').forEach(el=>el.remove());return clone.textContent.trim()})),formats:groupGrid.map(cells=>cells.map(tableCellFormatTraits)),formatColors:groupGrid.map(cells=>cells.map(tableCellFormatColors))});i=end;
   }
   return {rows,grid,groups};
 }
@@ -2908,17 +2911,33 @@ function tableCellFormatTraits(cell){
   if(hasStyle(node=>node.matches('mark')||!!node.style?.backgroundColor||!!node.style?.background))traits.add('background');
   return traits;
 }
+let tableFilterColorContext;
+function normalizeTableFilterColor(value){
+  if(!value||/^(?:transparent|initial|inherit|unset)$/i.test(value))return'';
+  const probe=document.createElement('span');probe.style.color=value;if(!probe.style.color)return'';
+  tableFilterColorContext||=document.createElement('canvas').getContext('2d');
+  const context=tableFilterColorContext;context.fillStyle=probe.style.color;
+  const normalized=String(context.fillStyle).toLowerCase();return /rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/.test(normalized)?'':normalized;
+}
+function tableCellFormatColors(cell){
+  const result={color:new Set(),background:new Set()},nodes=[cell,...cell.querySelectorAll('*')].filter(node=>!node.closest('.table-filter-button,.block-move-handle'));
+  nodes.forEach(node=>{
+    if(node.matches('font[color]')||node.style?.color){const value=normalizeTableFilterColor(getComputedStyle(node).color||node.getAttribute?.('color'));if(value)result.color.add(value)}
+    if(node.matches('mark')||node.style?.backgroundColor||node.style?.background){const value=normalizeTableFilterColor(getComputedStyle(node).backgroundColor);if(value)result.background.add(value)}
+  });
+  return result;
+}
 function installTableFilters(){
   if(localStorage.getItem('md-option-table-filter')!=='1')return;
   els.preview.querySelectorAll('table').forEach(table=>{
     if(table.querySelector('.table-filter-button'))return;
     const model=tableFilterModel(table);if(!model.rows.length)return;
-    const state={...model,filters:new Map(),formatFilters:new Map(),sort:null};tableFilterStates.set(table,state);
+    const state={...model,filters:new Map(),formatFilters:new Map(),formatColorFilters:new Map(),sort:null};tableFilterStates.set(table,state);
     model.rows.forEach((row,i)=>row.dataset.filterOrder=String(i));
     let column=0;
     for(const cell of model.rows[0].cells){
       const index=column;column+=cell.colSpan;
-      const button=document.createElement('button');button.type='button';button.className='table-filter-button';button.dataset.filterColumn=String(index);button.textContent='▾';button.title='이 열 필터 및 정렬';button.contentEditable='false';button.setAttribute('aria-pressed','false');
+      const button=document.createElement('button');button.type='button';button.className='table-filter-button';button.dataset.filterColumn=String(index);button.textContent='▾';button.title=uiLanguage==='en'?'Filter and sort this column':'이 열 필터 및 정렬';button.contentEditable='false';button.setAttribute('aria-pressed','false');
       button.onmousedown=event=>{event.preventDefault();event.stopPropagation()};
       button.onclick=event=>{event.preventDefault();event.stopPropagation();showTableFilterMenu(table,index,button)};cell.appendChild(button);
     }
@@ -2929,7 +2948,7 @@ function applyTableFilterView(table){
   const groups=[...state.groups];
   if(state.sort)groups.sort((a,b)=>String(a.values[0]?.[state.sort.column]||'').localeCompare(String(b.values[0]?.[state.sort.column]||''),'ko',{numeric:true,sensitivity:'base'})*state.sort.direction);
   groups.forEach(group=>{
-    const visible=group.values.some((values,rowIndex)=>[...state.filters].every(([column,allowed])=>allowed.has(values[column]||''))&&[...state.formatFilters].every(([column,required])=>[...required].every(trait=>group.formats[rowIndex]?.[column]?.has(trait))));
+    const visible=group.values.some((values,rowIndex)=>[...state.filters].every(([column,allowed])=>allowed.has(values[column]||''))&&[...state.formatFilters].every(([column,required])=>[...required].every(trait=>group.formats[rowIndex]?.[column]?.has(trait)))&&[...(state.formatColorFilters||new Map())].every(([column,required])=>Object.entries(required).every(([trait,colors])=>{const selected=Array.isArray(colors)?colors:colors?[colors]:[];return !selected.length||selected.some(color=>group.formatColors[rowIndex]?.[column]?.[trait]?.has(color))})));
     group.rows.forEach(row=>{row.hidden=!visible;if(!visible)row.dataset.filterHidden='1';else row.removeAttribute('data-filter-hidden');row.parentElement.appendChild(row)});
   });
   updateTableFilterIndicators(table);
@@ -2941,22 +2960,30 @@ function updateTableFilterIndicators(table){
     const total=new Set(state.groups.flatMap(group=>group.values.map(row=>row[column]||''))).size;
     const active=!!allowed&&allowed.size<total||!!formats?.size;
     button.classList.toggle('filter-active',active);button.setAttribute('aria-pressed',String(active));
-    button.title=active?`필터 적용됨${allowed?` · ${allowed.size}/${total}개 값 표시`:''}${formats?.size?` · 서식 ${formats.size}개`:''}`:'이 열 필터 및 정렬';
+    button.title=active?(uiLanguage==='en'?`Filter active${allowed?` · showing ${allowed.size} of ${total} values`:''}${formats?.size?` · ${formats.size} formatting filter${formats.size===1?'':'s'}`:''}`:`필터 적용됨${allowed?` · ${allowed.size}/${total}개 값 표시`:''}${formats?.size?` · 서식 ${formats.size}개`:''}`):(uiLanguage==='en'?'Filter and sort this column':'이 열 필터 및 정렬');
   });
 }
 function showTableFilterMenu(table,column,button){
   document.querySelector('.table-filter-popup')?.remove();
   Object.assign(tableFilterStates.get(table),tableFilterModel(table));
   const state=tableFilterStates.get(table),values=[...new Set(state.groups.flatMap(group=>group.values.map(row=>row[column]||'')))].sort((a,b)=>a.localeCompare(b,'ko',{numeric:true}));
-  state.formatFilters||=new Map();
+  state.formatFilters||=new Map();state.formatColorFilters||=new Map();
   const selected=new Set(state.filters.get(column)||values),selectedFormats=new Set(state.formatFilters.get(column)||[]),menu=document.createElement('div');menu.className='file-context-menu table-filter-popup';menu.contentEditable='false';
-  const close=()=>{menu.remove();document.removeEventListener('pointerdown',outside);document.removeEventListener('keydown',key)};
+  let positionFrame=0;
+  const reposition=()=>{
+    positionFrame=0;if(!menu.isConnected)return;if(!button.isConnected){close();return}
+    const rect=button.getBoundingClientRect(),scrollViewport=button.closest('.preview');
+    if(scrollViewport){const viewport=scrollViewport.getBoundingClientRect();if(rect.bottom<=viewport.top||rect.top>=viewport.bottom||rect.right<=viewport.left||rect.left>=viewport.right){close();return}}
+    positionContextMenu(menu,rect.left,rect.bottom+4)
+  };
+  const scheduleReposition=()=>{if(!positionFrame)positionFrame=requestAnimationFrame(reposition)};
+  const close=()=>{if(positionFrame)cancelAnimationFrame(positionFrame);positionFrame=0;menu.remove();document.removeEventListener('pointerdown',outside);document.removeEventListener('keydown',key);window.removeEventListener('scroll',scheduleReposition,true);window.removeEventListener('resize',scheduleReposition)};
   const outside=event=>{if(!menu.contains(event.target)&&event.target!==button)close()},key=event=>{if(event.key==='Escape')close()};
   const actions=document.createElement('div');actions.className='table-filter-actions';menu.appendChild(actions);
   const action=(label,fn)=>{const b=document.createElement('button');b.type='button';b.textContent=label;b.onclick=()=>{fn();close()};actions.appendChild(b)};
   action('오름차순 정렬',()=>{state.sort={column,direction:1};applyTableFilterView(table)});
   action('내림차순 정렬',()=>{state.sort={column,direction:-1};applyTableFilterView(table)});
-  action('이 표 필터·정렬 초기화',()=>{state.filters.clear();state.formatFilters.clear();state.sort=null;applyTableFilterView(table)});
+  action('이 표 필터·정렬 초기화',()=>{state.filters.clear();state.formatFilters.clear();state.formatColorFilters.clear();state.sort=null;applyTableFilterView(table)});
   const valueSection=document.createElement('details');valueSection.className='table-filter-section';valueSection.open=true;valueSection.innerHTML='<summary>값 필터</summary>';
   const valueBody=document.createElement('div');valueBody.className='table-filter-section-body';valueSection.appendChild(valueBody);menu.appendChild(valueSection);
   const search=document.createElement('input');search.type='search';search.placeholder='값 검색';valueBody.appendChild(search);
@@ -2966,11 +2993,28 @@ function showTableFilterMenu(table,column,button){
   const paint=()=>{box.replaceChildren();values.filter(value=>value.toLowerCase().includes(search.value.toLowerCase())).forEach(value=>{const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.checked=selected.has(value);input.onchange=()=>{input.checked?selected.add(value):selected.delete(value);applySelection()};label.append(input,document.createTextNode(value||'(빈 값)'));box.appendChild(label)})};search.oninput=paint;paint();
   const formatSection=document.createElement('details');formatSection.className='table-filter-section';formatSection.innerHTML='<summary>서식 필터</summary>';
   const formatBody=document.createElement('div');formatBody.className='table-filter-section-body table-filter-format-options';formatSection.appendChild(formatBody);menu.appendChild(formatSection);
-  const available=new Set(state.groups.flatMap(group=>group.formats.flatMap(row=>[...(row[column]||[])])));
+  const revealFilterSection=section=>requestAnimationFrame(()=>{reposition();requestAnimationFrame(()=>{if(!menu.isConnected||!section.open)return;const top=section.offsetTop,bottom=top+section.offsetHeight,padding=8;if(top<menu.scrollTop)menu.scrollTo({top:Math.max(0,top-padding),behavior:'smooth'});else if(bottom>menu.scrollTop+menu.clientHeight)menu.scrollTo({top:Math.min(menu.scrollHeight-menu.clientHeight,bottom-menu.clientHeight+padding),behavior:'smooth'})})});
+  [valueSection,formatSection].forEach(section=>section.addEventListener('toggle',()=>{if(section.open)revealFilterSection(section)}));
+  const available=new Set(state.groups.flatMap(group=>group.formats.flatMap(row=>[...(row[column]||[])]))),availableColors={color:new Set(),background:new Set()};
+  state.groups.forEach(group=>group.formatColors.forEach(row=>{['color','background'].forEach(trait=>row[column]?.[trait]?.forEach(value=>availableColors[trait].add(value))) }));
   [['bold','굵게'],['italic','기울임'],['underline','밑줄'],['color','글자색'],['background','배경색']].forEach(([trait,labelText])=>{
-    const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.checked=selectedFormats.has(trait);input.disabled=!available.has(trait);input.onchange=()=>{input.checked?selectedFormats.add(trait):selectedFormats.delete(trait);if(selectedFormats.size)state.formatFilters.set(column,new Set(selectedFormats));else state.formatFilters.delete(column);applyTableFilterView(table)};label.append(input,document.createTextNode(labelText));formatBody.appendChild(label);
+    const row=document.createElement('div');row.className='table-filter-format-row';
+    const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.checked=selectedFormats.has(trait);input.disabled=!available.has(trait);label.append(input,document.createTextNode(labelText));row.appendChild(label);
+    let palette=null,selectedColors=new Set(),traitColors=[];
+    if(trait==='color'||trait==='background'){
+      palette=document.createElement('div');palette.className='table-filter-color-palette';palette.hidden=!input.checked;
+      traitColors=[...availableColors[trait]];const saved=state.formatColorFilters.get(column)?.[trait];selectedColors=new Set(Array.isArray(saved)?saved:saved?[saved]:traitColors);
+      const saveColors=()=>{state.formatColorFilters.set(column,{...(state.formatColorFilters.get(column)||{}),[trait]:[...selectedColors]});applyTableFilterView(table)};
+      traitColors.forEach(color=>{const swatch=document.createElement('button');swatch.type='button';swatch.className='table-filter-color-swatch';swatch.style.setProperty('--filter-color',color);swatch.dataset.color=color;swatch.classList.toggle('selected',selectedColors.has(color));swatch.setAttribute('aria-pressed',String(selectedColors.has(color)));swatch.title=color;swatch.setAttribute('aria-label',color);swatch.onclick=()=>{selectedColors.has(color)?selectedColors.delete(color):selectedColors.add(color);swatch.classList.toggle('selected',selectedColors.has(color));swatch.setAttribute('aria-pressed',String(selectedColors.has(color)));if(!selectedColors.size){input.checked=false;input.dispatchEvent(new Event('change'));return}saveColors()};palette.appendChild(swatch)});
+    }
+    input.onchange=()=>{
+      if(input.checked){selectedFormats.add(trait);if(palette){palette.hidden=false;if(!selectedColors.size){traitColors.forEach(color=>selectedColors.add(color));palette.querySelectorAll('.table-filter-color-swatch').forEach(swatch=>{swatch.classList.add('selected');swatch.setAttribute('aria-pressed','true')})}state.formatColorFilters.set(column,{...(state.formatColorFilters.get(column)||{}),[trait]:[...selectedColors]})}}
+      else{selectedFormats.delete(trait);if(palette){palette.hidden=true;const values={...(state.formatColorFilters.get(column)||{})};delete values[trait];if(Object.keys(values).length)state.formatColorFilters.set(column,values);else state.formatColorFilters.delete(column)}}
+      if(selectedFormats.size)state.formatFilters.set(column,new Set(selectedFormats));else state.formatFilters.delete(column);applyTableFilterView(table);if(palette)revealFilterSection(formatSection)
+    };
+    formatBody.appendChild(row);if(palette)formatBody.appendChild(palette);
   });
-  document.body.appendChild(menu);const rect=button.getBoundingClientRect();positionContextMenu(menu,rect.left,rect.bottom+4);document.addEventListener('pointerdown',outside);document.addEventListener('keydown',key);
+  document.body.appendChild(menu);reposition();document.addEventListener('pointerdown',outside);document.addEventListener('keydown',key);window.addEventListener('scroll',scheduleReposition,true);window.addEventListener('resize',scheduleReposition);
 }
 function addTableResize(container){
   scopedElements(container,'table').forEach(table=>{
@@ -8956,9 +9000,49 @@ $('fmt-size-menu').addEventListener('click',e=>{
   hideFontSizeMenu();
   applyFontSizeInput();
 });
+const LINE_HEIGHT_PRESETS=new Map([['a',1.2],['b',1.4],['c',1.6],['d',1.8],['e',2],['f',2.2],['g',2.4]]);
+function lineHeightPresetLabel(value){
+  const numeric=Number(value),formatted=Number.isInteger(numeric)?numeric.toFixed(1):numeric.toFixed(2).replace(/0+$/,'').replace(/\.$/,'');
+  return Math.abs(numeric-1.8)<.01?(uiLanguage==='en'?`${formatted} (Default)`:`${formatted}(기본)`):formatted;
+}
+function previewLineHeightBlocks(range){
+  const blocks=new Set(),add=node=>{const block=closestPreviewBlock(node);if(block)blocks.add(block)};
+  add(range.startContainer);add(range.endContainer);
+  if(!range.collapsed){const root=range.commonAncestorContainer.nodeType===Node.TEXT_NODE?range.commonAncestorContainer.parentElement:range.commonAncestorContainer,walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let node;while((node=walker.nextNode()))try{if(range.intersectsNode(node)&&node.textContent.trim())add(node)}catch{}}
+  return blocks;
+}
+function setLineHeightUi(value){
+  const numeric=Math.max(.8,Math.min(4,Number(value)||1.8)),label=lineHeightPresetLabel(numeric);
+  $('fmt-line-height-label').textContent=label;$('fmt-line-height-custom').value=String(numeric);
+  $('fmt-line-height-menu').querySelectorAll('[data-line-height]').forEach(button=>button.classList.toggle('active',Math.abs(Number(button.dataset.lineHeight)-numeric)<.01));
+}
+function applyLineHeight(value){
+  const numeric=Math.round(Math.max(.8,Math.min(4,Number(value)||1.8))*100)/100,range=previewRange();
+  setLineHeightUi(numeric);
+  if(!range){styleSpan('line-height',String(numeric));return}
+  if(rangeSelectsWholePreview(range)){styleWholePreview('line-height',String(numeric));return}
+  const tableSelection=tableFormatTextParts();
+  let blocks=tableSelection?.cells?.length?new Set(tableSelection.cells):previewLineHeightBlocks(range);
+  if(!blocks.size)return;
+  pushPreviewFormatHistory();blocks.forEach(block=>block.style.lineHeight=String(numeric));
+  const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);state.savedPreviewRange=range.cloneRange();syncFromPreview();
+}
+function showLineHeightMenu(){
+  const menu=$('fmt-line-height-menu'),combo=$('fmt-line-height-combo'),rect=combo.getBoundingClientRect();menu.classList.remove('hidden');$('fmt-line-height-toggle').setAttribute('aria-expanded','true');
+  const width=menu.getBoundingClientRect().width||326;menu.style.top=(rect.bottom+4)+'px';menu.style.left=Math.max(8,Math.min(rect.left,innerWidth-width-8))+'px';
+}
+function hideLineHeightMenu(){$('fmt-line-height-menu').classList.add('hidden');$('fmt-line-height-toggle').setAttribute('aria-expanded','false')}
+$('fmt-line-height-toggle').onmousedown=e=>e.preventDefault();
+$('fmt-line-height-toggle').onclick=e=>{e.stopPropagation();$('fmt-line-height-menu').classList.contains('hidden')?showLineHeightMenu():hideLineHeightMenu()};
+$('fmt-line-height-menu').onmousedown=e=>e.preventDefault();
+$('fmt-line-height-menu').onclick=e=>{e.stopPropagation();const button=e.target.closest('[data-line-height]');if(button){applyLineHeight(button.dataset.lineHeight);hideLineHeightMenu()}};
+$('fmt-line-height-menu').querySelectorAll('[data-line-height-step]').forEach(button=>button.onclick=e=>{e.preventDefault();e.stopPropagation();const input=$('fmt-line-height-custom'),next=Math.round(Math.max(.8,Math.min(4,(Number(input.value)||1.8)+Number(button.dataset.lineHeightStep)))*10)/10;input.value=String(next);applyLineHeight(next)});
+$('fmt-line-height-apply').onclick=()=>{applyLineHeight($('fmt-line-height-custom').value);hideLineHeightMenu()};
+$('fmt-line-height-custom').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();applyLineHeight(e.currentTarget.value);hideLineHeightMenu()}};
 document.addEventListener('click',e=>{
   if(!$('fmt-size-combo').contains(e.target))hideFontSizeMenu();
   if(!$('fmt-heading-combo').contains(e.target))hideHeadingMenu();
+  if(!$('fmt-line-height-combo').contains(e.target))hideLineHeightMenu();
 });
 $('fmt-undo').onclick=undoEdit;$('fmt-redo').onclick=redoEdit;
 function toggleWrap(before,after=before){
@@ -9061,18 +9145,29 @@ function updatePreviewFontSize(){
   const input=$('fmt-size');
   if(sizes.some(size=>Math.abs(size-first)>.1)){
     input.value='';
-    input.placeholder='혼합';
-    input.title='선택한 글씨 크기가 서로 다릅니다.';
+    input.placeholder=uiLanguage==='en'?'Mixed':'혼합';
+    input.title=uiLanguage==='en'?'The selected text uses different font sizes.':'선택한 글씨 크기가 서로 다릅니다.';
     return;
   }
   const shown=String(Math.round(first));
   input.value=shown;
-  input.placeholder='크기';
-  input.title=`선택 글씨 크기: ${shown}px`;
+  input.placeholder=uiLanguage==='en'?'Size':'크기';
+  input.title=uiLanguage==='en'?`Selected font size: ${shown}px`:`선택 글씨 크기: ${shown}px`;
+}
+function localizeFontSizeControl(){
+  const input=$('fmt-size'),mixed=/^(?:혼합|Mixed)$/.test(input.placeholder);
+  input.placeholder=uiLanguage==='en'?(mixed?'Mixed':'Size'):(mixed?'혼합':'크기');
+  const size=input.value||input.title.match(/(\d+(?:\.\d+)?)px/)?.[1];
+  input.title=mixed?(uiLanguage==='en'?'The selected text uses different font sizes.':'선택한 글씨 크기가 서로 다릅니다.'):(size?(uiLanguage==='en'?`Selected font size: ${size}px`:`선택 글씨 크기: ${size}px`):(uiLanguage==='en'?'Font size (px)':'글씨 크기(px)'));
 }
 function rememberPreviewPoint(e){
   if(!els.preview.contains(e.target))return;
-  requestAnimationFrame(()=>{rememberPreviewRange();updatePreviewFontSize()});
+  requestAnimationFrame(()=>{rememberPreviewRange();updatePreviewFontSize();updatePreviewLineHeight()});
+}
+function updatePreviewLineHeight(){
+  if($('fmt-line-height-combo').contains(document.activeElement))return;
+  const range=previewRange();if(!range)return;const block=closestPreviewBlock(range.startContainer);if(!block)return;
+  const value=parseFloat(getComputedStyle(block).lineHeight),fontSize=parseFloat(getComputedStyle(block).fontSize),numeric=Number.isFinite(value)&&Number.isFinite(fontSize)?value/fontSize:1.8;setLineHeightUi(numeric);
 }
 function previewRange(){
   if(state.lastInsertionSurface!=='preview')return null;
@@ -10071,6 +10166,8 @@ function toggleCustomFormatPanel(force){
 }
 function renderCustomFormatSavedWindow(){
   if(!customFormatSavedWindow)return;
+  customFormatSavedWindow.querySelector('header strong').textContent=uiLanguage==='en'?'Saved custom styles':'저장된 사용자 지정 서식';
+  customFormatSavedWindow.querySelector('[data-saved-custom-format-close]').setAttribute('aria-label',uiLanguage==='en'?'Close':'닫기');
   const store=loadCustomFormats(),list=customFormatSavedWindow.querySelector('[data-saved-custom-format-list]');
   list.replaceChildren();
   if(!store.presets.length){
@@ -12508,6 +12605,8 @@ function renderSavedColorWindow(type){
   const panel=savedColorWindows.get(type);
   if(!panel)return;
   panel.querySelector('[data-saved-color-title]').textContent=savedColorWindowLabel(type);
+  panel.querySelector('[data-saved-color-close]').setAttribute('aria-label',uiLanguage==='en'?'Close':'닫기');
+  panel.querySelector(':scope > small').textContent=uiLanguage==='en'?'Right-click a color to remove it.':'색을 우클릭하면 저장 목록에서 삭제됩니다.';
   const colors=savedColorWindowValues(type),swatches=panel.querySelector('[data-saved-color-swatches]');
   swatches.replaceChildren();
   if(!colors.length){
@@ -13449,7 +13548,7 @@ const EN_TEXT={
   '미리보기 텍스트':'Preview text','단축키가 해제되었습니다.':'No shortcut assigned.','변경하려면 다시 누르세요. Delete를 누르면 해제됩니다.':'Click to change it. Press Delete to clear.',
   '버튼을 누른 뒤 원하는 키 조합을 입력하세요.':'Click the button, then press the shortcut you want.','Esc는 취소, Delete는 단축키 해제입니다.':'Esc cancels; Delete clears the shortcut.','Ctrl 또는 Alt와 다른 키를 함께 입력하세요.':'Use Ctrl or Alt with another key.',
   '편집 화면에서 텍스트를 선택한 뒤 사용해 주세요.':'Select text in the editor before using this shortcut.',
-  '글자 크기':'Font size','굵게':'Bold','기울임':'Italic','밑줄':'Underline',
+  '글자 크기':'Font size','글 세로 간격':'Line spacing','글 세로 간격 목록':'Line spacing options','글 세로 간격 미리 설정':'Line spacing presets','글 세로 간격 조절':'Adjust line spacing','글 세로 간격 늘리기':'Increase line spacing','글 세로 간격 줄이기':'Decrease line spacing','간격':'Spacing','1.8(기본)':'1.8 (Default)','직접 입력':'Custom','굵게':'Bold','기울임':'Italic','밑줄':'Underline',
   '확장 Markdown 저장 지원 안내':'Extended Markdown save support','Obsidian 계열 문법 저장 지원 안내':'Obsidian syntax save support',
   '[[문서!ALL]]':'[[Document!ALL]]','[[문서]]':'[[Document]]','![[파일]]':'![[File]]','==텍스트==':'==Text==','> 텍스트':'> Text','>> 텍스트':'>> Text','[@key]: 출처':'[@key]: Source','`코드`':'`code`','- 항목':'- Item','1. 항목':'1. Item',
   '표 만들기 방식':'Table creation mode','행·열 직접 입력…':'Enter rows and columns…',
@@ -13493,17 +13592,19 @@ const EN_TEXT={
   '저장되지 않은 변경사항':'Unsaved changes','현재 문서에 저장되지 않은 수정사항이 있습니다. 계속하기 전에 어떻게 처리할까요?':'The current document has unsaved changes. What would you like to do before continuing?','저장 후 닫기':'Save and close','저장하지 않고 닫기':'Close without saving',
   '파일 제거':'Remove file','저장하지 않고 제거':'Remove without saving','파일을 제거했습니다.':'File removed.'
   ,'스포이드 사용 불가':'Eyedropper unavailable','현재 브라우저에서는 화면 색 선택을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 사용해 주세요.':'Screen color picking is not supported in this browser. Use the latest Chrome or Edge.','스포이드 오류':'Eyedropper error','색을 선택하지 못했습니다. 브라우저에서 화면 색 선택이 허용되는지 확인해 주세요.':'Could not pick a color. Check that the browser allows screen color selection.',
+  'Enter를 누르면 마크다운 강제 줄바꿈 문법인 공백 두 칸 + 줄바꿈을 넣습니다.':'Pressing Enter inserts two spaces and a line break, the Markdown hard-break syntax.','프리뷰에서 완성한 마크다운 문법을 굵게, 코드, 제목, 목록 등의 실제 서식으로 바로 변환합니다.':'Immediately converts completed Markdown syntax in Preview into formatting such as bold, code, headings, and lists.','색상이나 강조가 있는 줄을 목록으로 바꿀 때 서식 유지 여부를 확인합니다.':'Asks whether to preserve formatting when converting a line with color or emphasis into a list.','URL을 붙여넣으면 클릭할 수 있는 링크 서식으로 자동 변환합니다.':'Automatically converts pasted URLs into clickable links.','미리보기의 글씨에 설정한 시간 동안 마우스를 올리면 원문을 수정할 수 있는 작은 창을 표시합니다.':'Shows a small source editor after you hover over Preview text for the selected delay.','편집창과 미리보기의 세로 스크롤 위치를 서로 맞춥니다.':'Keeps the vertical scroll positions of Markdown and Preview in sync.','마크다운 편집창 왼쪽에 행 번호를 표시합니다.':'Shows line numbers beside the Markdown editor.','분할 보기에서 Preview를 왼쪽, Markdown을 오른쪽으로 배치합니다.':'Places Preview on the left and Markdown on the right in split view.','문서 탐색 하단에 현재 문서에서 사용한 해시태그를 모아서 표시합니다.':'Lists hashtags used in the current document at the bottom of Document navigation.',
+  '확장자 필터':'Filter by extension','홈':'Home','글씨색':'Text color','글씨 색상 코드':'Text color code','선택한 글자의 색상 지정을 제거':'Clear the selected text color','배경 색상 코드':'Background color code','빠른 편집 대기 시간 조절':'Adjust quick-edit delay','대기 시간 1초 늘리기':'Increase delay by 1 second','대기 시간 1초 줄이기':'Decrease delay by 1 second','색상 팔레트 · PC에서 더블클릭하면 저장된 글자색 창 열기':'Color palette · Double-click on PC to open saved text colors','색상 팔레트 · PC에서 더블클릭하면 저장된 배경색 창 열기':'Color palette · Double-click on PC to open saved background colors','단축키 분류':'Shortcut categories',
   '직접 입력':'Enter manually','언어 적용':'Apply language','드래그해서 위치 이동':'Drag to move','코드블록 접기':'Collapse code block','코드블록 펼치기':'Expand code block','언어 없음':'No language','코드 블록 위치 이동':'Move code block','표 위치 이동':'Move table','인용 위치 이동':'Move quote','다중 보기':'Multiple views','각주·참고문헌':'Footnotes and bibliography','임베드':'Embed',
   '출처 문구 수정':'Edit source label','이 양식만 드래그해서 이동':'Drag to move only this control','양식 위치 이동':'Move form control','클릭해서 선택 · 드래그해서 위치 이동 · 우클릭해서 변경':'Click to select · drag to move · right-click to edit','왼쪽 손잡이로 이 양식만 이동':'Use the left handle to move only this control','양식 표시 문구':'Form control label',
   '붙여넣기 실패':'Paste failed','클립보드의 텍스트를 읽을 수 없습니다.':'Could not read text from the clipboard.','제목 없음':'Untitled','문서 맨 아래에 배치':'Place at bottom of document','문서 맨 위에 배치':'Place at top of document','이 블록 위에 배치':'Place above this block','이 글자 위치에 삽입':'Insert at this text position','첫 번째 양식 위치에 배치':'Place at the first form position','이 양식 앞에 배치':'Place before this form','이 양식 뒤에 배치':'Place after this form','고정됨':'Pinned',
-  '올바른 링크 주소를 입력해 주세요.':'Enter a valid link URL.','연결 문서 없음':'No linked documents','이 열 필터 및 정렬':'Filter and sort this column','오름차순 정렬':'Sort ascending','내림차순 정렬':'Sort descending','이 표 필터·정렬 초기화':'Reset filtering and sorting for this table','값 필터':'Value filter','값 검색':'Search values','전체 선택 / 해제':'Select / clear all','(빈 값)':'(Empty)','서식 필터':'Formatting filter',
+  '올바른 링크 주소를 입력해 주세요.':'Enter a valid link URL.','연결 문서 없음':'No linked documents','이 열 필터 및 정렬':'Filter and sort this column','오름차순 정렬':'Sort ascending','내림차순 정렬':'Sort descending','이 표 필터·정렬 초기화':'Reset filtering and sorting for this table','값 필터':'Value filter','값 검색':'Search values','전체 선택 / 해제':'Select / clear all','(빈 값)':'(Empty)','서식 필터':'Formatting filter','글자색 선택':'Choose text color','배경색 선택':'Choose background color',
   '셀 합치기':'Merge cells','이미 합쳐진 셀이 포함된 범위는 먼저 셀 나누기를 해주세요.':'Split existing merged cells before merging this range.','셀 나누기':'Split cells','선택한 셀을 지정한 행과 열로 나눕니다.':'Split the selected cell into the specified rows and columns.',
   '전체 선택':'Select all','선택 해제':'Clear selection','선택 셀 잘라내기':'Cut selected cells','선택 셀 복사':'Copy selected cells','선택 셀에 붙여넣기':'Paste into selected cells','선택 셀 내용 지우기':'Clear selected cells','선택 셀 합치기':'Merge selected cells','선택 셀 나누기…':'Split selected cells…','셀 높이를 같게':'Distribute rows evenly','셀 너비를 같게':'Distribute columns evenly','위에 행 추가':'Insert row above','아래에 행 추가':'Insert row below','왼쪽에 열 추가':'Insert column left','오른쪽에 열 추가':'Insert column right','현재 행 삭제':'Delete current row','현재 열 삭제':'Delete current column','표 삭제':'Delete table','표 형태 초기화':'Reset table shape',
   '잘라내기':'Cut','복사':'Copy','붙여넣기':'Paste','제거':'Remove','삭제':'Delete','순서…':'Order…','수식 변경':'Edit equation','서식 복사':'Copy formatting','서식 붙여넣기':'Paste formatting','서식 제거':'Clear formatting','이미지 대체':'Replace image','이미지 삭제':'Delete image','행 수':'Rows','열 수':'Columns','나누기':'Split','합쳐진 셀을 풀고 다시 나눕니다.':'Unmerge the cell, then split it again.','다른 합쳐진 셀이 있는 표에서는 해당 셀도 먼저 나눠 주세요.':'Split the other merged cells in this table first.','빈틈 없이 직사각형으로 선택한 셀만 합칠 수 있습니다.':'Only a complete rectangular cell selection can be merged.',
   '루트':'Root','단일문서':'Single document','폴더 이름을 입력해 주세요.':'Enter a folder name.','같은 이름의 폴더가 있습니다.':'A folder with that name already exists.','폴더 복제':'Duplicate folder','폴더 이름 변경':'Rename folder','이동할 수 없음':'Cannot move','대상 위치에 같은 이름의 파일 또는 폴더가 있습니다.':'A file or folder with the same name exists at the destination.',
   '업로드된 MD에서 참조를 찾지 못했습니다.':'No references were found in the uploaded Markdown.','문서를 열면 제목과 문단 탐색이 표시됩니다.':'Open a document to browse its headings and paragraphs.','펼치기':'Expand','접기':'Collapse','제목 서식이 없습니다.':'No heading styles.','해시태그':'Hashtags','사용된 해시태그가 없습니다.':'No hashtags used.','해시태그 제거':'Remove hashtag',
   '파일 이름을 입력해 주세요.':'Enter a file name.','같은 위치에 동일한 이름의 파일이 있습니다.':'A file with the same name exists in this location.','PDF → MD 자동 선택':'PDF → MD selected automatically','MD → PDF 자동 선택':'MD → PDF selected automatically','목차':'Table of contents','PDF 변환':'PDF conversion','PDF 변환 완료':'PDF conversion complete','암호가 설정된 PDF입니다. 암호를 해제한 파일을 열어 주세요.':'This PDF is password-protected. Open an unlocked copy.','PDF 파일이 손상되었거나 올바른 PDF 형식이 아닙니다.':'The PDF is damaged or invalid.','파일과 네트워크 연결을 확인해 주세요.':'Check the file and network connection.','PDF 변환 실패':'PDF conversion failed','미니 프리뷰 닫기':'Close mini preview',
-  '사용자 지정 글꼴':'Custom font','현재 지역 글꼴 확인':'Check local fonts','저장할 문서 없음':'No documents to save','조건에 맞는 마크다운 문서가 없습니다.':'No Markdown documents match the criteria.','ZIP 저장 준비 실패':'Could not prepare ZIP','ZIP 기능을 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.':'Could not load ZIP support. Check your internet connection and try again.','먼저 마크다운 문서를 열어 주세요.':'Open a Markdown document first.','선택한 문서 없음':'No documents selected','ZIP에 담을 문서를 하나 이상 선택해 주세요.':'Select at least one document for the ZIP.',
+  '사용자 지정 글꼴':'Custom font','현재 지역 글꼴 확인':'Check local fonts','저장할 문서 없음':'No documents to save','조건에 맞는 마크다운 문서가 없습니다.':'No Markdown documents match the criteria.','ZIP 저장 준비 실패':'Could not prepare ZIP','ZIP 기능을 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.':'Could not load ZIP support. Check your internet connection and try again.','먼저 마크다운 문서를 열어 주세요.':'Open a Markdown document first.','선택한 문서 없음':'No documents selected','ZIP에 담을 문서를 하나 이상 선택해 주세요.':'Select at least one document for the ZIP.','ZIP에 담을 문서 선택':'Select documents for ZIP','선택한 마크다운 문서의 폴더 경로를 유지해서 저장합니다.':'Saves the selected Markdown documents while preserving their folder paths.','선택 문서 ZIP 저장':'Save selected documents as ZIP',
   '페이지 분할 기능을 초기화하지 못했습니다.':'Could not initialize pagination.','페이지 분할 모듈을 불러오지 못했습니다.':'Could not load the pagination module.','페이지를 나누는 중...':'Paginating…','PDF 준비 실패':'Could not prepare PDF','인쇄 페이지를 준비하지 못했습니다.':'Could not prepare pages for printing.','MD → PDF는 한 번에 문서 하나를 선택해 주세요.':'Select one document at a time for MD → PDF.','파일 목록 펼치기':'Expand file list','파일 목록 접기':'Collapse file list','드래그 업로드 실패':'Drag upload failed','파일이 이 컴퓨터에 다운로드되어 있는지 확인해 주세요.':'Check that the file is downloaded to this computer.',
   '혼합':'Mixed','선택한 글씨 크기가 서로 다릅니다.':'The selected text uses different font sizes.','클립보드의 텍스트를 읽을 수 없습니다. 브라우저의 클립보드 권한을 확인해 주세요.':'Could not read clipboard text. Check the browser clipboard permission.','선택 영역 전체에 적용됨':'Applied to the entire selection','적용되지 않음':'Not applied','전체에 배경색이 없음':'No background color across the selection','전체에 굵게가 적용되지 않음':'Bold is not applied across the selection','전체에 기울임이 적용되지 않음':'Italic is not applied across the selection','전체에 밑줄이 적용되지 않음':'Underline is not applied across the selection','선택 영역 전체에 동일하지 않음':'Not consistent across the selection',
   '텍스트를 선택해 주세요':'Select text','프리뷰에서 저장하거나 서식을 적용할 텍스트를 먼저 드래그해 주세요.':'Select text in Preview before saving or applying formatting.','사용자 지정 서식 수정':'Edit custom style','선택한 텍스트에 실제로 적용된 속성만 저장 항목으로 선택했습니다.':'Only properties applied to the selected text are selected for saving.','저장할 항목을 선택해 주세요':'Select properties to save','최소 하나 이상의 서식 항목을 선택해야 합니다.':'Select at least one formatting property.','프리뷰에서 서식을 적용할 텍스트를 먼저 드래그해 주세요.':'Select text in Preview before applying formatting.','새 서식 폴더':'New style folder','폴더명':'Folder name','서식 이름 수정':'Rename style','폴더 이름 수정':'Rename folder',
@@ -13594,7 +13695,9 @@ function setUiLanguage(language){
   uiLanguage=language==='en'?'en':'ko';localStorage.setItem(LANGUAGE_KEY,uiLanguage);
   if(uiTranslationFrame)cancelAnimationFrame(uiTranslationFrame);
   uiTranslationFrame=0;pendingUiTranslationRoots.clear();
-  translateUi();localizeRenderedZzTocs();
+  renderSavedColorWindows();renderCustomFormatSavedWindow();
+  if(customFormatPanel&&!customFormatPanel.hidden)renderCustomFormatPanel();
+  translateUi();localizeFontSizeControl();localizeRenderedZzTocs();
 }
 const pendingUiTranslationRoots=new Set();
 let uiTranslationFrame=0;
@@ -15006,7 +15109,54 @@ function syncCustomThemePanel(){
   renderCustomThemeHistory();
   renderCustomThemeSaved();
 }
-let customThemeLiveFrame=0;
+let customThemeLiveFrame=0,customThemeLiveTimer=0,customThemeLastAppliedAt=0,customThemeInkIdle=0,customThemeInkTimer=0;
+function customThemeLiveInterval(){
+  if(state.active<0||!els.preview.hasChildNodes())return 16;
+  const length=els.editor.value.length;
+  return length>250000?120:length>100000?90:length>30000?60:32;
+}
+function cancelCustomThemeLiveApply(){
+  if(customThemeLiveFrame)cancelAnimationFrame(customThemeLiveFrame);
+  clearTimeout(customThemeLiveTimer);customThemeLiveFrame=0;customThemeLiveTimer=0;
+}
+function scheduleCustomThemeLiveApply(){
+  const interval=customThemeLiveInterval();
+  const queueFrame=()=>{
+    customThemeLiveTimer=0;
+    customThemeLiveFrame=requestAnimationFrame(()=>{
+      customThemeLiveFrame=0;customThemeLastAppliedAt=performance.now();applyCustomThemeVars();
+    });
+  };
+  // On a sizable open document, debounce the inherited-variable update until
+  // the pointer pauses. Recalculating every descendant while the picker is
+  // moving is substantially more expensive than updating the picker itself.
+  if(interval>32){
+    if(customThemeLiveFrame){cancelAnimationFrame(customThemeLiveFrame);customThemeLiveFrame=0}
+    clearTimeout(customThemeLiveTimer);customThemeLiveTimer=setTimeout(queueFrame,interval);return;
+  }
+  if(customThemeLiveFrame||customThemeLiveTimer)return;
+  const wait=Math.max(0,interval-(performance.now()-customThemeLastAppliedAt));
+  if(wait>4)customThemeLiveTimer=setTimeout(queueFrame,wait);else queueFrame();
+}
+function refreshCustomThemeSurfaces(){
+  convertPreviewTheme='';mergePreviewTheme='';
+  if(state.mode==='convert')updateConvertPreview();
+  else if(state.mode==='merge')updateMergePreview();
+  else if(els.preview.querySelector('code:not(pre code)')){
+    clearTimeout(customThemeInkTimer);
+    if(customThemeInkIdle&&'cancelIdleCallback' in window)cancelIdleCallback(customThemeInkIdle);
+    customThemeInkIdle=0;
+    const refreshInk=()=>{customThemeInkIdle=0;customThemeInkTimer=0;updateInlineCodeInk()};
+    customThemeInkTimer=setTimeout(()=>{
+      customThemeInkTimer=0;
+      if('requestIdleCallback' in window)customThemeInkIdle=requestIdleCallback(refreshInk,{timeout:900});
+      else refreshInk();
+    },120);
+  }
+  // The editor preview is styled entirely through theme variables. Rebuilding
+  // its Markdown here used to freeze large open documents after every color
+  // selection and could also disturb the current preview selection.
+}
 function syncCustomThemeLiveControls(color){
   setHexInputValue($('custom-theme-color'),color);
   $('custom-theme-current').style.background=color;
@@ -15015,16 +15165,18 @@ function syncCustomThemeLiveControls(color){
   syncColorSliders('theme',color);
 }
 function setCustomThemeColor(value,commit=false){
+  if(commit)customThemeEditingLive=false;
   const color=normalizeColorValue(value);
   if(!color)return false;
   customTheme[customThemeChannel]=color;
   state.theme='custom';
   syncCustomThemeLiveControls(color);
   if(!commit){
-    if(!customThemeLiveFrame)customThemeLiveFrame=requestAnimationFrame(()=>{customThemeLiveFrame=0;applyCustomThemeVars()});
+    customThemeEditingLive=true;
+    scheduleCustomThemeLiveApply();
     return true;
   }
-  if(customThemeLiveFrame){cancelAnimationFrame(customThemeLiveFrame);customThemeLiveFrame=0}
+  cancelCustomThemeLiveApply();
   localStorage.setItem('md-theme','custom');
   ['light','dark','custom'].forEach(name=>$(`theme-${name}`).classList.toggle('active',name==='custom'));
   applyCustomThemeVars();
@@ -15034,7 +15186,7 @@ function setCustomThemeColor(value,commit=false){
     localStorage.setItem('md-custom-theme-bg',customTheme.background);
     localStorage.setItem('md-custom-theme-text',customTheme.text);
     trackCustomThemeColor(customThemeChannel,color);
-    rerenderForTheme();
+    refreshCustomThemeSurfaces();
   }
   return true;
 }
@@ -15090,14 +15242,21 @@ document.querySelectorAll('.cp-picker-main').forEach(picker=>{
     part.setPointerCapture(e.pointerId);
     update(part,e);
     const move=ev=>update(part,ev);
-    const up=()=>{
+    let finished=false;
+    const finish=()=>{
+      if(finished)return;finished=true;
       part.removeEventListener('pointermove',move);
+      part.removeEventListener('pointerup',finish);
+      part.removeEventListener('pointercancel',finish);
+      part.removeEventListener('lostpointercapture',finish);
       const selectedColor=getHexInputValue(input);
       if(type==='theme')setCustomThemeColor(selectedColor,true);
       else applyPickedColor(type,selectedColor);
     };
     part.addEventListener('pointermove',move);
-    part.addEventListener('pointerup',up,{once:true});
+    part.addEventListener('pointerup',finish);
+    part.addEventListener('pointercancel',finish);
+    part.addEventListener('lostpointercapture',finish);
   }));
   picker.querySelector('.cp-sv-handle').addEventListener('contextmenu',e=>{
     e.preventDefault();

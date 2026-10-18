@@ -58,12 +58,12 @@ No installation is required for the web demo. Open it, add a Markdown file, and 
 
 ### More than paragraphs
 
-- Text color, background color, size, and alignment
+- Text color, background color, font size, line spacing, and alignment
 - Links, images, footnotes, and blockquotes
 - Syntax-highlighted code blocks
 - KaTeX / MathLive-powered equations
 - Mermaid diagrams
-- Editable tables with sorting and filtering
+- Editable tables with sorting, value filters, formatting filters, and multi-select color filters
 - Custom document fonts and light, dark, or personalized themes
 
 ### Made for a folder full of notes
@@ -82,6 +82,21 @@ No installation is required for the web demo. Open it, add a Markdown file, and 
 - Source code → Markdown code block
 - CSV / XLSX data import
 - Multi-page PDF layout and scale controls
+
+### Desktop and mobile workflow
+
+- Korean and English interface throughout menus, dialogs, tooltips, and document tools
+- Responsive formatting toolbar with the same core controls on desktop and mobile
+- Seven line-spacing presets (`1.2`–`2.4`, with `1.8` as the default) plus direct numeric input
+- Touch-friendly Preview editing, table controls, themes, and settings
+
+## Basic workflow
+
+1. Open a Markdown file, a folder, or create a new document.
+2. Write in Markdown, edit directly in Preview, or keep both panes open.
+3. Select text or table cells to apply formatting. Use **Spacing** beside font size to change line spacing.
+4. Use a table header filter to combine value, formatting, text-color, and background-color conditions.
+5. Save as MD or PDF, or export selected documents and folders as ZIP.
 
 > [!IMPORTANT]
 > PDF-to-Markdown conversion is best-effort. Results can vary depending on the original PDF's layout, embedded fonts, tables, and graphics.
@@ -179,12 +194,12 @@ If you find a reproducible issue, please include the input Markdown, what you ex
 
 ### 평범한 본문 그 이상
 
-- 글자색, 배경색, 크기와 정렬
+- 글자색, 배경색, 글자 크기, 글 세로 간격과 정렬
 - 링크, 이미지, 각주와 인용문
 - 문법 강조 코드 블록
 - KaTeX / MathLive 기반 수식
 - Mermaid 다이어그램
-- 정렬과 필터를 지원하는 편집 가능한 표
+- 값·서식·복수 색상 필터와 정렬을 지원하는 편집 가능한 표
 - 사용자 문서 폰트와 라이트·다크·사용자 지정 테마
 
 ### 수많은 노트와 폴더를 위해
@@ -203,6 +218,21 @@ If you find a reproducible issue, please include the input Markdown, what you ex
 - 소스 코드 → Markdown 코드 블록
 - CSV / XLSX 데이터 불러오기
 - 여러 페이지 PDF 배치와 배율 조절
+
+### 데스크톱과 모바일 작업 환경
+
+- 메뉴, 대화상자, 도움말과 문서 도구 전반의 한국어·영어 UI
+- 데스크톱과 모바일에서 핵심 기능을 동일하게 제공하는 반응형 서식 도구
+- `1.2~2.4` 7단계 글 세로 간격(`1.8`이 기본값)과 숫자 직접 입력
+- 터치 환경에 맞춘 Preview 편집, 표 조작, 테마와 설정
+
+## 기본 사용 순서
+
+1. Markdown 파일이나 폴더를 열거나 새 문서를 만듭니다.
+2. Markdown 원문, Preview 직접 편집 또는 분할 보기로 작성합니다.
+3. 글자나 표 셀을 선택해 서식을 적용합니다. 글자 크기 옆의 **간격**에서 글 세로 간격을 바꿀 수 있습니다.
+4. 표 머리글 필터에서 값, 서식, 글자색과 배경색 조건을 조합합니다.
+5. MD·PDF로 저장하거나 선택 문서와 폴더를 ZIP으로 내보냅니다.
 
 > [!IMPORTANT]
 > PDF → Markdown 변환은 원본 구조를 최대한 보존하는 방식입니다. 원본 PDF의 레이아웃, 내장 폰트, 표와 그래픽 구성에 따라 결과가 달라질 수 있습니다.

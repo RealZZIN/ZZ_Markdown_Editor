@@ -128,6 +128,7 @@
       </div>
 
       <div class="format-tools" id="format-tools" hidden>
+        <div class="format-row format-row-primary">
         <div class="custom-format-wrap">
           <button class="custom-format-trigger" id="custom-format-toggle" type="button" aria-label="사용자 지정 서식 (Ctrl+Alt+S)" aria-expanded="false">
             <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 14.5 7.4 3.5h1.8l4.4 11"/><path d="M4.6 10.5h7.2"/><path d="M14.5 3v4M12.5 5h4"/></svg>
@@ -159,10 +160,22 @@
           <button class="size-up" id="fmt-size-up" type="button" title="글씨 크기 1px 키우기" aria-label="글씨 크기 1px 키우기"></button>
           <button class="size-down" id="fmt-size-down" type="button" title="글씨 크기 1px 줄이기" aria-label="글씨 크기 1px 줄이기"></button>
         </span>
+        <div class="line-height-combo" id="fmt-line-height-combo">
+          <button id="fmt-line-height-toggle" type="button" title="글 세로 간격" aria-label="글 세로 간격 목록" aria-expanded="false"><b id="fmt-line-height-label">1.8(기본)</b></button>
+          <div class="line-height-menu hidden" id="fmt-line-height-menu">
+            <div class="line-height-menu-title">간격</div>
+            <div class="line-height-presets" role="group" aria-label="글 세로 간격 미리 설정">
+              <button type="button" data-line-height="1.2">1.2</button><button type="button" data-line-height="1.4">1.4</button><button type="button" data-line-height="1.6">1.6</button><button type="button" data-line-height="1.8"><span>1.8</span><small>기본</small></button><button type="button" data-line-height="2">2.0</button><button type="button" data-line-height="2.2">2.2</button><button type="button" data-line-height="2.4">2.4</button>
+            </div>
+            <label class="line-height-custom"><span>직접 입력</span><span class="line-height-number-control"><input id="fmt-line-height-custom" type="number" min="0.8" max="4" step="0.1" value="1.8" inputmode="decimal"><span class="size-stepper line-height-stepper" aria-label="글 세로 간격 조절"><button class="size-up" type="button" data-line-height-step="0.1" aria-label="글 세로 간격 늘리기"></button><button class="size-down" type="button" data-line-height-step="-0.1" aria-label="글 세로 간격 줄이기"></button></span></span><button id="fmt-line-height-apply" type="button">적용</button></label>
+          </div>
+        </div>
         <div class="format-sep"></div>
         <button class="tool" id="fmt-undo">↶</button>
         <button class="tool" id="fmt-redo">↷</button>
         <div class="format-sep"></div>
+        </div>
+        <div class="format-row format-row-text">
         <button class="tool" id="fmt-bold"><b>B</b></button>
         <button class="tool" id="fmt-italic"><i>I</i></button>
         <button class="tool" id="fmt-underline"><u>U</u></button>
@@ -190,6 +203,8 @@
         <button class="tool" id="fmt-center" title="가운데 정렬"><svg width="14" height="12" viewBox="0 0 14 12" fill="currentColor"><rect x="0" y="0" width="14" height="2" rx="1"/><rect x="2.5" y="5" width="9" height="2" rx="1"/><rect x="1.5" y="10" width="11" height="2" rx="1"/></svg></button>
         <button class="tool" id="fmt-right" title="오른쪽 정렬"><svg width="14" height="12" viewBox="0 0 14 12" fill="currentColor"><rect x="0" y="0" width="14" height="2" rx="1"/><rect x="5" y="5" width="9" height="2" rx="1"/><rect x="3" y="10" width="11" height="2" rx="1"/></svg></button>
         <div class="format-sep"></div>
+        </div>
+        <div class="format-row format-row-insert">
         <span class="table-insert-control" id="table-insert-control">
           <button class="tool icon-tool" id="fmt-table" title="기본 표 삽입"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="10" rx="1.2"/><path d="M2 6.5h12M2 10h12M6 3v10M10 3v10"/></svg></button>
           <button class="cp-toggle" id="fmt-table-toggle" type="button" title="표 크기 선택" aria-label="표 크기 선택" aria-expanded="false">▾</button>
@@ -206,6 +221,7 @@
         </div>
         <div class="format-tool-slot">
           <button class="tool" id="fmt-syntax-toggle" type="button"><span class="format-tool-label">문법</span><span class="format-tool-chevron" aria-hidden="true">▾</span></button>
+        </div>
         </div>
       </div>
     </header>
