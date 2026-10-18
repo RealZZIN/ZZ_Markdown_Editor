@@ -2920,11 +2920,23 @@ function normalizeTableFilterColor(value){
   const normalized=String(context.fillStyle).toLowerCase();return /rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/.test(normalized)?'':normalized;
 }
 function tableCellFormatColors(cell){
-  const result={color:new Set(),background:new Set()},nodes=[cell,...cell.querySelectorAll('*')].filter(node=>!node.closest('.table-filter-button,.block-move-handle'));
-  nodes.forEach(node=>{
-    if(node.matches('font[color]')||node.style?.color){const value=normalizeTableFilterColor(getComputedStyle(node).color||node.getAttribute?.('color'));if(value)result.color.add(value)}
-    if(node.matches('mark')||node.style?.backgroundColor||node.style?.background){const value=normalizeTableFilterColor(getComputedStyle(node).backgroundColor);if(value)result.background.add(value)}
-  });
+  const result={color:new Set(),background:new Set()};
+  const explicit=(node,trait)=>trait==='color'
+    ?node.matches?.('font[color]')||!!node.style?.color
+    :node.matches?.('mark')||!!node.style?.backgroundColor||!!node.style?.background;
+  const addEffective=(textNode,trait)=>{
+    for(let node=textNode.parentElement;node&&cell.contains(node);node=node.parentElement){
+      if(!explicit(node,trait))continue;
+      const value=normalizeTableFilterColor(trait==='color'?(getComputedStyle(node).color||node.getAttribute?.('color')):getComputedStyle(node).backgroundColor);
+      if(value)result[trait].add(value);return;
+    }
+    if(explicit(cell,trait)){
+      const value=normalizeTableFilterColor(trait==='color'?getComputedStyle(cell).color:getComputedStyle(cell).backgroundColor);
+      if(value)result[trait].add(value);
+    }
+  };
+  const walker=document.createTreeWalker(cell,NodeFilter.SHOW_TEXT,{acceptNode:node=>node.textContent.trim()&&!node.parentElement.closest('.table-filter-button,.block-move-handle')?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT});
+  let textNode;while((textNode=walker.nextNode())){addEffective(textNode,'color');addEffective(textNode,'background')}
   return result;
 }
 function installTableFilters(){
