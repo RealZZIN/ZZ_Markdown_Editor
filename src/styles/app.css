@@ -1382,7 +1382,7 @@ body.dark .tab.active { background: var(--s3); color: var(--t1); }
   border-bottom: 1px solid var(--b2);
 }
 .format-tools[hidden] { display: none; }
-.format-row { display:flex;flex:0 0 auto;align-items:center;gap:2px;min-width:0; }
+.format-row { display:flex;flex:0 0 auto;align-items:center;gap:2px;min-width:0;flex-wrap:nowrap; }
 .format-tools #fmt-undo,
 .format-tools #fmt-redo,
 .format-tools #fmt-bold,
