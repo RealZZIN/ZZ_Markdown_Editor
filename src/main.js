@@ -15024,6 +15024,10 @@ function applyPickedColor(type,value){
   if(stylePreviewSelection(prop,value)){if(value)trackColor(type,value);return}
   if(value)trackColor(type,value);
 }
+function currentThemeTextColor(){
+  const cssColor=getComputedStyle(document.body).getPropertyValue('--t1').trim();
+  return normalizeColorValue(cssColor)||(state.theme==='custom'?normalizeColorValue(customTheme.text):null)||(state.theme==='dark'?'#d4d2ce':'#111110');
+}
 function syncColorButtons(){
   const tc=$('text-color-chip'),bc=$('bg-color-chip'),tcur=$('text-color-current'),bcur=$('bg-color-current');
   const textColor=getHexInputValue($('fmt-color'))||'#111110';
@@ -15309,7 +15313,7 @@ $('save-custom-theme-color').onclick=e=>{e.stopPropagation();saveCustomThemeColo
 $('custom-theme-current').oncontextmenu=e=>{e.preventDefault();e.stopPropagation();saveCustomThemeColor()};
 $('save-text-color').onclick=e=>{e.stopPropagation();savePaletteColor('text',getHexInputValue($('fmt-color')))};
 $('save-bg-color').onclick=e=>{e.stopPropagation();savePaletteColor('bg',getHexInputValue($('fmt-bg')))};
-$('clear-text-color').onclick=e=>{e.preventDefault();e.stopPropagation();applyPickedColor('text','');closeAllPanels()};
+$('clear-text-color').onclick=e=>{e.preventDefault();e.stopPropagation();applyPickedColor('text',currentThemeTextColor());closeAllPanels()};
 $('clear-bg-color').onclick=e=>{e.preventDefault();e.stopPropagation();applyPickedColor('bg','');closeAllPanels()};
 
 /* ── Extended persistence, compatibility, inserts, and custom fonts ── */
