@@ -4077,6 +4077,7 @@ function assignPreviewHeadingAnchors(root){
 }
 function renderMarkdown(text){
   if(state.editingPreview)return;
+  scrollAnchorCache=null;
   lastRenderedMarkdownText=text;
   selectedPreviewImage=null;
   let html='';
@@ -5561,8 +5562,11 @@ const documentPreviewCache=new Map(),DOCUMENT_PREVIEW_CACHE_LIMIT=2;
 function cacheActiveDocumentPreview(){
   const file=state.files[state.active];
   if(!file||state.mode!=='edit'||lastRenderedMarkdownText!==file.text||!els.preview.childNodes.length)return false;
-  const fragment=document.createDocumentFragment();
-  fragment.append(...els.preview.childNodes);
+  const mobile=matchMedia('(max-width: 860px)').matches;
+  const maxText=mobile?280000:700000,maxBlocks=mobile?2600:7000;
+  if(file.text.length>maxText||els.preview.childElementCount>maxBlocks)return false;
+  const range=document.createRange();range.selectNodeContents(els.preview);
+  const fragment=range.extractContents();
   documentPreviewCache.delete(file);
   documentPreviewCache.set(file,{text:file.text,fragment,enhancementsPending:els.preview.hasAttribute('aria-busy')});
   while(documentPreviewCache.size>DOCUMENT_PREVIEW_CACHE_LIMIT)documentPreviewCache.delete(documentPreviewCache.keys().next().value);
@@ -5574,6 +5578,7 @@ function restoreCachedDocumentPreview(file){
   documentPreviewCache.delete(file);
   cancelPostRenderEnhancements();
   els.preview.replaceChildren(cached.fragment);
+  scrollAnchorCache=null;
   lastRenderedMarkdownText=file.text;
   selectedPreviewImage=null;
   if(cached.enhancementsPending)schedulePostRenderEnhancements(file.text);
@@ -6057,7 +6062,8 @@ function restoreHistoryLocation(location){
     let target=block;
     for(const index of location.previewPath||[])target=target?.children?.[index]||target;
     placeCaretAtPreviewTextOffset(target,Number(location.previewOffset)||0);
-    target.scrollIntoView({block:'center',behavior:'smooth'});
+    const rootRect=els.preview.getBoundingClientRect(),targetRect=target.getBoundingClientRect();
+    els.preview.scrollTop=Math.max(0,els.preview.scrollTop+(targetRect.top-rootRect.top)-(els.preview.clientHeight-targetRect.height)/2);
     state.lastInsertionSurface='preview';
     return;
   }
@@ -9070,7 +9076,8 @@ let syncScrollLock=false;
 let scrollAnchorCache=null;
 function splitScrollAnchors(){
   const source=els.editor.value,children=[...els.preview.children].filter(node=>!node.matches('.line-gutter,.preview-arrival-marker'));
-  if(scrollAnchorCache?.source===source&&scrollAnchorCache.childCount===children.length)return scrollAnchorCache.anchors;
+  const layoutKey=`${children.length}:${els.preview.scrollHeight}:${els.preview.clientWidth}`;
+  if(scrollAnchorCache?.source===source&&scrollAnchorCache.layoutKey===layoutKey)return scrollAnchorCache.anchors;
   let line=0,chunks=[];
   try{
     chunks=parser.lexer(source).filter(token=>token.raw).map(token=>{
@@ -9080,30 +9087,38 @@ function splitScrollAnchors(){
   }catch{}
   if(!chunks.length)chunks=source.split(/\r?\n/).map((_,index)=>({start:index,end:index+1}));
   const count=Math.min(chunks.length,children.length);
-  const anchors=Array.from({length:count},(_,index)=>({...chunks[index],element:children[index]}));
-  scrollAnchorCache={source,childCount:children.length,anchors};
+  const rootRect=els.preview.getBoundingClientRect(),scrollTop=els.preview.scrollTop;
+  const anchors=Array.from({length:count},(_,index)=>{
+    const rect=children[index].getBoundingClientRect();
+    return{...chunks[index],top:scrollTop+rect.top-rootRect.top,height:Math.max(1,rect.height)};
+  });
+  scrollAnchorCache={source,layoutKey,anchors};
   return anchors;
 }
-function previewElementTop(element){
-  const root=els.preview.getBoundingClientRect(),rect=element.getBoundingClientRect();
-  return els.preview.scrollTop+rect.top-root.top;
+function scrollAnchorByLine(anchors,line){
+  let low=0,high=anchors.length-1;
+  while(low<=high){const middle=(low+high)>>1;if(anchors[middle].start<=line)low=middle+1;else high=middle-1}
+  return anchors[Math.max(0,Math.min(anchors.length-1,high))];
+}
+function scrollAnchorByTop(anchors,top){
+  let low=0,high=anchors.length-1;
+  while(low<=high){const middle=(low+high)>>1;if(anchors[middle].top<=top)low=middle+1;else high=middle-1}
+  return anchors[Math.max(0,Math.min(anchors.length-1,high))];
 }
 function syncPreviewToEditorAnchor(){
   const anchors=splitScrollAnchors();if(anchors.length<2)return false;
   const lineHeight=parseFloat(getComputedStyle(els.editor).lineHeight)||24;
   const center=(els.editor.scrollTop+els.editor.clientHeight/2)/lineHeight;
-  let anchor=anchors.find(item=>center>=item.start&&center<=item.end)||anchors.reduce((best,item)=>Math.abs(item.start-center)<Math.abs(best.start-center)?item:best,anchors[0]);
+  const anchor=scrollAnchorByLine(anchors,center);
   const fraction=Math.max(0,Math.min(1,(center-anchor.start)/Math.max(1,anchor.end-anchor.start)));
-  const top=previewElementTop(anchor.element)+fraction*Math.max(1,anchor.element.getBoundingClientRect().height)-els.preview.clientHeight/2;
+  const top=anchor.top+fraction*anchor.height-els.preview.clientHeight/2;
   els.preview.scrollTop=Math.max(0,top);return true;
 }
 function syncEditorToPreviewAnchor(){
   const anchors=splitScrollAnchors();if(anchors.length<2)return false;
   const center=els.preview.scrollTop+els.preview.clientHeight/2;
-  let anchor=anchors.find(item=>{const top=previewElementTop(item.element);return center>=top&&center<=top+item.element.getBoundingClientRect().height})
-    ||anchors.reduce((best,item)=>Math.abs(previewElementTop(item.element)-center)<Math.abs(previewElementTop(best.element)-center)?item:best,anchors[0]);
-  const top=previewElementTop(anchor.element),height=Math.max(1,anchor.element.getBoundingClientRect().height);
-  const fraction=Math.max(0,Math.min(1,(center-top)/height));
+  const anchor=scrollAnchorByTop(anchors,center);
+  const fraction=Math.max(0,Math.min(1,(center-anchor.top)/anchor.height));
   const line=anchor.start+fraction*Math.max(1,anchor.end-anchor.start),lineHeight=parseFloat(getComputedStyle(els.editor).lineHeight)||24;
   els.editor.scrollTop=Math.max(0,line*lineHeight-els.editor.clientHeight/2);return true;
 }
@@ -9132,8 +9147,8 @@ els.editor.addEventListener('scroll',()=>{if(els.lineGutter)els.lineGutter.scrol
 els.editor.addEventListener('scroll',syncMarkdownHighlightScroll);
 els.preview.addEventListener('scroll',onPreviewScroll);
 els.preview.addEventListener('scroll',()=>{if(els.previewLineGutter)els.previewLineGutter.scrollTop=els.preview.scrollTop});
-els.preview.addEventListener('load',schedulePreviewLineNumbers,true);
-if(window.ResizeObserver)new ResizeObserver(schedulePreviewLineNumbers).observe(els.preview);
+els.preview.addEventListener('load',()=>{scrollAnchorCache=null;schedulePreviewLineNumbers()},true);
+if(window.ResizeObserver)new ResizeObserver(()=>{scrollAnchorCache=null;schedulePreviewLineNumbers()}).observe(els.preview);
 window.addEventListener('resize',schedulePreviewLineNumbers);
 els.convertPreview.addEventListener('click',()=>{if(!state.files.length)els.fileInput.click()});
 $('home-convert-run').onclick=runHomeConvert;
