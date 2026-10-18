@@ -5557,6 +5557,32 @@ function createDraftFromEditor(){
   updateHomeConvert();
 }
 function currentEditView(){return els.editSplit.classList.contains('edit-md-only')?'md':els.editSplit.classList.contains('edit-preview-only')?'preview':'both'}
+const documentPreviewCache=new Map(),DOCUMENT_PREVIEW_CACHE_LIMIT=2;
+function cacheActiveDocumentPreview(){
+  const file=state.files[state.active];
+  if(!file||state.mode!=='edit'||lastRenderedMarkdownText!==file.text||!els.preview.childNodes.length)return false;
+  const fragment=document.createDocumentFragment();
+  fragment.append(...els.preview.childNodes);
+  documentPreviewCache.delete(file);
+  documentPreviewCache.set(file,{text:file.text,fragment,enhancementsPending:els.preview.hasAttribute('aria-busy')});
+  while(documentPreviewCache.size>DOCUMENT_PREVIEW_CACHE_LIMIT)documentPreviewCache.delete(documentPreviewCache.keys().next().value);
+  return true;
+}
+function restoreCachedDocumentPreview(file){
+  const cached=documentPreviewCache.get(file);
+  if(!cached||cached.text!==file?.text){documentPreviewCache.delete(file);return false}
+  documentPreviewCache.delete(file);
+  cancelPostRenderEnhancements();
+  els.preview.replaceChildren(cached.fragment);
+  lastRenderedMarkdownText=file.text;
+  selectedPreviewImage=null;
+  if(cached.enhancementsPending)schedulePostRenderEnhancements(file.text);
+  else{
+    els.preview.removeAttribute('aria-busy');
+    requestAnimationFrame(()=>{if(lastRenderedMarkdownText===file.text){renderDocumentOutline();schedulePreviewLineNumbers()}});
+  }
+  return true;
+}
 function captureActiveFileViewState(){
   const file=state.files[state.active];if(!file)return;
   file.viewState={
@@ -5570,19 +5596,26 @@ let documentViewRestoreToken=0;
 function restoreFileViewState(file){
   const token=++documentViewRestoreToken,view=file?.viewState;
   if(view?.editView)setEditView(view.editView,{persist:false});
-  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+  // Restore only panes that are actually visible. Touching scrollTop on a
+  // hidden, freshly-rendered large pane forces an unnecessary layout pass.
+  requestAnimationFrame(()=>{
     if(token!==documentViewRestoreToken||state.files[state.active]!==file)return;
     syncScrollLock=true;
-    els.editor.scrollTop=Math.max(0,Number(view?.editorTop)||0);els.editor.scrollLeft=Math.max(0,Number(view?.editorLeft)||0);
-    els.preview.scrollTop=Math.max(0,Number(view?.previewTop)||0);els.preview.scrollLeft=Math.max(0,Number(view?.previewLeft)||0);
+    const editView=view?.editView||currentEditView();
+    if(editView!=='preview'){
+      els.editor.scrollTop=Math.max(0,Number(view?.editorTop)||0);els.editor.scrollLeft=Math.max(0,Number(view?.editorLeft)||0);
+    }
+    if(editView!=='md'){
+      els.preview.scrollTop=Math.max(0,Number(view?.previewTop)||0);els.preview.scrollLeft=Math.max(0,Number(view?.previewLeft)||0);
+    }
     const start=Math.max(0,Math.min(els.editor.value.length,Number(view?.selectionStart)||0));
     const end=Math.max(start,Math.min(els.editor.value.length,Number(view?.selectionEnd)||start));
     els.editor.setSelectionRange(start,end);state.lastEditorSelection={start,end};state.lastInsertionSurface=view?.surface==='preview'?'preview':'editor';
-    updateLineNumbers();requestAnimationFrame(()=>{syncScrollLock=false});
-  }));
+    requestAnimationFrame(()=>{syncScrollLock=false});
+  });
 }
-function activateFileState(index){if(index!==state.active)captureActiveFileViewState();state.active=index;collapsedOutlineHeadings.clear();const file=state.files[index];els.editor.value=file?.text||'';state.history=[els.editor.value];state.future=[];state.savedText=file&&Object.hasOwn(file,'savedText')?file.savedText:els.editor.value;state.dirty=els.editor.value!==state.savedText;state.lastInput={type:'md',name:file?.name||'document.md'};state.savedPreviewRange=null;state.savedSelection=null;updateUndoRedoButtons()}
-function openFile(index){const switching=index!==state.active;activateFileState(index);const file=state.files[index];renderMarkdown(els.editor.value);renderList();updateHomeConvert();setMode('edit');updateLineNumbers();if(switching)restoreFileViewState(file)}
+function activateFileState(index,{captureView=true}={}){if(captureView&&index!==state.active)captureActiveFileViewState();state.active=index;collapsedOutlineHeadings.clear();const file=state.files[index];els.editor.value=file?.text||'';state.history=[els.editor.value];state.future=[];state.savedText=file&&Object.hasOwn(file,'savedText')?file.savedText:els.editor.value;state.dirty=els.editor.value!==state.savedText;state.lastInput={type:'md',name:file?.name||'document.md'};state.savedPreviewRange=null;state.savedSelection=null;updateUndoRedoButtons()}
+function openFile(index){const switching=index!==state.active;if(switching){captureActiveFileViewState();cacheActiveDocumentPreview()}activateFileState(index,{captureView:!switching});const file=state.files[index];if(switching){if(!restoreCachedDocumentPreview(file))renderMarkdown(els.editor.value)}else if(lastRenderedMarkdownText!==els.editor.value)renderMarkdown(els.editor.value);renderList();updateHomeConvert();setMode('edit');scheduleLineNumbers();if(switching)restoreFileViewState(file)}
 let modePreviewFrame=0,modePreviewTimer=0;
 function scheduleModePreview(mode){
   cancelAnimationFrame(modePreviewFrame);
@@ -15502,7 +15535,6 @@ async function removeCustomFont(id){
   applyCustomDocumentFont();
 }
 function serializableWorkspace(){
-  captureActiveFileViewState();
   return{
     savedAt:Date.now(),
     active:state.active,
@@ -15821,7 +15853,7 @@ async function insertFilesIntoDocument(fileList){
 }
 $('insert-file-toggle').onclick=()=>$('insert-file-input').click();
 $('insert-file-input').onchange=e=>{insertFilesIntoDocument(e.target.files);e.target.value=''};
-window.addEventListener('pagehide',saveWorkspaceSession);
+window.addEventListener('pagehide',()=>{captureActiveFileViewState();saveWorkspaceSession()});
 syncColorButtons();
 $('fmt-left').onclick=()=>applyAlign('left');$('fmt-center').onclick=()=>applyAlign('center');$('fmt-right').onclick=()=>applyAlign('right');
 $('fmt-table').addEventListener('mousedown',e=>{e.preventDefault();rememberPreviewRange()});
