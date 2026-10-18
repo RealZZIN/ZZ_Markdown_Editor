@@ -2927,11 +2927,13 @@ function tableCellFormatColors(cell){
   const addEffective=(textNode,trait)=>{
     for(let node=textNode.parentElement;node&&cell.contains(node);node=node.parentElement){
       if(!explicit(node,trait))continue;
-      const value=normalizeTableFilterColor(trait==='color'?(getComputedStyle(node).color||node.getAttribute?.('color')):getComputedStyle(node).backgroundColor);
+      const inlineValue=trait==='color'?(node.style?.color||node.getAttribute?.('color')):(node.style?.backgroundColor||'');
+      const value=normalizeTableFilterColor(inlineValue||(node.matches?.('mark')?getComputedStyle(node).backgroundColor:''));
       if(value)result[trait].add(value);return;
     }
     if(explicit(cell,trait)){
-      const value=normalizeTableFilterColor(trait==='color'?getComputedStyle(cell).color:getComputedStyle(cell).backgroundColor);
+      const inlineValue=trait==='color'?(cell.style.color||cell.getAttribute('color')):cell.style.backgroundColor;
+      const value=normalizeTableFilterColor(inlineValue||(cell.matches('mark')?getComputedStyle(cell).backgroundColor:''));
       if(value)result[trait].add(value);
     }
   };
@@ -2960,7 +2962,7 @@ function applyTableFilterView(table){
   const groups=[...state.groups];
   if(state.sort)groups.sort((a,b)=>String(a.values[0]?.[state.sort.column]||'').localeCompare(String(b.values[0]?.[state.sort.column]||''),'ko',{numeric:true,sensitivity:'base'})*state.sort.direction);
   groups.forEach(group=>{
-    const visible=group.values.some((values,rowIndex)=>[...state.filters].every(([column,allowed])=>allowed.has(values[column]||''))&&[...state.formatFilters].every(([column,required])=>[...required].every(trait=>group.formats[rowIndex]?.[column]?.has(trait)))&&[...(state.formatColorFilters||new Map())].every(([column,required])=>Object.entries(required).every(([trait,colors])=>{const selected=Array.isArray(colors)?colors:colors?[colors]:[];return !selected.length||selected.some(color=>group.formatColors[rowIndex]?.[column]?.[trait]?.has(color))})));
+    const visible=group.values.some((values,rowIndex)=>[...state.filters].every(([column,allowed])=>allowed.has(values[column]||''))&&[...state.formatFilters].every(([column,required])=>[...required].every(trait=>trait==='none'?!group.formats[rowIndex]?.[column]?.size:group.formats[rowIndex]?.[column]?.has(trait)))&&[...(state.formatColorFilters||new Map())].every(([column,required])=>Object.entries(required).every(([trait,colors])=>{const selected=Array.isArray(colors)?colors:colors?[colors]:[];return !selected.length||selected.some(color=>group.formatColors[rowIndex]?.[column]?.[trait]?.has(color))})));
     group.rows.forEach(row=>{row.hidden=!visible;if(!visible)row.dataset.filterHidden='1';else row.removeAttribute('data-filter-hidden');row.parentElement.appendChild(row)});
   });
   updateTableFilterIndicators(table);
@@ -2978,7 +2980,8 @@ function updateTableFilterIndicators(table){
 function showTableFilterMenu(table,column,button){
   document.querySelector('.table-filter-popup')?.remove();
   Object.assign(tableFilterStates.get(table),tableFilterModel(table));
-  const state=tableFilterStates.get(table),values=[...new Set(state.groups.flatMap(group=>group.values.map(row=>row[column]||'')))].sort((a,b)=>a.localeCompare(b,'ko',{numeric:true}));
+  const label=(ko,en)=>uiLanguage==='en'?en:ko;
+  const state=tableFilterStates.get(table),values=[...new Set(state.groups.flatMap(group=>group.values.map(row=>row[column]||'')))].sort((a,b)=>a.localeCompare(b,uiLanguage==='en'?'en':'ko',{numeric:true}));
   state.formatFilters||=new Map();state.formatColorFilters||=new Map();
   const selected=new Set(state.filters.get(column)||values),selectedFormats=new Set(state.formatFilters.get(column)||[]),menu=document.createElement('div');menu.className='file-context-menu table-filter-popup';menu.contentEditable='false';
   let positionFrame=0;
@@ -2993,25 +2996,26 @@ function showTableFilterMenu(table,column,button){
   const outside=event=>{if(!menu.contains(event.target)&&event.target!==button)close()},key=event=>{if(event.key==='Escape')close()};
   const actions=document.createElement('div');actions.className='table-filter-actions';menu.appendChild(actions);
   const action=(label,fn)=>{const b=document.createElement('button');b.type='button';b.textContent=label;b.onclick=()=>{fn();close()};actions.appendChild(b)};
-  action('오름차순 정렬',()=>{state.sort={column,direction:1};applyTableFilterView(table)});
-  action('내림차순 정렬',()=>{state.sort={column,direction:-1};applyTableFilterView(table)});
-  action('이 표 필터·정렬 초기화',()=>{state.filters.clear();state.formatFilters.clear();state.formatColorFilters.clear();state.sort=null;applyTableFilterView(table)});
-  const valueSection=document.createElement('details');valueSection.className='table-filter-section';valueSection.open=true;valueSection.innerHTML='<summary>값 필터</summary>';
+  action(label('오름차순 정렬','Sort ascending'),()=>{state.sort={column,direction:1};applyTableFilterView(table)});
+  action(label('내림차순 정렬','Sort descending'),()=>{state.sort={column,direction:-1};applyTableFilterView(table)});
+  action(label('이 표 필터·정렬 초기화','Reset filtering and sorting for this table'),()=>{state.filters.clear();state.formatFilters.clear();state.formatColorFilters.clear();state.sort=null;applyTableFilterView(table)});
+  const valueSection=document.createElement('details');valueSection.className='table-filter-section';valueSection.open=true;const valueSummary=document.createElement('summary');valueSummary.textContent=label('값 필터','Value filter');valueSection.appendChild(valueSummary);
   const valueBody=document.createElement('div');valueBody.className='table-filter-section-body';valueSection.appendChild(valueBody);menu.appendChild(valueSection);
-  const search=document.createElement('input');search.type='search';search.placeholder='값 검색';valueBody.appendChild(search);
+  const search=document.createElement('input');search.type='search';search.placeholder=label('값 검색','Search values');valueBody.appendChild(search);
   const box=document.createElement('div');box.className='table-filter-values';
   const applySelection=()=>{if(selected.size===values.length)state.filters.delete(column);else state.filters.set(column,new Set(selected));applyTableFilterView(table)};
-  const all=document.createElement('button');all.textContent='전체 선택 / 해제';all.onclick=()=>{const checked=selected.size!==values.length;selected.clear();if(checked)values.forEach(value=>selected.add(value));paint();applySelection()};valueBody.append(all,box);
-  const paint=()=>{box.replaceChildren();values.filter(value=>value.toLowerCase().includes(search.value.toLowerCase())).forEach(value=>{const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.checked=selected.has(value);input.onchange=()=>{input.checked?selected.add(value):selected.delete(value);applySelection()};label.append(input,document.createTextNode(value||'(빈 값)'));box.appendChild(label)})};search.oninput=paint;paint();
-  const formatSection=document.createElement('details');formatSection.className='table-filter-section';formatSection.innerHTML='<summary>서식 필터</summary>';
+  const all=document.createElement('button');all.textContent=label('전체 선택 / 해제','Select / clear all');all.onclick=()=>{const checked=selected.size!==values.length;selected.clear();if(checked)values.forEach(value=>selected.add(value));paint();applySelection()};valueBody.append(all,box);
+  const paint=()=>{box.replaceChildren();values.filter(value=>value.toLowerCase().includes(search.value.toLowerCase())).forEach(value=>{const optionLabel=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.checked=selected.has(value);input.onchange=()=>{input.checked?selected.add(value):selected.delete(value);applySelection()};optionLabel.append(input,document.createTextNode(value||label('(빈 값)','(Empty)')));box.appendChild(optionLabel)})};search.oninput=paint;paint();
+  const formatSection=document.createElement('details');formatSection.className='table-filter-section';const formatSummary=document.createElement('summary');formatSummary.textContent=label('서식 필터','Formatting filter');formatSection.appendChild(formatSummary);
   const formatBody=document.createElement('div');formatBody.className='table-filter-section-body table-filter-format-options';formatSection.appendChild(formatBody);menu.appendChild(formatSection);
   const revealFilterSection=section=>requestAnimationFrame(()=>{reposition();requestAnimationFrame(()=>{if(!menu.isConnected||!section.open)return;const top=section.offsetTop,bottom=top+section.offsetHeight,padding=8;if(top<menu.scrollTop)menu.scrollTo({top:Math.max(0,top-padding),behavior:'smooth'});else if(bottom>menu.scrollTop+menu.clientHeight)menu.scrollTo({top:Math.min(menu.scrollHeight-menu.clientHeight,bottom-menu.clientHeight+padding),behavior:'smooth'})})});
   [valueSection,formatSection].forEach(section=>section.addEventListener('toggle',()=>{if(section.open)revealFilterSection(section)}));
   const available=new Set(state.groups.flatMap(group=>group.formats.flatMap(row=>[...(row[column]||[])]))),availableColors={color:new Set(),background:new Set()};
   state.groups.forEach(group=>group.formatColors.forEach(row=>{['color','background'].forEach(trait=>row[column]?.[trait]?.forEach(value=>availableColors[trait].add(value))) }));
-  [['bold','굵게'],['italic','기울임'],['underline','밑줄'],['color','글자색'],['background','배경색']].forEach(([trait,labelText])=>{
-    const row=document.createElement('div');row.className='table-filter-format-row';
-    const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.checked=selectedFormats.has(trait);input.disabled=!available.has(trait);label.append(input,document.createTextNode(labelText));row.appendChild(label);
+  const hasUnformatted=state.groups.some(group=>group.formats.some(row=>!row[column]?.size)),formatControls=new Map();
+  [['none',label('서식 없는 셀만','Unformatted cells only')],['bold',label('굵게','Bold')],['italic',label('기울임','Italic')],['underline',label('밑줄','Underline')],['color',label('글자색','Text color')],['background',label('배경색','Background color')]].forEach(([trait,labelText])=>{
+    const row=document.createElement('div');row.className='table-filter-format-row';if(trait==='none')row.classList.add('table-filter-format-none');
+    const optionLabel=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.checked=selectedFormats.has(trait);input.disabled=trait==='none'?!hasUnformatted:!available.has(trait);if(trait==='none')optionLabel.title=label('굵게, 기울임, 밑줄, 글자색, 배경색이 없는 셀만 표시합니다.','Show only cells without bold, italic, underline, text color, or background color.');optionLabel.append(input,document.createTextNode(labelText));row.appendChild(optionLabel);
     let palette=null,selectedColors=new Set(),traitColors=[];
     if(trait==='color'||trait==='background'){
       palette=document.createElement('div');palette.className='table-filter-color-palette';palette.hidden=!input.checked;
@@ -3019,8 +3023,13 @@ function showTableFilterMenu(table,column,button){
       const saveColors=()=>{state.formatColorFilters.set(column,{...(state.formatColorFilters.get(column)||{}),[trait]:[...selectedColors]});applyTableFilterView(table)};
       traitColors.forEach(color=>{const swatch=document.createElement('button');swatch.type='button';swatch.className='table-filter-color-swatch';swatch.style.setProperty('--filter-color',color);swatch.dataset.color=color;swatch.classList.toggle('selected',selectedColors.has(color));swatch.setAttribute('aria-pressed',String(selectedColors.has(color)));swatch.title=color;swatch.setAttribute('aria-label',color);swatch.onclick=()=>{selectedColors.has(color)?selectedColors.delete(color):selectedColors.add(color);swatch.classList.toggle('selected',selectedColors.has(color));swatch.setAttribute('aria-pressed',String(selectedColors.has(color)));if(!selectedColors.size){input.checked=false;input.dispatchEvent(new Event('change'));return}saveColors()};palette.appendChild(swatch)});
     }
+    formatControls.set(trait,{input,palette});
     input.onchange=()=>{
-      if(input.checked){selectedFormats.add(trait);if(palette){palette.hidden=false;if(!selectedColors.size){traitColors.forEach(color=>selectedColors.add(color));palette.querySelectorAll('.table-filter-color-swatch').forEach(swatch=>{swatch.classList.add('selected');swatch.setAttribute('aria-pressed','true')})}state.formatColorFilters.set(column,{...(state.formatColorFilters.get(column)||{}),[trait]:[...selectedColors]})}}
+      if(input.checked&&trait==='none'){
+        selectedFormats.clear();selectedFormats.add('none');state.formatColorFilters.delete(column);
+        formatControls.forEach((control,key)=>{if(key==='none')return;control.input.checked=false;if(control.palette)control.palette.hidden=true});
+      }
+      else if(input.checked){selectedFormats.delete('none');const noneControl=formatControls.get('none');if(noneControl)noneControl.input.checked=false;selectedFormats.add(trait);if(palette){palette.hidden=false;if(!selectedColors.size){traitColors.forEach(color=>selectedColors.add(color));palette.querySelectorAll('.table-filter-color-swatch').forEach(swatch=>{swatch.classList.add('selected');swatch.setAttribute('aria-pressed','true')})}state.formatColorFilters.set(column,{...(state.formatColorFilters.get(column)||{}),[trait]:[...selectedColors]})}}
       else{selectedFormats.delete(trait);if(palette){palette.hidden=true;const values={...(state.formatColorFilters.get(column)||{})};delete values[trait];if(Object.keys(values).length)state.formatColorFilters.set(column,values);else state.formatColorFilters.delete(column)}}
       if(selectedFormats.size)state.formatFilters.set(column,new Set(selectedFormats));else state.formatFilters.delete(column);applyTableFilterView(table);if(palette)revealFilterSection(formatSection)
     };
@@ -3561,16 +3570,36 @@ document.addEventListener('pointercancel',finishTableResize);
     const clone=table.cloneNode(true);
     clone.classList.remove('table-selected');
     clone.removeAttribute('aria-selected');
+    clone.removeAttribute(INTERNAL_TABLE_CLIPBOARD_ATTRIBUTE);
     clone.removeAttribute('data-resize-ready');
     clone.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.block-move-handle,.form-move-handle').forEach(el=>el.remove());
     clone.querySelectorAll('[data-base-h]').forEach(el=>el.removeAttribute('data-base-h'));
     return clone;
   }
+  function tableClipboardPayload(table){
+    const clone=cleanTableClone(table);
+    clone.setAttribute(INTERNAL_TABLE_CLIPBOARD_ATTRIBUTE,'1');
+    return{html:clone.outerHTML,text:tableToMd(clone)};
+  }
+  function setTableClipboardData(event,table){
+    if(!event?.clipboardData||!table)return false;
+    const payload=tableClipboardPayload(table);copiedTableHtml=payload.html;
+    event.preventDefault();event.clipboardData.setData('text/html',payload.html);event.clipboardData.setData('text/plain',payload.text);
+    return true;
+  }
+  function copyWholeTable(table){
+    if(!table||!els.preview.contains(table))return false;
+    let copied=false;
+    const handler=event=>{copied=setTableClipboardData(event,table);if(copied)event.stopImmediatePropagation()};
+    document.addEventListener('copy',handler,{capture:true,once:true});
+    try{document.execCommand('copy')}catch(_){document.removeEventListener('copy',handler,true)}
+    return copied;
+  }
   function deleteSelectedTable(table=selectedTable){
     if(!table||!els.preview.contains(table))return false;
     pushHistory(true);
     table.remove();
-    selectedTable=null;
+    selectedTable=null;clearCellSelection();
     syncFromPreview();
     renderMarkdown(els.editor.value);
     pushHistory(true);
@@ -3617,6 +3646,8 @@ document.addEventListener('pointercancel',finishTableResize);
     if(!table)return;
     if(op==='select-all'){selectAllTableCells(table);hideMenu();return}
     if(op==='clear-selection'){selectTable(null);hideMenu();return}
+    if(op==='copy-table'){copyWholeTable(table);hideMenu();return}
+    if(op==='cut-table'){if(copyWholeTable(table))deleteSelectedTable(table);hideMenu();return}
     if(op==='copy-cells'){copyCellRange();hideMenu();return}
     if(op==='cut-cells'){copyCellRange();clearCellRange();hideMenu();return}
     if(op==='clear-cells'){clearCellRange();hideMenu();return}
@@ -3769,6 +3800,9 @@ document.addEventListener('pointercancel',finishTableResize);
     menu.innerHTML=`
       <div class="tbl-ctx-selection-actions"><button data-op="select-all">전체 선택</button><button data-op="clear-selection">선택 해제</button></div><hr>
       ${hasCells?'<button data-op="cut-cells">선택 셀 잘라내기</button><button data-op="copy-cells">선택 셀 복사</button><button data-op="paste-cells">선택 셀에 붙여넣기</button><button data-op="clear-cells">선택 셀 내용 지우기</button><hr><button data-op="merge-cells">선택 셀 합치기</button><button data-op="split-cells">선택 셀 나누기…</button><button data-op="equal-height">셀 높이를 같게</button><button data-op="equal-width">셀 너비를 같게</button><hr>':''}
+      <button data-op="cut-table">표 잘라내기</button>
+      <button data-op="copy-table">표 복사</button>
+      <hr>
       <button data-op="row-above">위에 행 추가</button>
       <button data-op="row-below">아래에 행 추가</button>
       <button data-op="col-left">왼쪽에 열 추가</button>
@@ -3847,16 +3881,12 @@ document.addEventListener('pointercancel',finishTableResize);
   document.addEventListener('copy',e=>{
     if(selectedCells().length){e.preventDefault();copyCellRange(e);return}
     if(!selectedTable||!els.preview.contains(selectedTable))return;
-    const clone=cleanTableClone(selectedTable);
-    copiedTableHtml=clone.outerHTML;
-    e.preventDefault();
-    if(e.clipboardData){
-      e.clipboardData.setData('text/html',copiedTableHtml);
-      e.clipboardData.setData('text/plain',tableToMd(clone));
-    }
+    setTableClipboardData(e,selectedTable);
   });
   document.addEventListener('cut',e=>{
-    if(!selectedCells().length)return;e.preventDefault();copyCellRange(e);clearCellRange();
+    if(selectedCells().length){e.preventDefault();copyCellRange(e);clearCellRange();return}
+    if(!selectedTable||!els.preview.contains(selectedTable))return;
+    if(setTableClipboardData(e,selectedTable))deleteSelectedTable(selectedTable);
   });
   document.addEventListener('paste',async e=>{
     if(selectedCells().length){
@@ -5526,8 +5556,33 @@ function createDraftFromEditor(){
   renderMergeList();
   updateHomeConvert();
 }
-function activateFileState(index){state.active=index;collapsedOutlineHeadings.clear();const file=state.files[index];els.editor.value=file?.text||'';state.history=[els.editor.value];state.future=[];state.savedText=file&&Object.hasOwn(file,'savedText')?file.savedText:els.editor.value;state.dirty=els.editor.value!==state.savedText;state.lastInput={type:'md',name:file?.name||'document.md'};updateUndoRedoButtons()}
-function openFile(index){activateFileState(index);renderMarkdown(els.editor.value);renderList();updateHomeConvert();setMode('edit');updateLineNumbers()}
+function currentEditView(){return els.editSplit.classList.contains('edit-md-only')?'md':els.editSplit.classList.contains('edit-preview-only')?'preview':'both'}
+function captureActiveFileViewState(){
+  const file=state.files[state.active];if(!file)return;
+  file.viewState={
+    editorTop:els.editor.scrollTop,editorLeft:els.editor.scrollLeft,
+    previewTop:els.preview.scrollTop,previewLeft:els.preview.scrollLeft,
+    selectionStart:els.editor.selectionStart,selectionEnd:els.editor.selectionEnd,
+    editView:currentEditView(),surface:state.lastInsertionSurface
+  };
+}
+let documentViewRestoreToken=0;
+function restoreFileViewState(file){
+  const token=++documentViewRestoreToken,view=file?.viewState;
+  if(view?.editView)setEditView(view.editView,{persist:false});
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    if(token!==documentViewRestoreToken||state.files[state.active]!==file)return;
+    syncScrollLock=true;
+    els.editor.scrollTop=Math.max(0,Number(view?.editorTop)||0);els.editor.scrollLeft=Math.max(0,Number(view?.editorLeft)||0);
+    els.preview.scrollTop=Math.max(0,Number(view?.previewTop)||0);els.preview.scrollLeft=Math.max(0,Number(view?.previewLeft)||0);
+    const start=Math.max(0,Math.min(els.editor.value.length,Number(view?.selectionStart)||0));
+    const end=Math.max(start,Math.min(els.editor.value.length,Number(view?.selectionEnd)||start));
+    els.editor.setSelectionRange(start,end);state.lastEditorSelection={start,end};state.lastInsertionSurface=view?.surface==='preview'?'preview':'editor';
+    updateLineNumbers();requestAnimationFrame(()=>{syncScrollLock=false});
+  }));
+}
+function activateFileState(index){if(index!==state.active)captureActiveFileViewState();state.active=index;collapsedOutlineHeadings.clear();const file=state.files[index];els.editor.value=file?.text||'';state.history=[els.editor.value];state.future=[];state.savedText=file&&Object.hasOwn(file,'savedText')?file.savedText:els.editor.value;state.dirty=els.editor.value!==state.savedText;state.lastInput={type:'md',name:file?.name||'document.md'};state.savedPreviewRange=null;state.savedSelection=null;updateUndoRedoButtons()}
+function openFile(index){const switching=index!==state.active;activateFileState(index);const file=state.files[index];renderMarkdown(els.editor.value);renderList();updateHomeConvert();setMode('edit');updateLineNumbers();if(switching)restoreFileViewState(file)}
 let modePreviewFrame=0,modePreviewTimer=0;
 function scheduleModePreview(mode){
   cancelAnimationFrame(modePreviewFrame);
@@ -5552,7 +5607,7 @@ function setMode(mode,showHome=false){
     findReplaceButton.classList.toggle('hidden',showHome);
     findReplaceButton.hidden=showHome;
     const findOnly=mode!=='edit';
-    findReplaceButton.title=findOnly?'찾기':'찾기 및 바꾸기';
+    findReplaceButton.title=uiLanguage==='en'?(findOnly?'Find':'Find and replace'):(findOnly?'찾기':'찾기 및 바꾸기');
     findReplaceButton.setAttribute('aria-label',findReplaceButton.title);
   }
   $('insert-file-toggle').hidden=showHome||mode!=='edit';
@@ -8461,6 +8516,7 @@ let colorCorrectEnabled=savedOption('md-option-color-correct',true);
 let paragraphBreakEnabled=savedOption('md-option-paragraph-break',true);
 let previewMarkdownEnabled=localStorage.getItem('md-preview-markdown')!=='0';
 let listFormatConfirmEnabled=savedOption('md-option-list-format-confirm',true);
+let listFormatDefaultAction=localStorage.getItem('md-option-list-format-action')==='remove'?'remove':'keep';
 let autoLinkEnabled=localStorage.getItem('md-auto-link')!=='0';
 let sourceSyntaxHoverEnabled=localStorage.getItem('md-source-syntax-hover')!=='0';
 let sourceSyntaxHoverDelaySeconds=Math.max(1,Math.min(30,Number(localStorage.getItem('md-source-syntax-hover-delay'))||5));
@@ -8690,6 +8746,25 @@ function isChatGptCitationLink(link){
   }catch{}
   return link?.matches?.('[data-citation],[data-source],[class*="citation" i],[class*="source" i]')||false;
 }
+const INTERNAL_TABLE_CLIPBOARD_ATTRIBUTE='data-zz-table-copy';
+function internalTablePasteHtml(html){
+  if(!html||!new RegExp(`\\b${INTERNAL_TABLE_CLIPBOARD_ATTRIBUTE}\\b`,'i').test(html))return'';
+  const holder=document.createElement('div');holder.innerHTML=html;
+  const table=holder.querySelector(`table[${INTERNAL_TABLE_CLIPBOARD_ATTRIBUTE}]`);
+  if(!table)return'';
+  holder.querySelectorAll('script,style,meta,link,object,embed').forEach(node=>node.remove());
+  holder.querySelectorAll('*').forEach(node=>{
+    node.removeAttribute(INTERNAL_TABLE_CLIPBOARD_ATTRIBUTE);
+    [...node.attributes].forEach(attribute=>{if(/^on/i.test(attribute.name))node.removeAttribute(attribute.name)});
+  });
+  return table.outerHTML;
+}
+els.preview.addEventListener('paste',e=>{
+  if(e.defaultPrevented||els.preview.querySelector('.table-cell-selected'))return;
+  const cleaned=internalTablePasteHtml(e.clipboardData?.getData('text/html')||'');
+  if(!cleaned)return;
+  e.preventDefault();e.stopImmediatePropagation();insertPreviewHtml(cleaned);
+},true);
 els.preview.addEventListener('paste',e=>{
   const clipboardHtml=e.clipboardData?.getData('text/html')||'';
   if(!clipboardHtml||!/<a\b/i.test(clipboardHtml))return;
@@ -8716,29 +8791,26 @@ els.preview.addEventListener('paste',e=>{
   holder.querySelectorAll('*').forEach(node=>{
     [...node.attributes].forEach(attribute=>{if(/^on/i.test(attribute.name))node.removeAttribute(attribute.name)});
   });
+  const cleaned=pastedHtmlWithoutForeignFormatting(holder.innerHTML,{preserveSourceChips:true});
   e.preventDefault();
   e.stopImmediatePropagation();
-  insertPreviewHtml(holder.innerHTML);
+  insertPreviewHtml(cleaned);
 },true);
-function pastedHtmlWithoutForeignFormatting(html){
+function pastedHtmlWithoutForeignFormatting(html,{preserveSourceChips=false}={}){
   const holder=document.createElement('div');holder.innerHTML=String(html||'');
   holder.querySelectorAll('script,style,meta,link,object,embed').forEach(node=>node.remove());
   holder.querySelectorAll('*').forEach(node=>{
-    ['face','font-family','data-mce-style','color','bgcolor'].forEach(attribute=>node.removeAttribute(attribute));
-    ['font','font-family','font-size','font-stretch','font-style','font-variant','font-weight','line-height','letter-spacing','color','background','background-color','text-shadow'].forEach(property=>node.style?.removeProperty(property));
-    // External classes can reapply the same visual formatting through the
-    // current page's styles. Keep structure/links but inherit this document's
-    // typography and colors.
-    node.removeAttribute('class');
-    [...node.attributes].forEach(attribute=>{if(/^on/i.test(attribute.name))node.removeAttribute(attribute.name)});
-    if(node.hasAttribute('style')&&!node.getAttribute('style')?.trim())node.removeAttribute('style');
+    const keepSourceChip=preserveSourceChips&&node.matches('.zz-source-chip,.zz-source-chip-label');
+    ['style','face','font-family','data-mce-style','color','bgcolor','align','valign','border','cellpadding','cellspacing','height','width'].forEach(attribute=>node.removeAttribute(attribute));
+    if(!keepSourceChip)node.removeAttribute('class');
+    [...node.attributes].forEach(attribute=>{if(/^on/i.test(attribute.name)||/^data-(?!source$|citation$)/i.test(attribute.name))node.removeAttribute(attribute.name)});
   });
-  [...holder.querySelectorAll('font')].reverse().forEach(node=>node.replaceWith(...node.childNodes));
+  [...holder.querySelectorAll('font,strong,b,em,i,u,mark,s,del,strike,small,big')].reverse().forEach(node=>node.replaceWith(...node.childNodes));
   return holder.innerHTML;
 }
 function pastedHtmlWithoutFontFamily(html){return pastedHtmlWithoutForeignFormatting(html)}
 els.preview.addEventListener('paste',e=>{
-  if(e.defaultPrevented||selectedCells().length)return;
+  if(e.defaultPrevented||els.preview.querySelector('.table-cell-selected'))return;
   const clipboardHtml=e.clipboardData?.getData('text/html')||'';
   if(!clipboardHtml)return;
   const cleaned=pastedHtmlWithoutForeignFormatting(clipboardHtml);
@@ -8953,7 +9025,11 @@ function stepWholePreviewFontSize(range,delta){
     !node.matches('.line-gutter,.preview-arrival-marker')&&
     !direct.includes(node)
   );
-  const targets=[...direct,...explicit];
+  // Headers use a smaller relative size in the default table theme. Include
+  // them explicitly so a whole-document +/- step changes their visible size
+  // by the same amount as the rest of the selected document.
+  const tableHeaders=[...els.preview.querySelectorAll('table th')].filter(node=>!direct.includes(node)&&!explicit.includes(node));
+  const targets=[...direct,...explicit,...tableHeaders];
   if(!targets.length)return false;
   const sizes=new Map(targets.map(node=>[node,parseFloat(getComputedStyle(node).fontSize)]));
   pushHistory(true);
@@ -9343,7 +9419,7 @@ function defaultPreviewStyleValue(node,styleName){
 }
 function applyStyleToWholeCell(cell,styleName,value){
   cell.style.setProperty(styleName,value);
-  cell.querySelectorAll('span[style],font[style],mark[style]').forEach(node=>removeInlineStyleProperty(node,styleName));
+  cell.querySelectorAll('[style]').forEach(node=>removeInlineStyleProperty(node,styleName));
   if(styleName==='color')cell.querySelectorAll('font[color]').forEach(font=>{font.removeAttribute('color');if(!font.attributes.length)font.replaceWith(...font.childNodes)});
   if(styleName==='background-color')cell.querySelectorAll('mark').forEach(mark=>mark.replaceWith(...mark.childNodes));
 }
@@ -9392,7 +9468,7 @@ function clearTableTextStyle(selection,styleName){
   if(cells.length){
     pushHistory(true);cells.forEach(cell=>{
       removeInlineStyleProperty(cell,styleName);
-      cell.querySelectorAll('span[style],font[style]').forEach(node=>removeInlineStyleProperty(node,styleName));
+      cell.querySelectorAll('[style]').forEach(node=>removeInlineStyleProperty(node,styleName));
       if(styleName==='background-color')cell.querySelectorAll('mark').forEach(mark=>mark.replaceWith(...mark.childNodes));
       if(styleName==='color')cell.querySelectorAll('font[color]').forEach(font=>{font.removeAttribute('color');if(!font.attributes.length)font.replaceWith(...font.childNodes)});
     });
@@ -9575,6 +9651,16 @@ function styleWholePreview(styleName,value){
     node.style[property]=value||'';
     if(!node.getAttribute('style'))node.removeAttribute('style');
     if(value!==''&&value!=null)removeNestedInlineStyle(node,styleName);
+    // Table headers are intentionally a little smaller in the default theme
+    // (`.preview th { font-size: .87em }`). Once the user explicitly applies
+    // a font size to the whole document, however, every table row should use
+    // that requested size instead of silently shrinking the header row.
+    if(styleName==='font-size'&&node.matches('table')){
+      node.querySelectorAll('th').forEach(header=>{
+        if(value!==''&&value!=null)header.style.fontSize='inherit';
+        else removeInlineStyleProperty(header,'font-size');
+      });
+    }
     if(styleName==='background-color'&&(value===''||value==null)){
       node.querySelectorAll('[style]').forEach(child=>removeInlineStyleProperty(child,'background-color'));
       node.querySelectorAll('mark').forEach(mark=>mark.replaceWith(...mark.childNodes));
@@ -11076,10 +11162,10 @@ function confirmPreviewListFormatLoss(){
   return new Promise(resolve=>{
     const wrap=document.createElement('div');wrap.className='modal-backdrop list-format-confirm';
     const english=uiLanguage==='en';
-    wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="list-format-title"><h3 id="list-format-title">${english?'List formatting':'목록 서식'}</h3><p>${english?'Converting this line to a list can remove its current colors and emphasis.':'이 줄을 목록으로 바꾸면 현재 색상과 강조 서식이 제거될 수 있습니다.'}</p><div class="modal-actions"><button class="tool" type="button" data-list-format="remove">${english?'Remove formatting':'서식 제거'}</button><button class="tool" type="button" data-list-format="never">${english?'Do not show again':'다시 보지 않기'}</button><button class="tool primary" type="button" data-list-format="keep">${english?'Keep formatting':'서식 유지'}</button></div></div>`;
+    wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="list-format-title"><h3 id="list-format-title">${english?'List formatting':'목록 서식'}</h3><p>${english?'Converting this line to a list can remove its current colors and emphasis.':'이 줄을 목록으로 바꾸면 현재 색상과 강조 서식이 제거될 수 있습니다.'}</p><div class="list-format-footer"><label class="list-format-remember"><input type="checkbox" data-list-format-remember><span>${english?'Do not show again':'다시 보지 않기'}</span></label><div class="modal-actions"><button class="tool" type="button" data-list-format="remove">${english?'Remove formatting':'서식 제거'}</button><button class="tool primary" type="button" data-list-format="keep">${english?'Keep formatting':'서식 유지'}</button></div></div></div>`;
     const finish=value=>{document.removeEventListener('keydown',onKey);wrap.remove();resolve(value)};
     const onKey=event=>{if(event.key==='Escape')finish(null)};
-    wrap.onclick=event=>{const action=event.target.closest('[data-list-format]')?.dataset.listFormat;if(action)finish(action)};
+    wrap.onclick=event=>{const action=event.target.closest('[data-list-format]')?.dataset.listFormat;if(action)finish({action,remember:wrap.querySelector('[data-list-format-remember]').checked})};
     document.addEventListener('keydown',onKey);document.body.appendChild(wrap);wrap.querySelector('[data-list-format="keep"]').focus();
   });
 }
@@ -11089,8 +11175,10 @@ function cancelPendingPreviewSync(){
   previewSyncIdle=0;
 }
 function previewBlockHasInlineFormatting(block){
-  return block.matches?.('[style*="color"],[style*="background"],[style*="font"],strong,b,em,i,u,mark,code,a,s,del')
-    ||!!block.querySelector('strong,b,em,i,u,span[style],font[color],mark,code,a,s,del,[style*="color"],[style*="font"]');
+  const selector='strong,b,em,i,u,mark,code,a,s,del,font[color],[style*="color"],[style*="background"],[style*="font"],[style*="text-decoration"],[style*="line-height"],[style*="letter-spacing"]';
+  if(block.matches?.(selector)||block.querySelector?.(selector))return true;
+  for(let parent=block.parentElement;parent&&parent!==els.preview;parent=parent.parentElement)if(parent.matches?.(selector))return true;
+  return false;
 }
 function removePreviewTextPrefix(block,count){
   const walker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,{acceptNode(node){
@@ -11305,7 +11393,10 @@ function applyPreviewMarkdown(block){
   const listCandidate=/^\s{0,3}(?:[-+*](?:\s+|$)(?:\S.*)?|\d+\.(?:\s+|$)(?:\S.*)?)$/.test(text);
   let removeListFormatting=false;
   if(listCandidate&&previewBlockHasInlineFormatting(block)){
-    if(!listFormatConfirmEnabled)return applyPreviewListKeepingFormat(block,text);
+    if(!listFormatConfirmEnabled){
+      if(listFormatDefaultAction==='remove'){block.dataset.listFormatAllowed='1';return applyPreviewMarkdown(block)}
+      return applyPreviewListKeepingFormat(block,text);
+    }
     if(block.dataset.listFormatDismissed==='1')return false;
     if(block.dataset.listFormatAllowed!=='1'){
       if(block.dataset.listFormatPending==='1')return true;
@@ -11318,12 +11409,14 @@ function applyPreviewMarkdown(block){
         if(!block.isConnected)return;
         delete block.dataset.listFormatPending;
         if(!choice){block.dataset.listFormatDismissed='1';return}
-        if(choice==='keep'||choice==='never'){
-          if(choice==='never'){
-            listFormatConfirmEnabled=false;
-            localStorage.setItem('md-option-list-format-confirm','0');
-            if($('enable-list-format-confirm'))$('enable-list-format-confirm').checked=false;
-          }
+        if(choice.remember){
+          listFormatConfirmEnabled=false;
+          listFormatDefaultAction=choice.action;
+          localStorage.setItem('md-option-list-format-confirm','0');
+          localStorage.setItem('md-option-list-format-action',choice.action);
+          if($('enable-list-format-confirm'))$('enable-list-format-confirm').checked=false;
+        }
+        if(choice.action==='keep'){
           applyPreviewListKeepingFormat(block,previewBlockPlainText(block));
           return;
         }
@@ -13609,9 +13702,9 @@ const EN_TEXT={
   '직접 입력':'Enter manually','언어 적용':'Apply language','드래그해서 위치 이동':'Drag to move','코드블록 접기':'Collapse code block','코드블록 펼치기':'Expand code block','언어 없음':'No language','코드 블록 위치 이동':'Move code block','표 위치 이동':'Move table','인용 위치 이동':'Move quote','다중 보기':'Multiple views','각주·참고문헌':'Footnotes and bibliography','임베드':'Embed',
   '출처 문구 수정':'Edit source label','이 양식만 드래그해서 이동':'Drag to move only this control','양식 위치 이동':'Move form control','클릭해서 선택 · 드래그해서 위치 이동 · 우클릭해서 변경':'Click to select · drag to move · right-click to edit','왼쪽 손잡이로 이 양식만 이동':'Use the left handle to move only this control','양식 표시 문구':'Form control label',
   '붙여넣기 실패':'Paste failed','클립보드의 텍스트를 읽을 수 없습니다.':'Could not read text from the clipboard.','제목 없음':'Untitled','문서 맨 아래에 배치':'Place at bottom of document','문서 맨 위에 배치':'Place at top of document','이 블록 위에 배치':'Place above this block','이 글자 위치에 삽입':'Insert at this text position','첫 번째 양식 위치에 배치':'Place at the first form position','이 양식 앞에 배치':'Place before this form','이 양식 뒤에 배치':'Place after this form','고정됨':'Pinned',
-  '올바른 링크 주소를 입력해 주세요.':'Enter a valid link URL.','연결 문서 없음':'No linked documents','이 열 필터 및 정렬':'Filter and sort this column','오름차순 정렬':'Sort ascending','내림차순 정렬':'Sort descending','이 표 필터·정렬 초기화':'Reset filtering and sorting for this table','값 필터':'Value filter','값 검색':'Search values','전체 선택 / 해제':'Select / clear all','(빈 값)':'(Empty)','서식 필터':'Formatting filter','글자색 선택':'Choose text color','배경색 선택':'Choose background color',
+  '올바른 링크 주소를 입력해 주세요.':'Enter a valid link URL.','연결 문서 없음':'No linked documents','이 열 필터 및 정렬':'Filter and sort this column','오름차순 정렬':'Sort ascending','내림차순 정렬':'Sort descending','이 표 필터·정렬 초기화':'Reset filtering and sorting for this table','값 필터':'Value filter','값 검색':'Search values','전체 선택 / 해제':'Select / clear all','(빈 값)':'(Empty)','서식 필터':'Formatting filter','서식 없는 셀만':'Unformatted cells only','굵게, 기울임, 밑줄, 글자색, 배경색이 없는 셀만 표시합니다.':'Show only cells without bold, italic, underline, text color, or background color.','글자색 선택':'Choose text color','배경색 선택':'Choose background color',
   '셀 합치기':'Merge cells','이미 합쳐진 셀이 포함된 범위는 먼저 셀 나누기를 해주세요.':'Split existing merged cells before merging this range.','셀 나누기':'Split cells','선택한 셀을 지정한 행과 열로 나눕니다.':'Split the selected cell into the specified rows and columns.',
-  '전체 선택':'Select all','선택 해제':'Clear selection','선택 셀 잘라내기':'Cut selected cells','선택 셀 복사':'Copy selected cells','선택 셀에 붙여넣기':'Paste into selected cells','선택 셀 내용 지우기':'Clear selected cells','선택 셀 합치기':'Merge selected cells','선택 셀 나누기…':'Split selected cells…','셀 높이를 같게':'Distribute rows evenly','셀 너비를 같게':'Distribute columns evenly','위에 행 추가':'Insert row above','아래에 행 추가':'Insert row below','왼쪽에 열 추가':'Insert column left','오른쪽에 열 추가':'Insert column right','현재 행 삭제':'Delete current row','현재 열 삭제':'Delete current column','표 삭제':'Delete table','표 형태 초기화':'Reset table shape',
+  '전체 선택':'Select all','선택 해제':'Clear selection','선택 셀 잘라내기':'Cut selected cells','선택 셀 복사':'Copy selected cells','선택 셀에 붙여넣기':'Paste into selected cells','선택 셀 내용 지우기':'Clear selected cells','선택 셀 합치기':'Merge selected cells','선택 셀 나누기…':'Split selected cells…','셀 높이를 같게':'Distribute rows evenly','셀 너비를 같게':'Distribute columns evenly','표 잘라내기':'Cut table','표 복사':'Copy table','위에 행 추가':'Insert row above','아래에 행 추가':'Insert row below','왼쪽에 열 추가':'Insert column left','오른쪽에 열 추가':'Insert column right','현재 행 삭제':'Delete current row','현재 열 삭제':'Delete current column','표 삭제':'Delete table','표 형태 초기화':'Reset table shape',
   '잘라내기':'Cut','복사':'Copy','붙여넣기':'Paste','제거':'Remove','삭제':'Delete','순서…':'Order…','수식 변경':'Edit equation','서식 복사':'Copy formatting','서식 붙여넣기':'Paste formatting','서식 제거':'Clear formatting','이미지 대체':'Replace image','이미지 삭제':'Delete image','행 수':'Rows','열 수':'Columns','나누기':'Split','합쳐진 셀을 풀고 다시 나눕니다.':'Unmerge the cell, then split it again.','다른 합쳐진 셀이 있는 표에서는 해당 셀도 먼저 나눠 주세요.':'Split the other merged cells in this table first.','빈틈 없이 직사각형으로 선택한 셀만 합칠 수 있습니다.':'Only a complete rectangular cell selection can be merged.',
   '루트':'Root','단일문서':'Single document','폴더 이름을 입력해 주세요.':'Enter a folder name.','같은 이름의 폴더가 있습니다.':'A folder with that name already exists.','폴더 복제':'Duplicate folder','폴더 이름 변경':'Rename folder','이동할 수 없음':'Cannot move','대상 위치에 같은 이름의 파일 또는 폴더가 있습니다.':'A file or folder with the same name exists at the destination.',
   '업로드된 MD에서 참조를 찾지 못했습니다.':'No references were found in the uploaded Markdown.','문서를 열면 제목과 문단 탐색이 표시됩니다.':'Open a document to browse its headings and paragraphs.','펼치기':'Expand','접기':'Collapse','제목 서식이 없습니다.':'No heading styles.','해시태그':'Hashtags','사용된 해시태그가 없습니다.':'No hashtags used.','해시태그 제거':'Remove hashtag',
@@ -13627,7 +13720,7 @@ const EN_TEXT={
   '스프레드시트 삽입':'Insert spreadsheet','스프레드시트 모듈을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.':'Could not load spreadsheet support. Check your internet connection.','범위 없음':'No range','범위 오류':'Invalid range','A1:F20처럼 올바른 셀 범위를 입력해 주세요.':'Enter a valid cell range such as A1:F20.','편집할 문서를 먼저 열어 주세요.':'Open a document to edit first.','파일명':'File name','저장할 결과 없음':'No result to save','먼저 파일을 병합해 주세요.':'Merge files first.','MD → PDF는 Ctrl+Enter로 변환한 뒤 인쇄 창에서 PDF로 저장해 주세요.':'For MD → PDF, convert with Ctrl+Enter and save as PDF from the print dialog.','사이드바 펼치기':'Expand sidebar','테마 열기':'Open theme','테마 닫기':'Close theme'
   ,'변경할 단축키를 선택한 뒤 새 키 조합을 누르세요.':'Select a shortcut, then press a new key combination.','기본값':'Default','전체 초기화':'Reset all','브라우저 기본 글꼴이 운영체제 기본값과 다르게 설정되어 있습니다.':'The browser default font differs from the operating system default.'
   ,'파일 이름 변경':'Rename file','새 파일 이름':'New file name','변경':'Rename','개별 파일 저장':'Save file','파일 다운로드':'Download file','저장 형식 선택':'Choose a save format','현재 문서를 어떤 형식으로 저장할까요?':'How would you like to save this document?','MD로 저장':'Save as MD','PDF로 저장':'Save as PDF','편집 가능한 마크다운 문서':'Editable Markdown document','인쇄 및 공유용 문서':'Document for printing and sharing',
-  '전체 복원':'Restore all','복원':'Restore',
+  '전체 복원':'Restore all','복원':'Restore','복원 데이터를 확인하는 중…':'Checking recovery data…','투명':'Transparent',
   '화면 테마는 PDF에 적용됩니다.\nMD 파일에는 테마 정보가 저장되지 않습니다.':'The display theme is applied to PDF output.\nTheme information is not saved in MD files.',
   '문서의 제목을 찾아 클릭 가능한 이동 목록을 만듭니다. 제목을 바꾸면 목차도 함께 바뀝니다.':'Creates a clickable navigation list from document headings. The table of contents updates when headings change.','포함할 제목':'Headings to include','큰 제목만 (제목 1-2)':'Major headings only (Heading 1–2)','일반 목차 (제목 2-4)':'Standard contents (Heading 2–4)','모든 제목 (제목 1-6)':'All headings (Heading 1–6)','숫자가 클수록 더 작은 하위 제목까지 포함합니다.':'Higher numbers include smaller nested headings.','항목 방향':'Item direction','세로':'Vertical','가로':'Horizontal','목차 항목이 이어지는 방향을 정합니다.':'Choose the direction in which contents items flow.','목차 모양':'Contents style','세로 목록':'Vertical list','간단한 2열':'Compact two-column','번호와 연결선':'Numbers and connector lines','문서 내용은 바뀌지 않고 목차의 모양만 달라집니다.':'Only the appearance of the contents changes; document content is unchanged.','1, 1.1처럼 번호 붙이기':'Number as 1, 1.1','현재 문서에서 보이는 항목':'Items visible in the current document','이 범위에 해당하는 제목이 없습니다.':'No headings match this range.','적용':'Apply',
   '같은 ID를 사용한 블록은 어느 한 곳을 편집해도 함께 바뀝니다.':'Blocks using the same ID update together when any one is edited.','블록 ID':'Block ID','예: project-summary':'e.g. project-summary','블록 ID를 입력해 주세요.':'Enter a block ID.',
@@ -14926,6 +15019,7 @@ function captureColorTarget(){
   const editorSelection=document.activeElement===els.editor||els.editor.selectionStart!==els.editor.selectionEnd
     ?{start:els.editor.selectionStart,end:els.editor.selectionEnd}
     :state.savedSelection&&state.savedSelection.start!==state.savedSelection.end?{...state.savedSelection}:null;
+  if(!cells.length&&!range&&!editorSelection)return;
   colorTargetSnapshot={cells,range,editorSelection,surface:cells.length||range?'preview':editorSelection?'editor':state.lastInsertionSurface};
 }
 function snapshotTableSelection(){
@@ -14938,6 +15032,7 @@ function restoreColorPreviewRange(){
   if(!range||!els.preview.contains(range.commonAncestorContainer))return;
   state.lastInsertionSurface='preview';
   state.savedPreviewRange=range.cloneRange();
+  const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range.cloneRange());
 }
 function revealAppliedColor(){
   window.getSelection()?.removeAllRanges();
@@ -15407,6 +15502,7 @@ async function removeCustomFont(id){
   applyCustomDocumentFont();
 }
 function serializableWorkspace(){
+  captureActiveFileViewState();
   return{
     savedAt:Date.now(),
     active:state.active,
@@ -15418,7 +15514,8 @@ function serializableWorkspace(){
     files:state.files.map(file=>({
       name:file.name,displayName:file.displayName,path:file.path,dir:file.dir,text:file.text,
       savedText:file.savedText,source:file.source,convertedFromCode:file.convertedFromCode,
-      convertedFromPdf:file.convertedFromPdf,originalName:file.originalName,codeLanguage:file.codeLanguage
+      convertedFromPdf:file.convertedFromPdf,originalName:file.originalName,codeLanguage:file.codeLanguage,
+      viewState:file.viewState
     }))
   };
 }
@@ -15480,6 +15577,7 @@ function applyWorkspaceSnapshot(snapshot){
   lastVersionSignature='';
   setMode('edit',false);
   renderAll({deferPreview:true,visibleOnly:true});
+  restoreFileViewState(state.files[state.active]);
   updateUndoRedoButtons();
   return true;
 }
