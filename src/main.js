@@ -306,7 +306,14 @@ function imageKeyVariants(value){
   const base=decoded.split('/').pop();
   return [...new Set([raw,decoded,encoded,base,encodeURI(base||''),decoded.toLowerCase(),(base||'').toLowerCase()].filter(Boolean))];
 }
-function addImage(f){const path=pathOf(f),url=URL.createObjectURL(f),parts=path.split('/');[path,f.name,...parts.map((_,i)=>parts.slice(i).join('/'))].flatMap(imageKeyVariants).forEach(k=>{if(k&&!state.images[k])state.images[k]=url})}
+const imageObjectUrls=new WeakMap();
+function imageObjectUrl(file){
+  if(!file||!['object','function'].includes(typeof file))return'';
+  let url=imageObjectUrls.get(file);
+  if(!url){url=URL.createObjectURL(file);imageObjectUrls.set(file,url)}
+  return url;
+}
+function addImage(f){const path=pathOf(f),url=imageObjectUrl(f),parts=path.split('/');[path,f.name,...parts.map((_,i)=>parts.slice(i).join('/'))].flatMap(imageKeyVariants).forEach(k=>{if(k&&!state.images[k])state.images[k]=url})}
 function uniqueImageAssetPath(name){
   const safeName=String(name||'image').split(/[\\/]/).pop()||'image';
   const dot=safeName.lastIndexOf('.'),stem=dot>0?safeName.slice(0,dot):safeName,extension=dot>0?safeName.slice(dot):'';
@@ -1525,7 +1532,14 @@ function hideUniqueBlockContextMenu(){
 }
 function uniqueBlockSource(block){
   const encoded=block?.dataset.lensSource||block?.dataset.calloutSource||block?.dataset.syncSource||block?.dataset.tocSource||block?.dataset.embedSource||'';
-  if(!encoded)return'';
+  if(!encoded){
+    if(block?.matches?.('.code-block')){
+      const host=document.createElement('div');host.appendChild(block.cloneNode(true));
+      cleanPreviewHtml(host);
+      return serializePreviewHtml(host);
+    }
+    return'';
+  }
   try{return decodeURIComponent(encoded)}catch{return''}
 }
 function encodeUniqueTitleAttribute(value){
@@ -1588,6 +1602,7 @@ async function copyUniqueBlock(block){
 function replaceUniqueBlock(block,text=''){
   if(!block||!els.preview.contains(block))return false;
   pushHistory(true);
+  if(clickMoveElement===block)clickMoveElement=null;
   block.replaceWith(document.createTextNode(text));
   syncFromPreview();
   renderMarkdown(els.editor.value);
@@ -1612,6 +1627,7 @@ function ensureUniqueBlockContextMenu(){
   uniqueBlockContextMenu.innerHTML=`
     <button type="button" data-unique-block-action="order">순서…</button>
     <hr data-unique-toc-only>
+    <button type="button" data-unique-block-action="move">이동…</button>
     <button type="button" data-unique-block-action="cut">잘라내기</button>
     <button type="button" data-unique-block-action="copy">복사</button>
     <button type="button" data-unique-block-action="paste">붙여넣기</button>
@@ -1624,6 +1640,13 @@ function ensureUniqueBlockContextMenu(){
     if(!action||!block||!els.preview.contains(block))return;
     hideUniqueBlockContextMenu();
     if(action==='order')await editZzTocBlock(block);
+    else if(action==='move'){
+      clearClickMove();
+      clickMoveElement=block;
+      block.classList.add('move-selected');
+      block.setAttribute('aria-selected','true');
+      setStatus(uiLanguage==='en'?'Click where you want to move the selected block.':'선택한 블록을 옮길 위치를 클릭하세요.');
+    }
     else if(action==='copy')await copyUniqueBlock(block);
     else if(action==='cut'){
       if(await copyUniqueBlock(block))replaceUniqueBlock(block);
@@ -1644,6 +1667,9 @@ function showUniqueBlockContextMenu(e,block){
   e.stopPropagation();
   e.stopImmediatePropagation();
   clearClickMove();
+  clickMoveElement=block;
+  block.classList.add('move-selected');
+  block.setAttribute('aria-selected','true');
   hideImageContextMenu();
   hideMathContextMenu();
   const menu=ensureUniqueBlockContextMenu();
@@ -1662,7 +1688,7 @@ function replacePreviewImage(image,file){
   if(!image||!els.preview.contains(image)||!file||!imageExt.test(file.name))return false;
   pushHistory(true);
   const path=pathOf(file);
-  const url=URL.createObjectURL(file);
+  const url=imageObjectUrl(file);
   const parts=path.split('/');
   [path,file.name,...parts.map((_,i)=>parts.slice(i).join('/'))]
     .flatMap(imageKeyVariants)
@@ -1856,7 +1882,7 @@ document.addEventListener('contextmenu',e=>{
     return;
   }
   if(showTextContextMenu(e))return;
-  const uniqueBlock=e.target.closest('#preview .zz-lens[data-lens-source],#preview .obsidian-callout[data-callout-source],#preview .zz-sync-block[data-sync-source],#preview .zz-toc[data-toc-source]');
+  const uniqueBlock=e.target.closest('#preview .code-block,#preview .zz-lens[data-lens-source],#preview .obsidian-callout[data-callout-source],#preview .zz-sync-block[data-sync-source],#preview .zz-toc[data-toc-source]');
   if(uniqueBlock){
     showUniqueBlockContextMenu(e,uniqueBlock);
     return;
@@ -3307,10 +3333,30 @@ document.addEventListener('pointercancel',finishTableResize);
   }
   function cellPoint(cell){
     const table=cell?.closest('table'),rows=tableCells(table),r=rows.findIndex(row=>row.includes(cell));
-    return table&&r>=0?{table,r,c:rows[r].indexOf(cell)}:null;
+    return table&&r>=0?{table,r,c:rows[r].indexOf(cell),cell}:null;
+  }
+  function logicalCellSelectionBounds(){
+    if(!cellAnchor||!cellFocus||cellAnchor.table!==cellFocus.table)return null;
+    const layout=tableLogicalLayout(cellAnchor.table);
+    const anchor=cellAnchor.cell?.isConnected?layout.placements.get(cellAnchor.cell):null;
+    const focus=cellFocus.cell?.isConnected?layout.placements.get(cellFocus.cell):null;
+    if(!anchor||!focus)return null;
+    return{
+      layout,
+      r0:Math.min(anchor.r,focus.r),
+      r1:Math.max(anchor.r+anchor.rowSpan-1,focus.r+focus.rowSpan-1),
+      c0:Math.min(anchor.c,focus.c),
+      c1:Math.max(anchor.c+anchor.colSpan-1,focus.c+focus.colSpan-1)
+    };
   }
   function selectedCells(){
     if(!cellAnchor||!cellFocus||cellAnchor.table!==cellFocus.table)return[];
+    const logical=logicalCellSelectionBounds();
+    if(logical){
+      const cells=[];
+      for(let r=logical.r0;r<=logical.r1;r++)for(let c=logical.c0;c<=logical.c1;c++)if(logical.layout.occupied[r]?.[c])cells.push(logical.layout.occupied[r][c]);
+      return [...new Set(cells)];
+    }
     const rows=tableCells(cellAnchor.table),r0=Math.min(cellAnchor.r,cellFocus.r),r1=Math.max(cellAnchor.r,cellFocus.r),c0=Math.min(cellAnchor.c,cellFocus.c),c1=Math.max(cellAnchor.c,cellFocus.c);
     return rows.slice(r0,r1+1).flatMap(row=>row.slice(c0,c1+1));
   }
@@ -3338,12 +3384,14 @@ document.addEventListener('pointercancel',finishTableResize);
   });
   function setCellSelection(anchor,focus=anchor){cellAnchor=cellPoint(anchor);cellFocus=cellPoint(focus);selectedTable=null;els.preview.querySelectorAll('.table-selected').forEach(t=>t.classList.remove('table-selected'));paintCellSelection()}
   function selectAllTableCells(table){
-    const rows=tableCells(table),columnCount=Math.max(0,...rows.map(row=>row.length));
-    if(!rows.length||!columnCount)return false;
+    const layout=tableLogicalLayout(table);
+    if(!layout.rowCount||!layout.columnCount)return false;
+    const first=layout.occupied[0]?.find(Boolean),last=layout.occupied[layout.rowCount-1]?.[layout.columnCount-1];
+    if(!first||!last)return false;
     if(selectedTable){selectedTable.classList.remove('table-selected');selectedTable.removeAttribute('aria-selected')}
     selectedTable=null;
-    cellAnchor={table,r:0,c:0};
-    cellFocus={table,r:rows.length-1,c:columnCount-1};
+    cellAnchor=cellPoint(first);
+    cellFocus=cellPoint(last);
     window.getSelection()?.removeAllRanges();
     state.savedPreviewRange=null;
     paintCellSelection();
@@ -3367,15 +3415,18 @@ document.addEventListener('pointercancel',finishTableResize);
       anchor={...cellAnchor};focus={...cellFocus};table=cellAnchor.table;
     }
     if(!anchor||!focus||!table)return false;
-    const rows=tableCells(table);if(!rows.length)return false;
-    if(key==='ArrowLeft')focus.c=0;
-    else if(key==='ArrowRight')focus.c=Math.max(0,(rows[focus.r]||[]).length-1);
-    else if(key==='ArrowUp')focus.r=0;
-    else if(key==='ArrowDown')focus.r=rows.length-1;
+    const layout=tableLogicalLayout(table);if(!layout.rowCount||!layout.columnCount)return false;
+    const current=focus.cell?layout.placements.get(focus.cell):null;
+    let logicalRow=current?.r??focus.r,logicalColumn=current?.c??focus.c;
+    if(key==='ArrowLeft')logicalColumn=0;
+    else if(key==='ArrowRight')logicalColumn=layout.columnCount-1;
+    else if(key==='ArrowUp')logicalRow=0;
+    else if(key==='ArrowDown')logicalRow=layout.rowCount-1;
     else return false;
-    focus.c=Math.min(focus.c,Math.max(0,(rows[focus.r]||[]).length-1));
-    cellAnchor={table,r:anchor.r,c:anchor.c};
-    cellFocus={table,r:focus.r,c:focus.c};
+    const target=layout.occupied[logicalRow]?.[logicalColumn];
+    if(!target)return false;
+    cellAnchor=anchor.cell?.isConnected?anchor:cellPoint(layout.occupied[anchor.r]?.[anchor.c]);
+    cellFocus=cellPoint(target);
     if(selectedTable){selectedTable.classList.remove('table-selected');selectedTable.removeAttribute('aria-selected');selectedTable=null}
     paintCellSelection();
     window.getSelection()?.removeAllRanges();
@@ -3385,6 +3436,8 @@ document.addEventListener('pointercancel',finishTableResize);
   }
   function cellRangeData(){
     if(!cellAnchor||!cellFocus)return[];
+    const logical=logicalCellSelectionBounds();
+    if(logical)return logical.layout.occupied.slice(logical.r0,logical.r1+1).map(row=>row.slice(logical.c0,logical.c1+1).map(cell=>cell?.innerText.trim()||''));
     const rows=tableCells(cellAnchor.table),r0=Math.min(cellAnchor.r,cellFocus.r),r1=Math.max(cellAnchor.r,cellFocus.r),c0=Math.min(cellAnchor.c,cellFocus.c),c1=Math.max(cellAnchor.c,cellFocus.c);
     return rows.slice(r0,r1+1).map(row=>row.slice(c0,c1+1).map(cell=>cell.innerText.trim()));
   }
@@ -3416,10 +3469,8 @@ document.addEventListener('pointercancel',finishTableResize);
   }
   function mergeCellRange(){
     if(!cellAnchor||!cellFocus)return false;
-    const table=cellAnchor.table,rows=tableCells(table),r0=Math.min(cellAnchor.r,cellFocus.r),r1=Math.max(cellAnchor.r,cellFocus.r),c0=Math.min(cellAnchor.c,cellFocus.c),c1=Math.max(cellAnchor.c,cellFocus.c);
-    if(r0===r1&&c0===c1)return false;
-    const rangeRows=rows.slice(r0,r1+1).map(row=>row.slice(c0,c1+1));
-    const selected=[...new Set(rangeRows.flat())],selectedSet=new Set(selected);
+    const table=cellAnchor.table;
+    const selected=selectedCells(),selectedSet=new Set(selected);
     if(selected.length<2)return false;
     // Map physical cells to their logical grid slots. This lets a cell that
     // already has colspan/rowspan participate in another rectangular merge.
@@ -3560,8 +3611,16 @@ document.addEventListener('pointercancel',finishTableResize);
     return text?text.replace(/\r/g,'').split('\n').filter((row,i,a)=>row||i<a.length-1).map(row=>row.split('\t')):[];
   }
   function overwriteCellRange(data){
-    if(!cellAnchor||!data.length)return false;const rows=tableCells(cellAnchor.table);pushHistory(true);
-    data.forEach((values,ri)=>values.forEach((value,ci)=>{const cell=rows[cellAnchor.r+ri]?.[cellAnchor.c+ci];if(cell)cell.textContent=value}));
+    if(!cellAnchor||!data.length)return false;
+    const layout=tableLogicalLayout(cellAnchor.table),anchor=cellAnchor.cell?layout.placements.get(cellAnchor.cell):null,rows=tableCells(cellAnchor.table);
+    pushHistory(true);
+    const written=new Set();
+    data.forEach((values,ri)=>values.forEach((value,ci)=>{
+      const cell=anchor?layout.occupied[anchor.r+ri]?.[anchor.c+ci]:rows[cellAnchor.r+ri]?.[cellAnchor.c+ci];
+      // A merged cell occupies several logical slots. Do not write it once per
+      // slot and silently leave only the last pasted value.
+      if(cell&&!written.has(cell)){written.add(cell);cell.textContent=value}
+    }));
     syncFromPreview();pushHistory(true);paintCellSelection();els.preview.focus({preventScroll:true});return true;
   }
   function nestTableInCell(data){
@@ -3864,7 +3923,7 @@ document.addEventListener('pointercancel',finishTableResize);
     const cell=e.target.closest('td,th');
     if(cell&&e.button===0){
       if(e.ctrlKey||e.metaKey){
-        if(e.shiftKey&&cellAnchor?.table===table)setCellSelection(tableCells(table)[cellAnchor.r][cellAnchor.c],cell);
+        if(e.shiftKey&&cellAnchor?.table===table)setCellSelection(cellAnchor.cell||tableCells(table)[cellAnchor.r]?.[cellAnchor.c],cell);
         else setCellSelection(cell);
         cellDragging=true;
         e.preventDefault();
@@ -3932,7 +3991,7 @@ document.addEventListener('pointercancel',finishTableResize);
     }
     if(selectedCells().length){
       if((e.key==='Delete'||e.key==='Backspace')){e.preventDefault();clearCellRange();return}
-      if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='a'&&cellAnchor){e.preventDefault();const rows=tableCells(cellAnchor.table);cellAnchor={table:cellAnchor.table,r:0,c:0};cellFocus={table:cellAnchor.table,r:rows.length-1,c:Math.max(...rows.map(row=>row.length))-1};paintCellSelection();return}
+      if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='a'&&cellAnchor){e.preventDefault();selectAllTableCells(cellAnchor.table);return}
     }
     if(!selectedTable||!els.preview.contains(selectedTable))return;
     if(e.key==='Delete'||e.key==='Backspace'){
@@ -4524,7 +4583,7 @@ function renderSidebarImages(){
   heading.onclick=()=>{state.collapsedSidebarGroups.__images=!group.classList.contains('collapsed');group.classList.toggle('collapsed');scheduleWorkspaceSave()};
   if(!assets.length){const empty=document.createElement('div');empty.className='sidebar-image-empty';empty.textContent='업로드한 이미지가 없습니다.';box.appendChild(empty)}
   assets.forEach(([path,file])=>{
-    const url=state.images[path]||URL.createObjectURL(file);
+    const url=state.images[path]||imageObjectUrl(file);
     const button=document.createElement('button');button.className='file-item sidebar-image-item';button.title=path;
     button.innerHTML=`<img src="${htmlEsc(url)}" alt=""><span><b>${htmlEsc(path.split('/').pop())}</b><small>${htmlEsc(path)}</small></span>`;
     button.oncontextmenu=event=>showSidebarImageMenu(event,path,file);
@@ -5524,6 +5583,7 @@ function renderPreviewLineNumbers(){
   els.previewLineGutter.scrollTop=els.preview.scrollTop;
 }
 function schedulePreviewLineNumbers(){
+  if(!els.previewLineGutter||!document.querySelector('.preview-box')?.classList.contains('show-lines'))return;
   if(previewLineNumberFrame)return;
   previewLineNumberFrame=requestAnimationFrame(renderPreviewLineNumbers);
 }
@@ -5536,7 +5596,7 @@ function updateLineNumbers(){
     lastEditorLineNumberCount=count;
   }
   els.lineGutter.scrollTop=els.editor.scrollTop;
-  schedulePreviewLineNumbers();
+  if(document.querySelector('.preview-box')?.classList.contains('show-lines'))schedulePreviewLineNumbers();
   scheduleMarkdownHighlight();
 }
 function setLineNumbers(on){
@@ -5717,6 +5777,11 @@ function pushHistory(force=false){
   const commit=()=>{
     state.historyTimer=null;
     const v=els.editor.value;
+    // Debounced preview/source syncs frequently arrive after a forced history
+    // checkpoint with the exact same content. Recomputing a DOM Range for that
+    // duplicate snapshot is wasted work on large documents. Forced checkpoints
+    // still refresh their location because undo must restore the latest caret.
+    if(!force&&state.history[state.history.length-1]===v){updateUndoRedoButtons();return}
     historyLocations.set(v,captureHistoryLocation());
     if(state.history[state.history.length-1]!==v){state.history.push(v);trimHistoryBudget();state.future=[]}
     updateUndoRedoButtons();
@@ -5735,10 +5800,14 @@ function scheduleEditorRender(text){
 }
 let lineNumberTimer=0;
 function scheduleLineNumbers(){
-  if(els.editor.value.length>80000){
+  const sourceLength=els.editor.value.length;
+  // Counting every newline is linear in the document size. Keep short notes
+  // visually immediate, but coalesce bursts of typing much earlier for lecture
+  // notes and pasted documents so the input event stays cheap.
+  if(sourceLength>20000){
     if(lineNumberFrame){cancelAnimationFrame(lineNumberFrame);lineNumberFrame=0}
     clearTimeout(lineNumberTimer);
-    lineNumberTimer=setTimeout(()=>{lineNumberTimer=0;updateLineNumbers()},220);
+    lineNumberTimer=setTimeout(()=>{lineNumberTimer=0;updateLineNumbers()},Math.min(360,100+Math.floor(sourceLength/40000)*35));
     return;
   }
   clearTimeout(lineNumberTimer);lineNumberTimer=0;
@@ -7655,7 +7724,7 @@ function insertImageFiles(files){
   if(!imgs.length){state.savedSelection=null;return}
   const stored=imgs.map(file=>({file,path:storeImageAsset(file)}));
   const range=previewRange();
-  if(range)insertPreviewHtml(stored.map(({file,path})=>`<img src="${htmlEsc(state.images[path]||URL.createObjectURL(file))}" data-asset-path="${htmlEsc(path)}" alt="${htmlEsc(file.name)}">`).join(''));
+  if(range)insertPreviewHtml(stored.map(({file,path})=>`<img src="${htmlEsc(state.images[path]||imageObjectUrl(file))}" data-asset-path="${htmlEsc(path)}" alt="${htmlEsc(file.name)}">`).join(''));
   else{replaceSelection(stored.map(({file,path})=>`![${fileBaseName(file.name)}](${encodeURI(path)})`).join('\n'));renderMarkdown(els.editor.value)}
   renderList();scheduleWorkspaceSave();
 }
@@ -8728,13 +8797,14 @@ $('convert-remove-selected').onclick=removeSelectedConvert;
 $('convert-run-selected').onclick=runSelectedConvert;
 $('convert-edit-selected').onclick=editSelectedConvert;
 $('convert-merge-selected').onclick=mergeSelectedConvert;
-function explicitColorHost(element){
+function explicitInlineFormatHost(element){
   if(!element||element.nodeType!==1)return null;
-  if((element.matches('span')&&element.style.color)||element.matches('font[color]'))return element;
-  const colored=[...element.querySelectorAll('span[style],font[color]')].filter(node=>node.matches('font[color]')||node.style.color);
-  return colored[colored.length-1]||null;
+  const selector='span[style],font[color],strong,b,em,i,u,mark,s,del';
+  if(element.matches(selector))return element;
+  const formatted=[...element.querySelectorAll(selector)];
+  return formatted[formatted.length-1]||null;
 }
-function previousColorHostAtCaret(range){
+function previousInlineFormatHostAtCaret(range){
   if(!range?.collapsed)return null;
   const container=range.startContainer;
   let previous=null;
@@ -8745,9 +8815,9 @@ function previousColorHostAtCaret(range){
     previous=container.childNodes[range.startOffset-1]||null;
   }
   while(previous?.nodeType===3&&!previous.textContent)previous=previous.previousSibling;
-  return explicitColorHost(previous);
+  return explicitInlineFormatHost(previous);
 }
-function inheritPreviewColorBeforeInput(e){
+function inheritPreviewInlineFormatBeforeInput(e){
   // Never move the caret while an IME owns the composition range. Rehoming
   // insertCompositionText cancels Korean input after its first jamo.
   if(!['insertText','insertReplacementText'].includes(e.inputType))return;
@@ -8756,13 +8826,13 @@ function inheritPreviewColorBeforeInput(e){
   const range=selection.getRangeAt(0);
   if(!range.collapsed||!els.preview.contains(range.commonAncestorContainer))return;
   const origin=range.startContainer.nodeType===1?range.startContainer:range.startContainer.parentElement;
-  if(origin?.closest?.('pre,code,.code-head')||origin?.closest?.('span[style*="color"],font[color]'))return;
-  const colorHost=previousColorHostAtCaret(range);
-  if(!colorHost||!els.preview.contains(colorHost))return;
-  if(origin?.closest('td,th')!==colorHost.closest('td,th'))return;
-  if(origin?.closest('p,li,h1,h2,h3,h4,h5,h6')!==colorHost.closest('p,li,h1,h2,h3,h4,h5,h6'))return;
+  if(origin?.closest?.('pre,code,.code-head')||origin?.closest?.('span[style],font[color],strong,b,em,i,u,mark,s,del'))return;
+  const formatHost=previousInlineFormatHostAtCaret(range);
+  if(!formatHost||!els.preview.contains(formatHost))return;
+  if(origin?.closest('td,th')!==formatHost.closest('td,th'))return;
+  if(origin?.closest('p,li,h1,h2,h3,h4,h5,h6')!==formatHost.closest('p,li,h1,h2,h3,h4,h5,h6'))return;
   const next=document.createRange();
-  next.selectNodeContents(colorHost);
+  next.selectNodeContents(formatHost);
   next.collapse(false);
   selection.removeAllRanges();
   selection.addRange(next);
@@ -8774,7 +8844,7 @@ function previewCodeAtSelection(){
   const node=range&&(range.endContainer.nodeType===1?range.endContainer:range.endContainer.parentElement);
   return node?.closest?.('pre code')||activePreviewCodePre?.querySelector('code')||null;
 }
-els.preview.addEventListener('beforeinput',inheritPreviewColorBeforeInput);
+els.preview.addEventListener('beforeinput',inheritPreviewInlineFormatBeforeInput);
 els.preview.addEventListener('beforeinput',e=>{
   if(!['insertParagraph','insertLineBreak'].includes(e.inputType))return;
   const selection=window.getSelection();if(!selection?.rangeCount)return;
@@ -8843,6 +8913,29 @@ els.preview.addEventListener('paste',e=>{
   e.stopImmediatePropagation();
   insertPastedSyncBlock(sync.id,sync.content);
 },true);
+function clipboardImageFiles(clipboardData){
+  if(!clipboardData)return[];
+  const entries=[...clipboardData.items]
+    .filter(item=>item.kind==='file'&&/^image\//i.test(item.type||''))
+    .map(item=>item.getAsFile())
+    .filter(Boolean);
+  const files=entries.length?entries:[...clipboardData.files].filter(file=>/^image\//i.test(file.type||''));
+  const extensions={'image/png':'png','image/jpeg':'jpg','image/gif':'gif','image/webp':'webp','image/svg+xml':'svg','image/bmp':'bmp'};
+  const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+  return files.map((file,index)=>{
+    if(imageExt.test(file.name||''))return file;
+    const extension=extensions[(file.type||'').toLowerCase()]||'png';
+    return new File([file],`pasted-image-${stamp}${index?`-${index+1}`:''}.${extension}`,{type:file.type||`image/${extension}`,lastModified:file.lastModified||Date.now()});
+  });
+}
+els.preview.addEventListener('paste',e=>{
+  if(e.defaultPrevented)return;
+  const images=clipboardImageFiles(e.clipboardData);
+  if(!images.length)return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  insertImageFiles(images);
+},true);
 function isChatGptCitationLink(link){
   const href=link?.getAttribute?.('href')||'';
   try{
@@ -8853,6 +8946,7 @@ function isChatGptCitationLink(link){
 }
 const INTERNAL_TABLE_CLIPBOARD_ATTRIBUTE='data-zz-table-copy';
 const INTERNAL_PREVIEW_CLIPBOARD_ATTRIBUTE='data-zz-preview-copy';
+const INTERNAL_MATH_CLIPBOARD_ATTRIBUTE='data-zz-math-copy';
 function internalPreviewPasteHtml(html){
   if(!html||!new RegExp(`\\b${INTERNAL_PREVIEW_CLIPBOARD_ATTRIBUTE}\\b`,'i').test(html))return'';
   const holder=document.createElement('div');holder.innerHTML=html;
@@ -8861,6 +8955,14 @@ function internalPreviewPasteHtml(html){
   payload.querySelectorAll('script,style,meta,link,object,embed').forEach(node=>node.remove());
   payload.querySelectorAll('*').forEach(node=>{
     [...node.attributes].forEach(attribute=>{if(/^on/i.test(attribute.name))node.removeAttribute(attribute.name)});
+  });
+  payload.querySelectorAll(`[${INTERNAL_MATH_CLIPBOARD_ATTRIBUTE}]`).forEach(node=>{
+    let latex='';
+    try{latex=decodeURIComponent(node.getAttribute(INTERNAL_MATH_CLIPBOARD_ATTRIBUTE)||'')}catch{}
+    if(!latex)return;
+    const display=node.getAttribute('data-display')==='block';
+    const template=document.createElement('template');template.innerHTML=renderMathHtml(latex,display);
+    node.replaceWith(template.content);
   });
   payload.removeAttribute(INTERNAL_PREVIEW_CLIPBOARD_ATTRIBUTE);
   return payload.innerHTML;
@@ -8877,6 +8979,69 @@ function internalTablePasteHtml(html){
   });
   return table.outerHTML;
 }
+function clipboardTableElement(html,plain=''){
+  const holder=document.createElement('div');holder.innerHTML=String(html||'');
+  let table=holder.querySelector('table');
+  if(!table&&/^\s*\|.+\|\s*\r?\n\s*\|(?:\s*:?-{3,}:?\s*\|)+/m.test(String(plain||''))){
+    holder.innerHTML=markdownHtml(String(plain||'')).trim();
+    table=holder.querySelector('table');
+  }
+  if(!table)return null;
+  const clone=table.cloneNode(true);
+  clone.querySelectorAll('script,style,meta,link,object,embed,iframe,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.block-move-handle,.form-move-handle').forEach(node=>node.remove());
+  clone.classList.remove('table-selected','table-cell-range-active','moving-element','move-drop-before','move-drop-after');
+  clone.removeAttribute(INTERNAL_TABLE_CLIPBOARD_ATTRIBUTE);
+  clone.removeAttribute('aria-selected');
+  clone.removeAttribute('data-resize-ready');
+  clone.querySelectorAll('*').forEach(node=>{
+    node.classList.remove('table-cell-selected','cell-overflowing','moving-element','move-drop-before','move-drop-after');
+    if(!node.className)node.removeAttribute('class');
+    node.removeAttribute('contenteditable');
+    node.removeAttribute('aria-selected');
+    [...node.attributes].forEach(attribute=>{
+      if(/^on/i.test(attribute.name)||/^data-(?:base-|resize-|zz-table-copy)/i.test(attribute.name))node.removeAttribute(attribute.name);
+    });
+    const style=node.getAttribute('style')||'';
+    if(/(?:expression\s*\(|url\s*\()/i.test(style))node.removeAttribute('style');
+  });
+  return clone;
+}
+function clipboardHtmlIsOnlyTable(html){
+  const holder=document.createElement('div');holder.innerHTML=String(html||'');
+  holder.querySelectorAll('script,style,meta,link').forEach(node=>node.remove());
+  const tables=holder.querySelectorAll('table');
+  if(tables.length!==1)return false;
+  tables[0].remove();
+  // Empty wrapper elements and clipboard fragment comments are harmless. Any
+  // remaining text/media means this is a document fragment containing a table,
+  // not a table-only paste, so the normal HTML path must keep the whole payload.
+  const text=(holder.textContent||'').replace(/\b(?:StartFragment|EndFragment)\b/gi,'').replace(/[\u200b\u00a0]/g,'').trim();
+  return !text&&!holder.querySelector('img,video,audio,iframe,canvas,svg,hr,pre,code,input,select,button');
+}
+function clipboardPlainIsOnlyMarkdownTable(plain){
+  const lines=String(plain||'').trim().split(/\r?\n/).filter(line=>line.trim());
+  if(lines.length<2||!/^\s*\|.+\|\s*$/.test(lines[0])||!/^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$/.test(lines[1]))return false;
+  return lines.slice(2).every(line=>/^\s*\|.*\|\s*$/.test(line));
+}
+function insertPastedTableBlock(table){
+  const range=previewRange();
+  if(!range||!table)return false;
+  const anchor=previewTopLevelAnchor(range);
+  const exit=document.createElement('p');exit.innerHTML='<br>';
+  pushHistory(true);
+  if(!range.collapsed)range.deleteContents();
+  if(anchor?.parentNode===els.preview){
+    const empty=anchor.matches('p,div')&&!anchor.textContent.replace(/[\u200b\u00a0]/g,'').trim()&&!anchor.querySelector('img,table,hr');
+    if(empty)anchor.replaceWith(table,exit);
+    else anchor.after(table,exit);
+  }else els.preview.append(table,exit);
+  addTableResize(table);
+  addMovableElements(els.preview);
+  syncFromPreview();
+  pushHistory(true);
+  activatePreviewExitTarget(exit,false);
+  return true;
+}
 els.preview.addEventListener('copy',e=>{
   if(e.defaultPrevented||els.preview.querySelector('.table-cell-selected')||els.preview.querySelector('.table-selected'))return;
   const selection=window.getSelection(),range=selection?.rangeCount?selection.getRangeAt(0):null;
@@ -8890,13 +9055,54 @@ els.preview.addEventListener('paste',e=>{
   if(e.defaultPrevented||els.preview.querySelector('.table-cell-selected'))return;
   const cleaned=internalTablePasteHtml(e.clipboardData?.getData('text/html')||'');
   if(!cleaned)return;
-  e.preventDefault();e.stopImmediatePropagation();insertPreviewHtml(cleaned);
+  const holder=document.createElement('div');holder.innerHTML=cleaned;
+  const table=clipboardTableElement(holder.innerHTML,e.clipboardData?.getData('text/plain')||'');
+  if(!table)return;
+  e.preventDefault();e.stopImmediatePropagation();insertPastedTableBlock(table);
+},true);
+els.preview.addEventListener('paste',e=>{
+  if(e.defaultPrevented||els.preview.querySelector('.table-cell-selected'))return;
+  const html=e.clipboardData?.getData('text/html')||'',plain=e.clipboardData?.getData('text/plain')||'';
+  const htmlTable=/<table[\s>]/i.test(html),markdownTable=/^\s*\|.+\|\s*\r?\n\s*\|(?:\s*:?-{3,}:?\s*\|)+/m.test(plain);
+  if(!htmlTable&&!markdownTable)return;
+  if(htmlTable&&!clipboardHtmlIsOnlyTable(html))return;
+  if(!htmlTable&&markdownTable&&!clipboardPlainIsOnlyMarkdownTable(plain))return;
+  const table=clipboardTableElement(html,plain);
+  if(!table)return;
+  e.preventDefault();e.stopImmediatePropagation();insertPastedTableBlock(table);
 },true);
 els.preview.addEventListener('paste',e=>{
   if(e.defaultPrevented||els.preview.querySelector('.table-cell-selected'))return;
   const cleaned=internalPreviewPasteHtml(e.clipboardData?.getData('text/html')||'');
   if(!cleaned)return;
   e.preventDefault();e.stopImmediatePropagation();insertPreviewHtml(cleaned);
+},true);
+function clipboardMathEntries(html,plain=''){
+  const entries=[];
+  if(html){
+    const holder=document.createElement('div');holder.innerHTML=html;
+    const direct=[...holder.querySelectorAll('.zz-math[data-latex],[data-latex]')].filter(node=>!node.parentElement?.closest?.('[data-latex]'));
+    const candidates=direct.length?direct:[...holder.querySelectorAll('annotation[encoding="application/x-tex"],annotation[encoding="application/x-tex; mode=display"]')];
+    candidates.forEach(node=>{
+      const latex=(node.getAttribute?.('data-latex')||node.textContent||'').trim();
+      if(!latex)return;
+      const display=node.getAttribute?.('data-display')==='block'||/mode=display/i.test(node.getAttribute?.('encoding')||'')||!!node.closest?.('math[display="block"],.MathJax_Display,.katex-display');
+      entries.push({latex,display});
+    });
+  }
+  if(entries.length)return entries;
+  const text=String(plain||'').trim();
+  const display=text.match(/^\$\$([\s\S]+)\$\$$/)||text.match(/^\\\[([\s\S]+)\\\]$/);
+  const inline=!display&&(text.match(/^\$([^\n$]+)\$$/)||text.match(/^\\\(([^\n]+)\\\)$/));
+  const match=display||inline;
+  return match?[{latex:match[1].trim(),display:!!display}]:[];
+}
+els.preview.addEventListener('paste',e=>{
+  if(e.defaultPrevented||els.preview.querySelector('.table-cell-selected'))return;
+  const entries=clipboardMathEntries(e.clipboardData?.getData('text/html')||'',e.clipboardData?.getData('text/plain')||'');
+  if(!entries.length)return;
+  e.preventDefault();e.stopImmediatePropagation();
+  insertPreviewHtml(entries.map(entry=>renderMathHtml(entry.latex,entry.display)).join(' '));
 },true);
 els.preview.addEventListener('paste',e=>{
   const clipboardHtml=e.clipboardData?.getData('text/html')||'';
@@ -8997,17 +9203,15 @@ els.preview.addEventListener('input',e=>{
   const closingSyntax=typeof e.data==='string'&&['*','_','`',')'].includes(e.data.slice(-1));
   const correctedBlock=closingSyntax?autoCorrectPreviewAtSelection():null;
   if(correctedBlock&&applyPreviewMarkdown(correctedBlock))return;
-  scheduleSyncFromPreview();
   if(editedCode&&!e.isComposing)scheduleEditableCodeHighlight(editedCode);
-  schedulePreviewMarkdownApply(e.target);
+  if(!schedulePreviewMarkdownApply(e.target))scheduleSyncFromPreview();
 });
 els.preview.addEventListener('compositionend',e=>{
   previewCompositionActive=false;
   if(e.target.closest?.('.zz-source-chip-editing'))return;
   rememberPreviewRange();
-  scheduleSyncFromPreview();
   scheduleEditableCodeHighlight(previewCodeAtSelection());
-  schedulePreviewMarkdownApply(e.target);
+  if(!schedulePreviewMarkdownApply(e.target))scheduleSyncFromPreview();
 });
 els.preview.addEventListener('mouseup',()=>{rememberPreviewRange();scheduleFormatStateRefresh()});
 els.preview.addEventListener('keyup',()=>{rememberPreviewRange();scheduleFormatStateRefresh()});
@@ -9088,68 +9292,125 @@ function splitScrollAnchors(){
   const source=els.editor.value,children=[...els.preview.children].filter(node=>!node.matches('.line-gutter,.preview-arrival-marker'));
   const layoutKey=`${children.length}:${els.preview.scrollHeight}:${els.preview.clientWidth}`;
   if(scrollAnchorCache?.source===source&&scrollAnchorCache.layoutKey===layoutKey)return scrollAnchorCache.anchors;
-  let line=0,chunks=[];
-  try{
-    chunks=parser.lexer(source).filter(token=>token.raw).map(token=>{
-      const start=line,lines=Math.max(1,(token.raw.match(/\n/g)||[]).length);line+=lines;
-      return{start,end:Math.max(start,line)};
-    });
-  }catch{}
-  if(!chunks.length)chunks=source.split(/\r?\n/).map((_,index)=>({start:index,end:index+1}));
-  const count=Math.min(chunks.length,children.length);
+  const newlineOffsets=[];
+  for(let index=source.indexOf('\n');index>=0;index=source.indexOf('\n',index+1))newlineOffsets.push(index);
+  const lineAtOffset=offset=>{
+    let low=0,high=newlineOffsets.length;
+    while(low<high){const middle=(low+high)>>1;if(newlineOffsets[middle]<offset)low=middle+1;else high=middle}
+    return low;
+  };
   const rootRect=els.preview.getBoundingClientRect(),scrollTop=els.preview.scrollTop;
-  const anchors=Array.from({length:count},(_,index)=>{
-    const rect=children[index].getBoundingClientRect();
-    return{...chunks[index],top:scrollTop+rect.top-rootRect.top,height:Math.max(1,rect.height)};
+  let sourceCursor=0;
+  const anchors=children.map(child=>{
+    const rect=child.getBoundingClientRect(),walker=document.createTreeWalker(child,NodeFilter.SHOW_TEXT);
+    let node,first=-1,last=-1,lastLength=0,failed=0,examined=0;
+    while((node=walker.nextNode())&&examined<24){
+      if(node.parentElement?.closest('.block-move-handle,.unique-block-move-handle,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.img-resize-handle,.katex-html,[aria-hidden="true"]'))continue;
+      const candidate=node.nodeValue.replace(/\u200b/g,'').replace(/\s+/g,' ').trim();
+      if(candidate.replace(/\s/g,'').length<2)continue;
+      examined++;
+      const found=source.indexOf(candidate,last>=0?last+lastLength:sourceCursor);
+      if(found<0){if(++failed>=6&&first<0)break;continue}
+      if(first<0)first=found;
+      last=found;lastLength=candidate.length;failed=0;
+    }
+    let start=null,end=null;
+    if(first>=0){
+      start=lineAtOffset(first);end=Math.max(start+1,lineAtOffset(last+lastLength)+1);
+      sourceCursor=Math.max(sourceCursor,last+lastLength);
+    }
+    return{start,end,top:scrollTop+rect.top-rootRect.top,height:Math.max(1,rect.height)};
   });
+  // Text-free blocks (images, equations, empty paragraphs) cannot be located
+  // by content. Place them between their nearest matched neighbours instead
+  // of shifting every later block by a guessed parser-token index.
+  const totalLines=Math.max(1,newlineOffsets.length+1);
+  for(let index=0;index<anchors.length;){
+    if(anchors[index].start!==null){index++;continue}
+    const runStart=index;
+    while(index<anchors.length&&anchors[index].start===null)index++;
+    const runEnd=index,previous=runStart?((anchors[runStart-1].start+anchors[runStart-1].end)/2):0;
+    const next=runEnd<anchors.length?((anchors[runEnd].start+anchors[runEnd].end)/2):totalLines;
+    for(let cursor=runStart;cursor<runEnd;cursor++){
+      const fraction=(cursor-runStart+1)/(runEnd-runStart+1),line=previous+(next-previous)*fraction;
+      anchors[cursor].start=Math.max(0,line-.5);anchors[cursor].end=Math.min(totalLines,line+.5);
+    }
+  }
   scrollAnchorCache={source,layoutKey,anchors};
   return anchors;
 }
-function scrollAnchorByLine(anchors,line){
-  let low=0,high=anchors.length-1;
-  while(low<=high){const middle=(low+high)>>1;if(anchors[middle].start<=line)low=middle+1;else high=middle-1}
-  return anchors[Math.max(0,Math.min(anchors.length-1,high))];
+function splitScrollPoints(){
+  const anchors=splitScrollAnchors();if(anchors.length<2)return[];
+  const lineHeight=parseFloat(getComputedStyle(els.editor).lineHeight)||24;
+  const editorStart=els.editor.clientHeight/(2*lineHeight),editorEnd=Math.max(editorStart,(els.editor.scrollHeight-els.editor.clientHeight/2)/lineHeight);
+  const previewStart=els.preview.clientHeight/2,previewEnd=Math.max(previewStart,els.preview.scrollHeight-els.preview.clientHeight/2);
+  const points=[{line:editorStart,top:previewStart}];
+  for(const anchor of anchors){
+    const point={line:(anchor.start+anchor.end)/2,top:anchor.top+anchor.height/2};
+    const previous=points[points.length-1];
+    if(point.line>previous.line+.01&&point.top>previous.top+.5&&point.line<editorEnd&&point.top<previewEnd)points.push(point);
+  }
+  const previous=points[points.length-1];
+  if(editorEnd>previous.line+.01&&previewEnd>previous.top+.5)points.push({line:editorEnd,top:previewEnd});
+  return points;
 }
-function scrollAnchorByTop(anchors,top){
-  let low=0,high=anchors.length-1;
-  while(low<=high){const middle=(low+high)>>1;if(anchors[middle].top<=top)low=middle+1;else high=middle-1}
-  return anchors[Math.max(0,Math.min(anchors.length-1,high))];
+function interpolateScrollPoint(points,value,inputKey,outputKey){
+  if(!points.length)return null;
+  if(value<=points[0][inputKey])return points[0][outputKey];
+  for(let index=1;index<points.length;index++){
+    const next=points[index];
+    if(value>next[inputKey])continue;
+    const previous=points[index-1],span=next[inputKey]-previous[inputKey];
+    const fraction=span>0?(value-previous[inputKey])/span:0;
+    return previous[outputKey]+fraction*(next[outputKey]-previous[outputKey]);
+  }
+  return points[points.length-1][outputKey];
 }
 function syncPreviewToEditorAnchor(){
-  const anchors=splitScrollAnchors();if(anchors.length<2)return false;
+  const points=splitScrollPoints();if(points.length<2)return false;
   const lineHeight=parseFloat(getComputedStyle(els.editor).lineHeight)||24;
   const center=(els.editor.scrollTop+els.editor.clientHeight/2)/lineHeight;
-  const anchor=scrollAnchorByLine(anchors,center);
-  const fraction=Math.max(0,Math.min(1,(center-anchor.start)/Math.max(1,anchor.end-anchor.start)));
-  const top=anchor.top+fraction*anchor.height-els.preview.clientHeight/2;
+  const mapped=interpolateScrollPoint(points,center,'line','top');if(mapped===null)return false;
+  const top=mapped-els.preview.clientHeight/2;
   els.preview.scrollTop=Math.max(0,top);return true;
 }
 function syncEditorToPreviewAnchor(){
-  const anchors=splitScrollAnchors();if(anchors.length<2)return false;
+  const points=splitScrollPoints();if(points.length<2)return false;
   const center=els.preview.scrollTop+els.preview.clientHeight/2;
-  const anchor=scrollAnchorByTop(anchors,center);
-  const fraction=Math.max(0,Math.min(1,(center-anchor.top)/anchor.height));
-  const line=anchor.start+fraction*Math.max(1,anchor.end-anchor.start),lineHeight=parseFloat(getComputedStyle(els.editor).lineHeight)||24;
+  const line=interpolateScrollPoint(points,center,'top','line');if(line===null)return false;
+  const lineHeight=parseFloat(getComputedStyle(els.editor).lineHeight)||24;
   els.editor.scrollTop=Math.max(0,line*lineHeight-els.editor.clientHeight/2);return true;
 }
+let expectedEditorScrollTop=null,expectedPreviewScrollTop=null;
+function consumeExpectedScroll(pane){
+  const editorPane=pane===els.editor,expected=editorPane?expectedEditorScrollTop:expectedPreviewScrollTop;
+  if(expected===null)return false;
+  if(editorPane)expectedEditorScrollTop=null;else expectedPreviewScrollTop=null;
+  return Math.abs(pane.scrollTop-expected)<2;
+}
+function rememberSyncedScroll(pane){
+  if(pane===els.editor)expectedEditorScrollTop=pane.scrollTop;else expectedPreviewScrollTop=pane.scrollTop;
+}
 function onEditorScroll(){
-  if(!syncScrollEnabled||syncScrollLock)return;
+  if(consumeExpectedScroll(els.editor)||!syncScrollEnabled||syncScrollLock)return;
   const editor=els.editor,preview=els.preview;
   syncScrollLock=true;
   if(currentEditView()!=='both'||!syncPreviewToEditorAnchor()){
     const ratio=editor.scrollTop/(editor.scrollHeight-editor.clientHeight||1);
     preview.scrollTop=ratio*(preview.scrollHeight-preview.clientHeight);
   }
+  rememberSyncedScroll(preview);
   requestAnimationFrame(()=>{syncScrollLock=false});
 }
 function onPreviewScroll(){
-  if(!syncScrollEnabled||syncScrollLock)return;
+  if(consumeExpectedScroll(els.preview)||!syncScrollEnabled||syncScrollLock)return;
   const editor=els.editor,preview=els.preview;
   syncScrollLock=true;
   if(currentEditView()!=='both'||!syncEditorToPreviewAnchor()){
     const ratio=preview.scrollTop/(preview.scrollHeight-preview.clientHeight||1);
     editor.scrollTop=ratio*(editor.scrollHeight-editor.clientHeight);
   }
+  rememberSyncedScroll(editor);
   requestAnimationFrame(()=>{syncScrollLock=false});
 }
 els.editor.addEventListener('scroll',onEditorScroll);
@@ -9191,11 +9452,29 @@ function hideHeadingMenu(){$('fmt-heading-menu').classList.add('hidden');$('fmt-
 $('fmt-heading-toggle').onmousedown=e=>e.preventDefault();
 $('fmt-heading-toggle').onclick=e=>{e.stopPropagation();$('fmt-heading-menu').classList.contains('hidden')?showHeadingMenu():hideHeadingMenu()};
 $('fmt-heading-menu').addEventListener('click',e=>{const button=e.target.closest('[data-heading]');if(!button)return;applyHeading(button.dataset.heading);hideHeadingMenu()});
+function savedEditorSelectionCoversWholeDocument(){
+  const selection=document.activeElement===els.editor
+    ?{start:els.editor.selectionStart,end:els.editor.selectionEnd}
+    :state.savedSelection;
+  if(!selection||!els.editor.value)return false;
+  return selection.start===0&&selection.end===els.editor.value.length;
+}
 function applyFontSizeInput(){
   const input=$('fmt-size');
   const size=Math.max(6,Math.min(96,Number(input.value)||0));
   if(!size)return;
   input.value=size;
+  // Ctrl+A in the source pane means "the whole document". Applying an
+  // inline <span> around raw Markdown makes repeated size changes fragile and
+  // can prevent block Markdown from rendering. Route it through Preview's
+  // whole-document formatter so 15, 16, 17... continue to work normally.
+  if(savedEditorSelectionCoversWholeDocument()){
+    state.lastInsertionSurface='preview';
+    state.savedSelection=null;
+    styleWholePreview('font-size',`${size}px`);
+    updatePreviewFontSize();
+    return;
+  }
   const math=selectedPreviewMath();
   if(math){styleSelectedMath(math,'font-size',`${size}px`);return}
   if(!stylePreviewSelection('font-size',`${size}px`))styleSpan('font-size',`${size}px`);
@@ -9247,8 +9526,13 @@ function stepFontSize(delta){
   const range=previewRange();
   if(range&&stepWholePreviewFontSize(range,delta))return;
   const input=$('fmt-size');
-  const current=Number(input.value)||14;
-  input.value=Math.max(6,Math.min(96,current+delta));
+  // In a mixed-size selection the input is intentionally blank. Falling back
+  // to 14 made every press of + calculate 15 again, so the control appeared
+  // capped at 15px. Continue from the selection's actual largest size instead.
+  const selectedSizes=range?previewSelectionFontSizes(range):[];
+  const measured=selectedSizes.filter(Number.isFinite);
+  const current=Number(input.value)||(measured.length?Math.max(...measured):14);
+  input.value=Math.max(6,Math.min(96,Math.round(current)+delta));
   applyFontSizeInput();
 }
 function showFontSizeMenu(){
@@ -9384,19 +9668,24 @@ function rememberPreviewRange(){
     state.savedPreviewRange=range.cloneRange();
   }
 }
-function previewSelectionFontSizes(range){
+function previewSelectionFontSizes(range,distinctLimit=Infinity){
   const sizes=[];
+  const distinct=[];
   const add=node=>{
     const el=node?.nodeType===1?node:node?.parentElement;
     if(!el||el.closest('.code-head'))return;
     const size=parseFloat(getComputedStyle(el).fontSize);
-    if(Number.isFinite(size))sizes.push(size);
+    if(Number.isFinite(size)){
+      sizes.push(size);
+      if(!distinct.some(value=>Math.abs(value-size)<=.1))distinct.push(size);
+    }
   };
   if(range.collapsed){
     add(range.startContainer);
     return sizes;
   }
-  const walker=document.createTreeWalker(els.preview,NodeFilter.SHOW_TEXT);
+  const root=range.commonAncestorContainer.nodeType===Node.TEXT_NODE?range.commonAncestorContainer.parentElement:range.commonAncestorContainer;
+  const walker=document.createTreeWalker(root||els.preview,NodeFilter.SHOW_TEXT);
   let node;
   while((node=walker.nextNode())){
     if(!node.textContent||!range.intersectsNode(node))continue;
@@ -9404,6 +9693,7 @@ function previewSelectionFontSizes(range){
     if(node===range.startContainer)start=range.startOffset;
     if(node===range.endContainer)end=range.endOffset;
     if(end>start&&node.textContent.slice(start,end).trim())add(node);
+    if(distinct.length>=distinctLimit)break;
   }
   return sizes;
 }
@@ -9413,7 +9703,7 @@ function updatePreviewFontSize(){
   if(!selection?.rangeCount)return;
   const range=selection.getRangeAt(0);
   if(!els.preview.contains(range.commonAncestorContainer))return;
-  const sizes=previewSelectionFontSizes(range);
+  const sizes=previewSelectionFontSizes(range,2);
   if(!sizes.length)return;
   const first=sizes[0];
   const input=$('fmt-size');
@@ -9434,9 +9724,16 @@ function localizeFontSizeControl(){
   const size=input.value||input.title.match(/(\d+(?:\.\d+)?)px/)?.[1];
   input.title=mixed?(uiLanguage==='en'?'The selected text uses different font sizes.':'선택한 글씨 크기가 서로 다릅니다.'):(size?(uiLanguage==='en'?`Selected font size: ${size}px`:`선택 글씨 크기: ${size}px`):(uiLanguage==='en'?'Font size (px)':'글씨 크기(px)'));
 }
+let rememberPreviewPointFrame=0;
 function rememberPreviewPoint(e){
   if(!els.preview.contains(e.target))return;
-  requestAnimationFrame(()=>{rememberPreviewRange();updatePreviewFontSize();updatePreviewLineHeight()});
+  if(rememberPreviewPointFrame)return;
+  rememberPreviewPointFrame=requestAnimationFrame(()=>{
+    rememberPreviewPointFrame=0;
+    rememberPreviewRange();
+    updatePreviewLineHeight();
+    scheduleFormatStateRefresh();
+  });
 }
 function updatePreviewLineHeight(){
   if($('fmt-line-height-combo').contains(document.activeElement))return;
@@ -10045,6 +10342,13 @@ function restoreTextContextRange(){
 function previewSelectionClipboardData(range){
   const host=document.createElement('div');
   host.appendChild(range.cloneContents());
+  host.querySelectorAll('.zz-math[data-latex]').forEach(math=>{
+    const placeholder=document.createElement('span');
+    placeholder.setAttribute(INTERNAL_MATH_CLIPBOARD_ATTRIBUTE,encodeURIComponent(math.dataset.latex||''));
+    placeholder.setAttribute('data-display',math.dataset.display==='block'?'block':'inline');
+    placeholder.textContent=previewMathSyntax(math);
+    math.replaceWith(placeholder);
+  });
   cleanPreviewHtml(host);
   const payload=document.createElement('div');
   payload.setAttribute(INTERNAL_PREVIEW_CLIPBOARD_ATTRIBUTE,'1');
@@ -10289,13 +10593,8 @@ function stripSelectedCopiedTextFormatting(fragment,fields){
 }
 function applyAllPreviewBoldMarkup(root){
   if(!previewMarkdownEnabled||!root)return false;
-  let changed=false;
-  for(let guard=0;guard<100;guard++){
-    const text=previewBlockPlainText(root);
-    if(!applyPreviewBoldMarkup(root,text.length))break;
-    changed=true;
-  }
-  return changed;
+  const text=previewBlockPlainText(root);
+  return applyPreviewBoldMarkup(root,text.length,true)>0;
 }
 function pastePreviewSelectionFormat(){
   if(!copiedTextFormat)return false;
@@ -11529,11 +11828,28 @@ function applyPreviewListKeepingFormat(block,text){
   rememberPreviewRange();syncFromPreview();pushHistory(true);
   return true;
 }
-function applyPreviewStructuralMarkdown(block,text,removeListFormatting=false){
+function applyPreviewStructuralMarkdown(block,text,removeListFormatting=false,caretOffset=text.length){
   const listMarker=previewListMarker(text);
   if(listMarker&&!text.slice(listMarker.length).trim()){
     if(removeListFormatting)block.replaceChildren(document.createTextNode(text));
     return applyPreviewListKeepingFormat(block,text);
+  }
+  const heading=text.match(/^(\s{0,3})(#{1,6})\s+(.+)$/);
+  if(heading){
+    const prefixLength=heading[1].length+heading[2].length+text.slice(heading[1].length+heading[2].length).match(/^\s+/)[0].length;
+    pushHistory(true);
+    removePreviewTextPrefix(block,prefixLength);
+    const target=document.createElement(`h${heading[2].length}`);
+    if(block.getAttribute('style'))target.setAttribute('style',block.getAttribute('style'));
+    while(block.firstChild)target.appendChild(block.firstChild);
+    block.replaceWith(target);
+    mergeEquivalentPreviewSpans(target);
+    placeCaretAtPreviewTextOffset(target,Math.max(0,caretOffset-prefixLength));
+    addMovableElements(els.preview);
+    rememberPreviewRange();
+    syncFromPreview();
+    pushHistory(true);
+    return true;
   }
   if(/^\s*---\s*$/.test(text)){
     const rule=document.createElement('hr');
@@ -11550,7 +11866,7 @@ function applyPreviewStructuralMarkdown(block,text,removeListFormatting=false){
   }
   return false;
 }
-function applyPreviewBoldMarkup(block,caretOffset){
+function applyPreviewBoldMarkup(block,caretOffset,all=false){
   const walker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,{acceptNode(node){
     return node.parentElement?.closest('.block-move-handle,.code-head,pre,code')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;
   }});
@@ -11562,10 +11878,7 @@ function applyPreviewBoldMarkup(block,caretOffset){
     entries.push({node,start,end:text.length});
   }
   const matches=[...text.matchAll(/\*\*(?!\s)([^\n]*?\S)\*\*/g)].filter(match=>match.index+match[0].length<=caretOffset);
-  const match=matches[matches.length-1];
-  if(!match)return false;
-  const openStart=match.index,openEnd=openStart+2;
-  const closeStart=openStart+match[0].length-2,closeEnd=closeStart+2;
+  if(!matches.length)return 0;
   const pointAt=offset=>{
     const entry=entries.find(item=>offset>=item.start&&offset<=item.end);
     return entry?{node:entry.node,offset:Math.max(0,Math.min(entry.node.data.length,offset-entry.start))}:null;
@@ -11580,26 +11893,33 @@ function applyPreviewBoldMarkup(block,caretOffset){
     range.insertNode(marker);
     return true;
   };
-  const closeMarker=document.createComment('md-bold-close');
-  if(!removeMarker(closeStart,closeEnd,closeMarker))return false;
-  const openMarker=document.createComment('md-bold-open');
-  if(!removeMarker(openStart,openEnd,openMarker)){closeMarker.remove();return false}
-  const contentRange=document.createRange();
-  contentRange.setStartAfter(openMarker);
-  contentRange.setEndBefore(closeMarker);
-  const content=contentRange.extractContents();
-  const strong=document.createElement('strong');
-  strong.appendChild(content);
-  closeMarker.before(strong);
-  openMarker.remove();
-  closeMarker.remove();
-  const selection=window.getSelection(),next=document.createRange();
-  next.setStartAfter(strong);
-  next.collapse(true);
-  selection.removeAllRanges();
-  selection.addRange(next);
-  state.savedPreviewRange=next.cloneRange();
-  return true;
+  const targets=all?[...matches].reverse():[matches[matches.length-1]];
+  let applied=0,lastStrong=null;
+  for(const match of targets){
+    const openStart=match.index,openEnd=openStart+2;
+    const closeStart=openStart+match[0].length-2,closeEnd=closeStart+2;
+    const closeMarker=document.createComment('md-bold-close');
+    if(!removeMarker(closeStart,closeEnd,closeMarker))continue;
+    const openMarker=document.createComment('md-bold-open');
+    if(!removeMarker(openStart,openEnd,openMarker)){closeMarker.remove();continue}
+    const contentRange=document.createRange();
+    contentRange.setStartAfter(openMarker);
+    contentRange.setEndBefore(closeMarker);
+    const content=contentRange.extractContents();
+    const strong=document.createElement('strong');
+    strong.appendChild(content);
+    closeMarker.before(strong);
+    openMarker.remove();
+    closeMarker.remove();
+    lastStrong=strong;applied++;
+  }
+  if(lastStrong){
+    const selection=window.getSelection(),next=document.createRange();
+    next.setStartAfter(lastStrong);next.collapse(true);
+    selection.removeAllRanges();selection.addRange(next);
+    state.savedPreviewRange=next.cloneRange();
+  }
+  return applied;
 }
 function wrapPreviewInlineRun(node){
   let top=node||null;
@@ -11720,11 +12040,26 @@ function applyPreviewMarkdown(block){
     }
     delete block.dataset.quoteFormatAllowed;
   }
-  if(applyPreviewStructuralMarkdown(block,text,removeListFormatting))return true;
-  if(applyPreviewBoldMarkup(block,caretOffset)){
+  if(applyPreviewStructuralMarkdown(block,text,removeListFormatting,caretOffset))return true;
+  let boldCaretOffset=caretOffset;
+  // A pasted or already-written sentence can contain several **...** runs.
+  // Convert them in one tree walk instead of rescanning a long paragraph once
+  // per marker, which caused visible pauses on pasted lecture notes.
+  const boldCount=applyPreviewBoldMarkup(block,boldCaretOffset,true);
+  if(boldCount){
+    boldCaretOffset=Math.max(0,boldCaretOffset-boldCount*4);
+    placeCaretAtPreviewTextOffset(block,boldCaretOffset);
     syncFromPreview();
     pushHistory(true);
     return true;
+  }
+  // Rebuilding a formatted block from textContent discards existing color,
+  // size, emphasis, and links. Incremental bold conversion above is safe;
+  // leave every other incomplete Markdown sequence as text until it can be
+  // converted without flattening the block's existing DOM formatting.
+  if(previewBlockHasInlineFormatting(block)){
+    if(correctedSpacing){syncFromPreview();pushHistory(true);return true}
+    return false;
   }
   const renderedCaretOffset=previewMarkdownCaretOffset(text,caretOffset);
   const holder=document.createElement('div');
@@ -11752,7 +12087,7 @@ function applyPreviewMarkdown(block){
   return true;
 }
 function schedulePreviewMarkdownApply(node){
-  if(!previewMarkdownEnabled)return;
+  if(!previewMarkdownEnabled)return false;
   clearTimeout(previewMarkdownTimer);
   const selection=window.getSelection();
   const liveRange=selection?.rangeCount?selection.getRangeAt(0):null;
@@ -11761,10 +12096,10 @@ function schedulePreviewMarkdownApply(node){
   // input.target is the editing root even when typing inside a table.
   // A cell is intentionally excluded from Markdown block conversion; it must
   // not fall back to an unrelated root-level inline run and move the caret.
-  if(caretElement?.closest('table,pre,.code-head'))return;
+  if(caretElement?.closest('table,pre,.code-head'))return false;
   const rootCaret=caretNode===els.preview;
   const directCaretNode=caretNode?.parentNode===els.preview;
-  if(directCaretNode)return;
+  if(directCaretNode)return false;
   if(rootCaret){
     const offset=Math.max(0,liveRange.endOffset-1);
     caretNode=els.preview.childNodes[offset]||els.preview.childNodes[liveRange.endOffset]||null;
@@ -11774,10 +12109,17 @@ function schedulePreviewMarkdownApply(node){
     const direct=[...els.preview.childNodes].reverse().find(item=>item.nodeType===3||(item.nodeType===1&&!item.matches('p,div,li,h1,h2,h3,h4,h5,h6,blockquote,pre,table,hr,.code-block')));
     if(direct)block=wrapPreviewInlineRun(direct);
   }
-  if(!block)return;
+  if(!block)return false;
   if(rootCaret||!liveRange||!block.contains(liveRange.endContainer))placeCaretAtPreviewEnd(block);
+  // A sync queued after the previous pause must not run while the user has
+  // already resumed typing. Let this newest Markdown pass own the next sync.
+  cancelPendingPreviewSync();
   clearTimeout(previewMarkdownTimer);
-  previewMarkdownTimer=setTimeout(()=>applyPreviewMarkdown(block),180);
+  previewMarkdownTimer=setTimeout(()=>{
+    previewMarkdownTimer=null;
+    if(!applyPreviewMarkdown(block))scheduleSyncFromPreview();
+  },180);
+  return true;
 }
 const previewStructuredExitSelector='.code-block,pre,table,blockquote,.zz-lens,.obsidian-callout,.zz-sync-block,.zz-toc,.zz-sheet,.zz-html-embed,.zz-doc-embed,.reference-list,.zz-math-block';
 let activePreviewCodePre=null,activePreviewLens=null,activePreviewStructuredBlock=null;
@@ -11994,8 +12336,21 @@ function exitEmptyPreviewListItem(item){
 }
 function exitPopulatedPreviewListItem(item){
   const list=item?.parentElement;
-  if(!list?.matches?.('ul,ol')||list.parentElement!==els.preview||previewListItemIsEmpty(item))return false;
+  if(!list?.matches?.('ul,ol')||previewListItemIsEmpty(item))return false;
   pushHistory(true);
+  if(list.parentElement!==els.preview){
+    const parentItem=list.parentElement?.closest?.('li');
+    const parentList=parentItem?.parentElement;
+    if(!parentItem||!parentList?.matches?.('ul,ol'))return false;
+    item.remove();
+    parentItem.after(item);
+    if(!list.querySelector(':scope > li'))list.remove();
+    placeCaretInPreviewBlock(item);
+    rememberPreviewRange();
+    syncFromPreview();
+    pushHistory(true);
+    return true;
+  }
   const target=document.createElement('p');
   [...item.childNodes].forEach(node=>{
     if(node.nodeType===Node.ELEMENT_NODE&&node.matches('ul,ol'))return;
@@ -12091,6 +12446,25 @@ function previewRangeSideIsEmpty(block,range,beforeCaret){
   if(beforeCaret)side.setEnd(range.startContainer,range.startOffset);
   else side.setStart(range.endContainer,range.endOffset);
   return !side.toString().replace(/\u200b/g,'').trim();
+}
+function mergeAdjacentPreviewTextBlocks(previous,current,previewScrollTop){
+  const mergeable='p,div,h1,h2,h3,h4,h5,h6,blockquote';
+  if(!previous?.matches?.(mergeable)||!current?.matches?.(mergeable))return false;
+  if(previous.parentElement!==els.preview||current.parentElement!==els.preview)return false;
+  pushHistory(true);
+  const marker=document.createComment('preview-merge-caret');
+  if(previewBlockIsEmpty(previous))previous.replaceChildren();
+  previous.appendChild(marker);
+  while(current.firstChild)previous.appendChild(current.firstChild);
+  current.remove();
+  mergeEquivalentPreviewSpans(previous);
+  const range=document.createRange();range.setStartBefore(marker);range.collapse(true);marker.remove();
+  const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
+  state.savedPreviewRange=range.cloneRange();
+  syncFromPreview();
+  els.preview.scrollTop=previewScrollTop;
+  pushHistory(true);
+  return true;
 }
 function trackPreviewEnterSplitInput(){
   const split=lastPreviewEnterSplit;
@@ -12245,6 +12619,11 @@ function preservePreviewFormatOnDelete(e){
     return exitPopulatedPreviewListItem(emptyListItem);
   }
   const previewScrollTop=els.preview.scrollTop;
+  if(backward&&!previewBlockIsEmpty(block)&&previewRangeSideIsEmpty(block,range,true)&&mergeAdjacentPreviewTextBlocks(block.previousElementSibling,block,previewScrollTop)){
+    e.preventDefault();
+    e.stopPropagation();
+    return true;
+  }
   const split=lastPreviewEnterSplit;
   const mergeSplitBackward=backward&&split?.next===block&&split.previous===block.previousElementSibling&&previewRangeSideIsEmpty(block,range,true);
   const mergeSplitForward=forward&&split?.previous===block&&split.next===block.nextElementSibling&&previewRangeSideIsEmpty(block,range,false);
@@ -12783,29 +13162,33 @@ function insertPreviewTable(rows=2,cols=3){
   // final table styles and resize helpers were applied.
   return insertPreviewHtml(tableInsertHtml(rows,cols));
 }
-function previewFormatElements(range){
-  const elements=[];
-  const add=node=>{
-    const element=node?.nodeType===1?node:node?.parentElement;
-    if(element&&els.preview.contains(element)&&!elements.includes(element))elements.push(element);
-  };
-  if(range.collapsed){add(range.startContainer);return elements}
-  const walker=document.createTreeWalker(els.preview,NodeFilter.SHOW_TEXT);
-  let node;
-  while((node=walker.nextNode())){
-    if(!node.nodeValue?.trim())continue;
-    try{if(range.intersectsNode(node))add(node)}catch{}
-  }
-  if(!elements.length)add(range.commonAncestorContainer);
-  return elements;
-}
 function updatePreviewFormatButtons(range){
-  const elements=previewFormatElements(range);
-  if(!elements.length)return false;
-  const every=predicate=>elements.every(element=>predicate(element,getComputedStyle(element)));
-  const inBold=every((element,style)=>element.closest('strong,b')||style.fontWeight==='bold'||Number(style.fontWeight)>=600);
-  const inItalic=every((element,style)=>element.closest('em,i')||style.fontStyle==='italic'||style.fontStyle==='oblique');
-  const inUnder=every((element,style)=>element.closest('u')||style.textDecorationLine.includes('underline'));
+  let inBold=true,inItalic=true,inUnder=true,found=false,lastElement=null;
+  const inspect=node=>{
+    const element=node?.nodeType===Node.ELEMENT_NODE?node:node?.parentElement;
+    if(!element||!els.preview.contains(element)||element===lastElement)return;
+    lastElement=element;found=true;
+    const style=getComputedStyle(element);
+    inBold&&=!!(element.closest('strong,b')||style.fontWeight==='bold'||Number(style.fontWeight)>=600);
+    inItalic&&=!!(element.closest('em,i')||style.fontStyle==='italic'||style.fontStyle==='oblique');
+    inUnder&&=!!(element.closest('u')||style.textDecorationLine.includes('underline'));
+  };
+  if(range.collapsed)inspect(range.startContainer);
+  else{
+    const root=range.commonAncestorContainer.nodeType===Node.TEXT_NODE?range.commonAncestorContainer.parentElement:range.commonAncestorContainer;
+    const walker=document.createTreeWalker(root||els.preview,NodeFilter.SHOW_TEXT);
+    let node;
+    while((node=walker.nextNode())){
+      if(!node.nodeValue?.trim())continue;
+      try{if(range.intersectsNode(node))inspect(node)}catch{}
+      // These states mean "every selected run has this format". Once each
+      // property has failed, visiting the rest of a large selection cannot
+      // change the toolbar result.
+      if(found&&!inBold&&!inItalic&&!inUnder)break;
+    }
+    if(!found)inspect(range.commonAncestorContainer);
+  }
+  if(!found)return false;
   $('fmt-bold').classList.toggle('active',inBold);
   $('fmt-italic').classList.toggle('active',inItalic);
   $('fmt-underline').classList.toggle('active',inUnder);
@@ -12820,19 +13203,25 @@ function updateFormatButtons(){
     return;
   }
   const v=els.editor.value,s=els.editor.selectionStart,e=els.editor.selectionEnd;
-  const sel=v.slice(s,e),before=v.slice(0,s),after=v.slice(e);
+  // Toolbar state only depends on nearby inline markers. Slicing everything
+  // before and after the caret copied most of a large document on every keyup.
+  const context=4096,before=v.slice(Math.max(0,s-context),s),after=v.slice(e,Math.min(v.length,e+context));
+  const selectedLength=e-s;
+  const sel=selectedLength<=context*2?v.slice(s,e):'';
+  const selectedStart=sel||v.slice(s,Math.min(e,s+32));
+  const selectedEnd=sel||v.slice(Math.max(s,e-32),e);
   // Bold: ** or <strong>
-  const selBoth=sel.startsWith('***')&&sel.endsWith('***')&&sel.length>6;
-  const selBold=selBoth||(sel.startsWith('**')&&sel.endsWith('**')&&sel.length>4)||(sel.startsWith('<strong>')&&sel.endsWith('</strong>'));
+  const selBoth=selectedLength>6&&selectedStart.startsWith('***')&&selectedEnd.endsWith('***');
+  const selBold=selBoth||(selectedLength>4&&selectedStart.startsWith('**')&&selectedEnd.endsWith('**'))||(selectedStart.startsWith('<strong>')&&selectedEnd.endsWith('</strong>'));
   const curBold=/\*\*[^*]*$/.test(before)&&/^[^*]*\*\*/.test(after);
   const inBold=selBold||curBold;
   // Italic: * (single)
-  const selCore=sel.replace(/^\*+/,'').replace(/\*+$/,'').replace(/^<strong>/,'').replace(/<\/strong>$/,'');
-  const selItalic=selBoth||(!sel.startsWith('**')&&sel.startsWith('*')&&sel.endsWith('*')&&sel.length>2);
+  const selCore=sel?sel.replace(/^\*+/,'').replace(/\*+$/,'').replace(/^<strong>/,'').replace(/<\/strong>$/,''):'';
+  const selItalic=selBoth||(selectedLength>2&&!selectedStart.startsWith('**')&&selectedStart.startsWith('*')&&selectedEnd.endsWith('*'));
   const curItalic=(/(?<!\*)\*(?!\*)[^*]*$/.test(before)&&/^[^*]*\*(?!\*)/.test(after))||(/\*\*\*[^*]*$/.test(before)&&/^[^*]*\*\*\*/.test(after));
   const inItalic=selItalic||curItalic;
   // Underline: <u> — also detect when inside ** or <strong>
-  const selUnder=sel.startsWith('<u>')&&sel.endsWith('</u>')||selCore.startsWith('<u>')&&selCore.endsWith('</u>');
+  const selUnder=(selectedStart.startsWith('<u>')&&selectedEnd.endsWith('</u>'))||(!!selCore&&selCore.startsWith('<u>')&&selCore.endsWith('</u>'));
   const lastUOpen=before.lastIndexOf('<u>');
   const firstUClose=after.indexOf('</u>');
   const curUnder=(lastUOpen>=0&&firstUClose>=0&&!before.slice(lastUOpen+3).includes('</u>')&&!after.slice(0,firstUClose).includes('<u>'))||selUnder;
@@ -12869,7 +13258,9 @@ $('fmt-underline').onclick=()=>{
 let formatStateRefreshFrame=0;
 function scheduleFormatStateRefresh(){
   if(formatStateRefreshFrame)return;
-  formatStateRefreshFrame=requestAnimationFrame(()=>{
+  // Selection changes can fire dozens of times while dragging. Toolbar state
+  // does not need a full-document style scan every animation frame.
+  formatStateRefreshFrame=setTimeout(()=>{
     formatStateRefreshFrame=0;
     const selection=window.getSelection();
     const range=selection?.rangeCount?selection.getRangeAt(0):null;
@@ -12877,7 +13268,7 @@ function scheduleFormatStateRefresh(){
       updateFormatButtons();
       updatePreviewFontSize();
     }else if(document.activeElement===els.editor)updateFormatButtons();
-  });
+  },45);
 }
 els.editor.addEventListener('mouseup',scheduleFormatStateRefresh);
 els.editor.addEventListener('keyup',scheduleFormatStateRefresh);
@@ -16143,7 +16534,10 @@ async function insertFilesIntoDocument(fileList){
 }
 $('insert-file-toggle').onclick=()=>$('insert-file-input').click();
 $('insert-file-input').onchange=e=>{insertFilesIntoDocument(e.target.files);e.target.value=''};
-window.addEventListener('pagehide',()=>{captureActiveFileViewState();saveWorkspaceSession()});
+window.addEventListener('pagehide',()=>{
+  if(previewMarkdownTimer||previewSyncTimer||previewSyncIdle)syncFromPreview();
+  captureActiveFileViewState();saveWorkspaceSession();
+});
 syncColorButtons();
 $('fmt-left').onclick=()=>applyAlign('left');$('fmt-center').onclick=()=>applyAlign('center');$('fmt-right').onclick=()=>applyAlign('right');
 $('fmt-table').addEventListener('mousedown',e=>{e.preventDefault();rememberPreviewRange()});
