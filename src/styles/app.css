@@ -3619,11 +3619,12 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
   word-break: break-word !important;
 }
 .print-paged-source .zz-source-chip { max-width:100% !important; white-space:normal !important; overflow-wrap:anywhere !important; }
-.print-paged-source :is(blockquote,pre,.code-block,.zz-lens,.obsidian-callout,.zz-sync-block,.zz-toc) {
+.print-paged-source :is(pre,.code-block,.zz-lens,.obsidian-callout,.zz-sync-block,.zz-toc) {
   max-height: none !important;
   break-inside: auto !important;
   page-break-inside: auto !important;
 }
+.print-paged-source blockquote { max-height: none !important; }
 .print-paged-source :is(img,svg,canvas,video) {
   max-width: 100% !important;
   height: auto !important;
@@ -4832,7 +4833,8 @@ body.dark .cp-swatch { border-color: rgba(255,255,255,.18); }
   }
   .print-root:not(.print-nup-root) .preview pre { page-break-inside: avoid; }
   .print-root:not(.print-nup-root) .preview blockquote {
-    page-break-inside: avoid;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
   }
   .print-root:not(.print-nup-root) .preview table {
     page-break-inside: auto;

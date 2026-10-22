@@ -9200,6 +9200,13 @@ els.preview.addEventListener('input',e=>{
   // Preview serialization and live Markdown conversion can replace/reparent
   // the active text node. Wait until the browser finishes the IME composition.
   if(e.isComposing||previewCompositionActive)return;
+  // Deleting the last character of a quote leaves its blockquote border in the
+  // DOM even though no quote content remains. Turn it back into a normal empty
+  // paragraph immediately so a tiny quote rail is not left beside the caret.
+  if(replaceEmptyPreviewQuoteAtSelection()){
+    scheduleSyncFromPreview();
+    return;
+  }
   const closingSyntax=typeof e.data==='string'&&['*','_','`',')'].includes(e.data.slice(-1));
   const correctedBlock=closingSyntax?autoCorrectPreviewAtSelection():null;
   if(correctedBlock&&applyPreviewMarkdown(correctedBlock))return;
@@ -9210,6 +9217,10 @@ els.preview.addEventListener('compositionend',e=>{
   previewCompositionActive=false;
   if(e.target.closest?.('.zz-source-chip-editing'))return;
   rememberPreviewRange();
+  if(replaceEmptyPreviewQuoteAtSelection()){
+    scheduleSyncFromPreview();
+    return;
+  }
   scheduleEditableCodeHighlight(previewCodeAtSelection());
   if(!schedulePreviewMarkdownApply(e.target))scheduleSyncFromPreview();
 });
@@ -9670,30 +9681,38 @@ function rememberPreviewRange(){
 }
 function previewSelectionFontSizes(range,distinctLimit=Infinity){
   const sizes=[];
-  const distinct=[];
+  const contextSizes=new Map();
+  const contextKey=element=>{
+    const parts=[];
+    for(let current=element;current&&current!==els.preview;current=current.parentElement){
+      const className=typeof current.className==='string'?current.className:'';
+      parts.push(`${current.tagName}#${current.id||''}.${className}|${current.style?.fontSize||''}|${current.getAttribute?.('size')||''}`);
+    }
+    return parts.join('>');
+  };
   const add=node=>{
     const el=node?.nodeType===1?node:node?.parentElement;
     if(!el||el.closest('.code-head'))return;
-    const size=parseFloat(getComputedStyle(el).fontSize);
-    if(Number.isFinite(size)){
-      sizes.push(size);
-      if(!distinct.some(value=>Math.abs(value-size)<=.1))distinct.push(size);
-    }
+    const key=contextKey(el);
+    let size=contextSizes.get(key);
+    if(size===undefined){size=parseFloat(getComputedStyle(el).fontSize);contextSizes.set(key,size)}
+    if(Number.isFinite(size)&&!sizes.some(value=>Math.abs(value-size)<=.1))sizes.push(size);
   };
   if(range.collapsed){
     add(range.startContainer);
     return sizes;
   }
+  const wholePreview=rangeSelectsWholePreview(range);
   const root=range.commonAncestorContainer.nodeType===Node.TEXT_NODE?range.commonAncestorContainer.parentElement:range.commonAncestorContainer;
   const walker=document.createTreeWalker(root||els.preview,NodeFilter.SHOW_TEXT);
   let node;
   while((node=walker.nextNode())){
-    if(!node.textContent||!range.intersectsNode(node))continue;
+    if(!node.textContent||(!wholePreview&&!range.intersectsNode(node)))continue;
     let start=0,end=node.textContent.length;
     if(node===range.startContainer)start=range.startOffset;
     if(node===range.endContainer)end=range.endOffset;
     if(end>start&&node.textContent.slice(start,end).trim())add(node);
-    if(distinct.length>=distinctLimit)break;
+    if(sizes.length>=distinctLimit)break;
   }
   return sizes;
 }
@@ -12440,6 +12459,25 @@ function previewBlockIsEmpty(block){
   clone.querySelectorAll('.block-move-handle,.form-move-handle,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.img-resize-handle').forEach(node=>node.remove());
   return !(clone.textContent||'').replace(/\u200b/g,'').trim()&&!clone.querySelector('img,table,hr,pre');
 }
+function replaceEmptyPreviewQuoteAtSelection(range=previewRange()){
+  if(!range?.collapsed||!els.preview.contains(range.commonAncestorContainer))return false;
+  const origin=range.startContainer.nodeType===Node.ELEMENT_NODE?range.startContainer:range.startContainer.parentElement;
+  let quote=origin?.closest?.('blockquote');
+  if(!quote||!els.preview.contains(quote)||!previewBlockIsEmpty(quote))return false;
+  // Nested empty quotes should disappear as one empty structure rather than
+  // leaving an empty outer rail behind.
+  let parent=quote.parentElement?.closest?.('blockquote');
+  while(parent&&els.preview.contains(parent)&&previewBlockIsEmpty(parent)){
+    quote=parent;
+    parent=quote.parentElement?.closest?.('blockquote');
+  }
+  const paragraph=document.createElement('p');
+  paragraph.appendChild(document.createElement('br'));
+  quote.replaceWith(paragraph);
+  placeCaretInPreviewBlock(paragraph);
+  rememberPreviewRange();
+  return true;
+}
 function previewRangeSideIsEmpty(block,range,beforeCaret){
   const side=document.createRange();
   side.selectNodeContents(block);
@@ -12607,6 +12645,17 @@ function preservePreviewFormatOnDelete(e){
   const block=closestPreviewBlock(range.startContainer);
   if(!block||block.closest('pre,table'))return false;
   const origin=range.startContainer.nodeType===Node.ELEMENT_NODE?range.startContainer:range.startContainer.parentElement;
+  const emptyQuote=origin?.closest?.('blockquote');
+  if(backward&&emptyQuote&&previewBlockIsEmpty(emptyQuote)&&previewBlockIsEmpty(block)&&previewRangeSideIsEmpty(block,range,true)){
+    e.preventDefault();
+    e.stopPropagation();
+    pushHistory(true);
+    if(replaceEmptyPreviewQuoteAtSelection(range)){
+      syncFromPreview();
+      pushHistory(true);
+      return true;
+    }
+  }
   const emptyListItem=origin?.closest?.('li');
   if(backward&&previewListItemIsEmpty(emptyListItem)&&previewRangeSideIsEmpty(emptyListItem,range,true)){
     e.preventDefault();
