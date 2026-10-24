@@ -2236,6 +2236,11 @@ body.dark .tab.active { background: var(--s3); color: var(--t1); }
   word-break: normal;
   pointer-events: none;
 }
+.markdown-editor-layer.source-highlight-disabled .markdown-highlight { display: none; }
+.markdown-editor-layer.source-highlight-disabled textarea {
+  color: var(--t1);
+  -webkit-text-fill-color: currentColor;
+}
 .editor-box textarea::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 .md-syntax { color: #805ad5; font-weight: 600; }
 .md-heading { color: #b86f08; font-weight: 700; }

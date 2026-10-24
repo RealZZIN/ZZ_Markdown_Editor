@@ -306,7 +306,10 @@ function imageKeyVariants(value){
   const base=decoded.split('/').pop();
   return [...new Set([raw,decoded,encoded,base,encodeURI(base||''),decoded.toLowerCase(),(base||'').toLowerCase()].filter(Boolean))];
 }
-const imageObjectUrls=new WeakMap();
+// Blob URLs keep their backing file alive until they are explicitly revoked.
+// A WeakMap cannot be enumerated when an uploaded image is removed, so stale
+// image blobs used to remain in memory for the lifetime of the tab.
+const imageObjectUrls=new Map();
 function imageObjectUrl(file){
   if(!file||!['object','function'].includes(typeof file))return'';
   let url=imageObjectUrls.get(file);
@@ -1068,13 +1071,13 @@ function fixSpanColors(container){
   const isDark=document.body.classList.contains('dark');
   const isCustom=document.body.classList.contains('custom-theme');
   const hasCustomBackground=el=>{
-    for(let node=el;node&&node!==container;node=node.parentElement){
+    for(let node=el;node&&node!==els.preview;node=node.parentElement){
       const style=node.getAttribute?.('style')||'';
       if(/(?:^|;)\s*background(?:-color)?\s*:\s*(?!transparent|initial|inherit|unset|none)(#[0-9a-fA-F]{3,8}|rgb|hsl|[a-z])/i.test(style))return true;
     }
     return false;
   };
-  container.querySelectorAll('[style*="color"]').forEach(el=>{
+  scopedElements(container,'[style*="color"]').forEach(el=>{
     if(hasCustomBackground(el))return;
     const m=(el.getAttribute('style')||'').match(/(?:^|;)\s*color\s*:\s*(#[0-9a-fA-F]{3,8})/i);
     if(!m)return;
@@ -1095,7 +1098,7 @@ function runMermaid(container){
 }
 function runHighlight(container){
   if(!window.hljs)return;
-  container.querySelectorAll('pre code').forEach(block=>{
+  scopedElements(container,'pre code').forEach(block=>{
     const explicitNone=block.hasAttribute('data-code-language')&&!block.dataset.codeLanguage;
     if(explicitNone){
       block.className='hljs';
@@ -1165,7 +1168,7 @@ function applyCodeLanguage(code,value,label){
   code.removeAttribute('data-highlighted');
   const button=code.closest('.code-block')?.querySelector('.code-lang');
   if(button){button.textContent=value?(label||codeLanguageLabel(value)):'\u00a0';button.title=value?`언어: ${label||value}`:'언어 없음'}
-  runHighlight(els.preview);
+  runHighlight(code);
   syncFromPreview();
   pushHistory(true);
 }
@@ -1235,7 +1238,7 @@ function makeMoveHandle(title='드래그해서 위치 이동'){
   return handle;
 }
 function decorateCodeBlocks(container){
-  container.querySelectorAll('pre').forEach(pre=>{
+  scopedElements(container,'pre').forEach(pre=>{
     if(pre.closest('.code-block'))return;
     const code=pre.querySelector('code');
     if(!code)return;
@@ -1248,7 +1251,7 @@ function decorateCodeBlocks(container){
     const main=document.createElement('span');main.className='code-head-main';
     const collapse=document.createElement('button');collapse.type='button';collapse.className='code-collapse';collapse.title='코드블록 접기';collapse.setAttribute('aria-label','코드블록 접기');collapse.setAttribute('aria-expanded','true');collapse.innerHTML='<span class="code-collapse-icon" aria-hidden="true">▾</span>';
     collapse.onclick=e=>{e.preventDefault();e.stopPropagation();const collapsed=wrap.classList.toggle('collapsed');collapse.setAttribute('aria-expanded',String(!collapsed));collapse.setAttribute('aria-label',collapsed?'코드블록 펼치기':'코드블록 접기');collapse.title=collapsed?'코드블록 펼치기':'코드블록 접기'};
-    if(container===els.preview){
+    if(container===els.preview||els.preview.contains(pre)){
       const langButton=document.createElement('button');
       langButton.type='button';
       langButton.className='code-lang';
@@ -1407,7 +1410,7 @@ function persistFormControlState(control){
     });
   }
 }
-let movingElement=null,moveMarker=null,moveGuide=null,moveDropTarget=null,selectedPreviewImage=null;
+let movingElement=null,moveMarker=null,moveGuide=null,moveDropTarget=null,selectedPreviewImage=null,imageResizeHandle=null;
 function selectPreviewImage(image){
   if(selectedPreviewImage&&selectedPreviewImage!==image){
     selectedPreviewImage.classList.remove('img-selected');
@@ -1415,18 +1418,19 @@ function selectPreviewImage(image){
   }
   selectedPreviewImage=image&&els.preview.contains(image)?image:null;
   if(selectedPreviewImage){
+    ensureImageResizeHandle(selectedPreviewImage);
     clearClickMove();
     selectedPreviewImage.classList.add('img-selected');
     selectedPreviewImage.setAttribute('aria-selected','true');
     els.preview.focus({preventScroll:true});
     window.getSelection()?.removeAllRanges();
-  }
+  }else if(imageResizeHandle){imageResizeHandle.remove();imageResizeHandle=null}
 }
 function deleteSelectedPreviewImage(){
   if(!selectedPreviewImage||!els.preview.contains(selectedPreviewImage))return false;
   pushHistory(true);
   const image=selectedPreviewImage;
-  selectedPreviewImage=null;
+  selectPreviewImage(null);
   image.remove();
   syncFromPreview();
   pushHistory(true);
@@ -2537,12 +2541,7 @@ function pasteSelectedPreviewElement(){
   let anchor=clickMoveElement;
   inserted.forEach(node=>{anchor.after(node);anchor=node});
   clearClickMove();
-  fixSpanColors(els.preview);
-  runHighlight(els.preview);
-  decorateCodeBlocks(els.preview);
-  addTableResize(els.preview);
-  addImageResize(els.preview);
-  addMovableElements(els.preview);
+  enhancePreviewRoots(inserted);
   clickMoveElement=anchor.closest?.('.code-block,blockquote,.zz-lens,.obsidian-callout,.zz-sync-block,.zz-toc,.zz-sheet,.zz-html-embed,.zz-doc-embed,.reference-list')||anchor;
   clickMoveElement.classList.add('move-selected');
   clickMoveElement.setAttribute('aria-selected','true');
@@ -2831,7 +2830,7 @@ els.preview.addEventListener('click',e=>{
   if(moved){syncFromPreview();pushHistory(true)}
 },true);
 document.addEventListener('mousedown',e=>{
-  if(selectedPreviewImage&&!e.target.closest('#preview img'))selectPreviewImage(null);
+  if(selectedPreviewImage&&!e.target.closest('#preview img,.img-resize-handle'))selectPreviewImage(null);
 });
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){clearClickMove();selectPreviewImage(null);return}
@@ -2923,18 +2922,30 @@ function tableFilterModel(table){
     const start=i;let end=i+1;
     for(let j=i;j<end;j++)for(const cell of rows[j].cells)end=Math.min(rows.length,Math.max(end,j+cell.rowSpan));
     const groupGrid=grid.slice(start,end);
-    groups.push({rows:rows.slice(start,end),values:groupGrid.map(cells=>cells.map(cell=>{const clone=cell.cloneNode(true);clone.querySelectorAll('button,.block-move-handle,.tbl-resize-handle,.tbl-table-resize-handle').forEach(el=>el.remove());return clone.textContent.trim()})),formats:groupGrid.map(cells=>cells.map(tableCellFormatTraits)),formatColors:groupGrid.map(cells=>cells.map(tableCellFormatColors))});i=end;
+    groups.push({rows:rows.slice(start,end),values:groupGrid.map(cells=>cells.map(tableCellFilterText)),formats:groupGrid.map(cells=>cells.map(tableCellFormatTraits)),formatColors:groupGrid.map(cells=>cells.map(tableCellFormatColors))});i=end;
   }
   return {rows,grid,groups};
 }
+function tableCellFilterText(cell){
+  let text='';
+  const walker=document.createTreeWalker(cell,NodeFilter.SHOW_TEXT,{acceptNode:node=>
+    node.parentElement?.closest('.table-filter-button,.block-move-handle,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle')
+      ?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT
+  });
+  let node;while((node=walker.nextNode()))text+=node.data;
+  return text.trim();
+}
 function tableCellFormatTraits(cell){
-  const nodes=[cell,...cell.querySelectorAll('*')].filter(node=>!node.closest('.table-filter-button,.block-move-handle')),
-    traits=new Set(),hasStyle=predicate=>nodes.some(predicate);
-  if(hasStyle(node=>node.matches('strong,b')||Number(node.style?.fontWeight)>=600))traits.add('bold');
-  if(hasStyle(node=>node.matches('em,i')||node.style?.fontStyle==='italic'))traits.add('italic');
-  if(hasStyle(node=>node.matches('u')||String(node.style?.textDecoration||node.style?.textDecorationLine).includes('underline')))traits.add('underline');
-  if(hasStyle(node=>node.matches('font[color]')||!!node.style?.color))traits.add('color');
-  if(hasStyle(node=>node.matches('mark')||!!node.style?.backgroundColor||!!node.style?.background))traits.add('background');
+  const traits=new Set(),nodes=[cell,...cell.querySelectorAll('strong,b,em,i,u,font[color],mark,[style]')];
+  for(const node of nodes){
+    if(node.closest('.table-filter-button,.block-move-handle'))continue;
+    if(node.matches('strong,b')||Number(node.style?.fontWeight)>=600)traits.add('bold');
+    if(node.matches('em,i')||node.style?.fontStyle==='italic')traits.add('italic');
+    if(node.matches('u')||String(node.style?.textDecoration||node.style?.textDecorationLine).includes('underline'))traits.add('underline');
+    if(node.matches('font[color]')||!!node.style?.color)traits.add('color');
+    if(node.matches('mark')||!!node.style?.backgroundColor||!!node.style?.background)traits.add('background');
+    if(traits.size===5)break;
+  }
   return traits;
 }
 let tableFilterColorContext;
@@ -2947,6 +2958,7 @@ function normalizeTableFilterColor(value){
 }
 function tableCellFormatColors(cell){
   const result={color:new Set(),background:new Set()};
+  if(!cell.matches('font[color],mark,[style*="color"],[style*="background"]')&&!cell.querySelector('font[color],mark,[style*="color"],[style*="background"]'))return result;
   const explicit=(node,trait)=>trait==='color'
     ?node.matches?.('font[color]')||!!node.style?.color
     :node.matches?.('mark')||!!node.style?.backgroundColor||!!node.style?.background;
@@ -2985,12 +2997,17 @@ function installTableFilters(){
 }
 function applyTableFilterView(table){
   const state=tableFilterStates.get(table);if(!state)return;
-  const groups=[...state.groups];
-  if(state.sort)groups.sort((a,b)=>String(a.values[0]?.[state.sort.column]||'').localeCompare(String(b.values[0]?.[state.sort.column]||''),'ko',{numeric:true,sensitivity:'base'})*state.sort.direction);
+  const groups=[...state.groups],filters=[...state.filters],formatFilters=[...state.formatFilters],colorFilters=[...(state.formatColorFilters||new Map())];
+  if(state.sort)groups.sort((a,b)=>String(a.values[0]?.[state.sort.column]||'').localeCompare(String(b.values[0]?.[state.sort.column]||''),uiLanguage==='en'?'en':'ko',{numeric:true,sensitivity:'base'})*state.sort.direction);
+  const reordered=new Map();
   groups.forEach(group=>{
-    const visible=group.values.some((values,rowIndex)=>[...state.filters].every(([column,allowed])=>allowed.has(values[column]||''))&&[...state.formatFilters].every(([column,required])=>[...required].every(trait=>trait==='none'?!group.formats[rowIndex]?.[column]?.size:group.formats[rowIndex]?.[column]?.has(trait)))&&[...(state.formatColorFilters||new Map())].every(([column,required])=>Object.entries(required).every(([trait,colors])=>{const selected=Array.isArray(colors)?colors:colors?[colors]:[];return !selected.length||selected.some(color=>group.formatColors[rowIndex]?.[column]?.[trait]?.has(color))})));
-    group.rows.forEach(row=>{row.hidden=!visible;if(!visible)row.dataset.filterHidden='1';else row.removeAttribute('data-filter-hidden');row.parentElement.appendChild(row)});
+    const visible=group.values.some((values,rowIndex)=>filters.every(([column,allowed])=>allowed.has(values[column]||''))&&formatFilters.every(([column,required])=>[...required].every(trait=>trait==='none'?!group.formats[rowIndex]?.[column]?.size:group.formats[rowIndex]?.[column]?.has(trait)))&&colorFilters.every(([column,required])=>Object.entries(required).every(([trait,colors])=>{const selected=Array.isArray(colors)?colors:colors?[colors]:[];return !selected.length||selected.some(color=>group.formatColors[rowIndex]?.[column]?.[trait]?.has(color))})));
+    group.rows.forEach(row=>{
+      row.hidden=!visible;if(!visible)row.dataset.filterHidden='1';else row.removeAttribute('data-filter-hidden');
+      const parent=row.parentElement,fragment=reordered.get(parent)||document.createDocumentFragment();fragment.appendChild(row);reordered.set(parent,fragment);
+    });
   });
+  reordered.forEach((fragment,parent)=>parent.appendChild(fragment));
   updateTableFilterIndicators(table);
 }
 function updateTableFilterIndicators(table){
@@ -3031,7 +3048,18 @@ function showTableFilterMenu(table,column,button){
   const box=document.createElement('div');box.className='table-filter-values';
   const applySelection=()=>{if(selected.size===values.length)state.filters.delete(column);else state.filters.set(column,new Set(selected));applyTableFilterView(table)};
   const all=document.createElement('button');all.textContent=label('전체 선택 / 해제','Select / clear all');all.onclick=()=>{const checked=selected.size!==values.length;selected.clear();if(checked)values.forEach(value=>selected.add(value));paint();applySelection()};valueBody.append(all,box);
-  const paint=()=>{box.replaceChildren();values.filter(value=>value.toLowerCase().includes(search.value.toLowerCase())).forEach(value=>{const optionLabel=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.checked=selected.has(value);input.onchange=()=>{input.checked?selected.add(value):selected.delete(value);applySelection()};optionLabel.append(input,document.createTextNode(value||label('(빈 값)','(Empty)')));box.appendChild(optionLabel)})};search.oninput=paint;paint();
+  let shownValues=[];
+  const paint=()=>{
+    const query=search.value.toLowerCase();
+    shownValues=values.filter(value=>value.toLowerCase().includes(query));
+    box.innerHTML=shownValues.map((value,index)=>`<label><input type="checkbox" data-filter-value-index="${index}" ${selected.has(value)?'checked':''}><span>${htmlEsc(value||label('(빈 값)','(Empty)'))}</span></label>`).join('');
+  };
+  box.onchange=event=>{
+    const input=event.target.closest?.('input[data-filter-value-index]');if(!input)return;
+    const value=shownValues[Number(input.dataset.filterValueIndex)];if(value===undefined)return;
+    input.checked?selected.add(value):selected.delete(value);applySelection();
+  };
+  search.oninput=paint;paint();
   const formatSection=document.createElement('details');formatSection.className='table-filter-section';const formatSummary=document.createElement('summary');formatSummary.textContent=label('서식 필터','Formatting filter');formatSection.appendChild(formatSummary);
   const formatBody=document.createElement('div');formatBody.className='table-filter-section-body table-filter-format-options';formatSection.appendChild(formatBody);menu.appendChild(formatSection);
   const revealFilterSection=section=>requestAnimationFrame(()=>{reposition();requestAnimationFrame(()=>{if(!menu.isConnected||!section.open)return;const top=section.offsetTop,bottom=top+section.offsetHeight,padding=8;if(top<menu.scrollTop)menu.scrollTo({top:Math.max(0,top-padding),behavior:'smooth'});else if(bottom>menu.scrollTop+menu.clientHeight)menu.scrollTo({top:Math.min(menu.scrollHeight-menu.clientHeight,bottom-menu.clientHeight+padding),behavior:'smooth'})})});
@@ -3295,6 +3323,7 @@ function finishTableResize(e){
 document.addEventListener('pointerup',finishTableResize);
 document.addEventListener('pointercancel',finishTableResize);
 /* ── Table context menu ── */
+let resetTableInteractionState=()=>{};
 (function(){
   let ctx=null,ctxTarget=null,selectedTable=null,copiedTableHtml='',cellAnchor=null,cellFocus=null,cellDragging=false,ctxActionTaken=false;
   function getMenu(){
@@ -3324,6 +3353,12 @@ document.addEventListener('pointercancel',finishTableResize);
       window.getSelection()?.removeAllRanges();
     }
   }
+  resetTableInteractionState=()=>{
+    if(!ctxTarget&&!selectedTable&&!cellAnchor&&!cellFocus&&!cellDragging)return;
+    hideMenu();
+    if(selectedTable){selectedTable.classList.remove('table-selected');selectedTable.removeAttribute('aria-selected')}
+    selectedTable=null;ctxTarget=null;clearCellSelection();
+  };
   function tableCells(table){
     // querySelectorAll('tr') also picks up rows from a table nested in a cell.
     // That makes a selected column's coordinates drift and can make column
@@ -4000,70 +4035,82 @@ document.addEventListener('pointercancel',finishTableResize);
     }
   });
 })();
+let imageResizeEventsInstalled=false;
+function ensureImageResizeHandle(img){
+  if(!img?.isConnected||!els.preview.contains(img))return null;
+  if(!imageResizeHandle){
+    imageResizeHandle=document.createElement('span');
+    imageResizeHandle.className='img-resize-handle';
+    imageResizeHandle.setAttribute('role','button');
+    imageResizeHandle.contentEditable='false';
+  }
+  imageResizeHandle.setAttribute('aria-label',uiLanguage==='en'?'Resize image':'이미지 크기 조절');
+  imageResizeHandle.title=uiLanguage==='en'?'Drag to resize image':'드래그해서 이미지 크기 조절';
+  if(imageResizeHandle.previousElementSibling!==img)img.after(imageResizeHandle);
+  return imageResizeHandle;
+}
+function beginImageResize(img,e,force=false){
+  if(e.button!==0||!img?.isConnected)return;
+  const r=img.getBoundingClientRect(),edgeSize=usesMobileObjectGesture()?40:14;
+  if(!force&&!((r.right-e.clientX<edgeSize)&&(r.bottom-e.clientY<edgeSize)))return;
+  e.preventDefault();e.stopPropagation();selectPreviewImage(img);
+  const startX=e.clientX,startY=e.clientY,startW=r.width,startH=r.height;
+  const maxW=img.parentElement?img.parentElement.clientWidth:els.preview.clientWidth;
+  const pointerId=e.pointerId,captureTarget=e.currentTarget;
+  captureTarget?.setPointerCapture?.(pointerId);pushHistory(true);img.classList.add('img-resizing');
+  const move=ev=>{
+    if(ev.pointerId!==pointerId)return;
+    ev.preventDefault();
+    const dx=ev.clientX-startX,dy=(ev.clientY-startY)*(startW/(startH||startW));
+    const delta=Math.abs(dx)>=Math.abs(dy)?dx:dy,next=Math.max(40,Math.min(maxW,startW+delta));
+    img.style.width=Math.round(next)+'px';img.style.height='auto';
+  };
+  const finish=(ev,save)=>{
+    if(ev.pointerId!==pointerId)return;
+    img.classList.remove('img-resizing');img.style.cursor='';captureTarget?.releasePointerCapture?.(pointerId);
+    document.removeEventListener('pointermove',move);document.removeEventListener('pointerup',up);document.removeEventListener('pointercancel',cancel);
+    if(save){syncFromPreview();pushHistory(true)}
+  };
+  const up=ev=>finish(ev,true),cancel=ev=>finish(ev,false);
+  document.addEventListener('pointermove',move,{passive:false});document.addEventListener('pointerup',up);document.addEventListener('pointercancel',cancel);
+}
+function installImageResizeEvents(){
+  if(imageResizeEventsInstalled)return;
+  imageResizeEventsInstalled=true;
+  els.preview.addEventListener('mousemove',e=>{
+    const img=e.target.closest?.('img.img-resizable');if(!img)return;
+    const r=img.getBoundingClientRect();img.style.cursor=(r.right-e.clientX<14&&r.bottom-e.clientY<14)?'nwse-resize':'default';
+  });
+  els.preview.addEventListener('mouseout',e=>{const img=e.target.closest?.('img.img-resizable');if(img&&!img.contains(e.relatedTarget))img.style.cursor=''});
+  els.preview.addEventListener('pointerdown',e=>{
+    const handle=e.target.closest?.('.img-resize-handle');
+    const img=handle?.previousElementSibling?.matches?.('img')?handle.previousElementSibling:e.target.closest?.('img.img-resizable');
+    if(img)beginImageResize(img,e,!!handle);
+  });
+}
 function addImageResize(root){
-  if(!root||root!==els.preview)return;
-  root.querySelectorAll('img').forEach(img=>{
+  if(!root||(root!==els.preview&&!els.preview.contains(root)))return;
+  installImageResizeEvents();
+  scopedElements(root,'img').forEach(img=>{
     if(img.dataset.resizeReady)return;
-    img.dataset.resizeReady='1';
-    img.classList.add('img-resizable');
-    img.draggable=false;
-    const handle=document.createElement('span');
-    handle.className='img-resize-handle';
-    handle.setAttribute('role','button');
-    handle.setAttribute('aria-label',uiLanguage==='en'?'Resize image':'이미지 크기 조절');
-    handle.title=uiLanguage==='en'?'Drag to resize image':'드래그해서 이미지 크기 조절';
-    handle.contentEditable='false';
-    img.after(handle);
-    let canResize=false;
-    img.addEventListener('mousemove',e=>{
-      const r=img.getBoundingClientRect();
-      canResize=(r.right-e.clientX<14)&&(r.bottom-e.clientY<14);
-      img.style.cursor=canResize?'nwse-resize':'default';
+    img.dataset.resizeReady='1';img.classList.add('img-resizable');img.draggable=false;
+  });
+}
+function enhancePreviewRoots(roots,quoteOnly=false){
+  const elements=[...new Set((Array.isArray(roots)?roots:[roots]).map(node=>node?.nodeType===Node.ELEMENT_NODE?node:node?.parentElement).filter(node=>node&&node!==els.preview&&els.preview.contains(node)))];
+  const scoped=elements.filter(node=>!elements.some(parent=>parent!==node&&parent.contains(node)));
+  if(quoteOnly){
+    scoped.flatMap(root=>scopedElements(root,'blockquote')).forEach(quote=>{
+      if(!quote.querySelector(':scope > .block-move-handle'))quote.appendChild(makeMoveHandle('인용 위치 이동'));
     });
-    img.addEventListener('mouseleave',()=>{img.style.cursor=''});
-    function beginResize(e,force=false){
-      if(e.button!==0)return;
-      const r=img.getBoundingClientRect();
-      const edgeSize=usesMobileObjectGesture()?40:14;
-      const nearEdge=force||((r.right-e.clientX<edgeSize)&&(r.bottom-e.clientY<edgeSize));
-      if(!nearEdge)return;
-      e.preventDefault();
-      e.stopPropagation();
-      selectPreviewImage(img);
-      const startX=e.clientX,startY=e.clientY,startW=r.width,startH=r.height;
-      const maxW=img.parentElement?img.parentElement.clientWidth:root.clientWidth;
-      const pointerId=e.pointerId;
-      e.currentTarget?.setPointerCapture?.(pointerId);
-      pushHistory(true);
-      img.classList.add('img-resizing');
-      function move(ev){
-        if(ev.pointerId!==pointerId)return;
-        ev.preventDefault();
-        const dx=ev.clientX-startX;
-        const dy=(ev.clientY-startY)*(startW/(startH||startW));
-        const delta=Math.abs(dx)>=Math.abs(dy)?dx:dy;
-        const next=Math.max(40,Math.min(maxW,startW+delta));
-        img.style.width=Math.round(next)+'px';
-        img.style.height='auto';
-      }
-      function finish(ev,save=true){
-        if(ev.pointerId!==pointerId)return;
-        img.classList.remove('img-resizing');
-        img.style.cursor='';
-        e.currentTarget?.releasePointerCapture?.(pointerId);
-        document.removeEventListener('pointermove',move);
-        document.removeEventListener('pointerup',up);
-        document.removeEventListener('pointercancel',cancel);
-        if(save){syncFromPreview();pushHistory(true)}
-      }
-      const up=ev=>finish(ev,true);
-      const cancel=ev=>finish(ev,false);
-      document.addEventListener('pointermove',move,{passive:false});
-      document.addEventListener('pointerup',up);
-      document.addEventListener('pointercancel',cancel);
-    }
-    img.addEventListener('pointerdown',e=>beginResize(e,false));
-    handle.addEventListener('pointerdown',e=>beginResize(e,true));
+    return;
+  }
+  scoped.forEach(root=>{
+    fixSpanColors(root);runHighlight(root);decorateCodeBlocks(root);
+    const tables=scopedElements(root,'table');
+    if(tables.some(table=>table.querySelectorAll('th,td').length>1200))installLazyTableResize();
+    tables.filter(table=>table.querySelectorAll('th,td').length<=1200).forEach(table=>addTableResize({querySelectorAll:selector=>selector==='table'?[table]:[]}));
+    addImageResize(root);addMovableElements(root);
   });
 }
 let lastRenderedMarkdownText=null;
@@ -4100,7 +4147,8 @@ function schedulePostRenderEnhancements(text){
     ()=>runHighlight(els.preview),
     ()=>{
       const previewTables=els.preview.querySelectorAll('table');
-      if(previewTables.length>120)installLazyTableResize();
+      const previewCells=els.preview.querySelectorAll('th,td').length;
+      if(previewTables.length>120||previewCells>2000)installLazyTableResize();
       else addTableResize(els.preview);
     },
     ()=>addImageResize(els.preview),
@@ -4144,11 +4192,30 @@ function assignPreviewHeadingAnchors(root){
     heading.id=count?`${base}-${count}`:base;
   });
 }
+function releasePreviewInteractionReferences(){
+  const hadPreviewSelection=!!state.savedPreviewRange||!!textContextRange||!!pendingTextContextRange||!!lastTextContextRange;
+  cancelPreviewLongPress();clearPreviewArrival();clearMoveMarker();clearClickMove();
+  movingElement=null;draggedTocItem=null;tblResizeDrag=null;document.body.classList.remove('table-resizing');
+  selectPreviewImage(null);selectHorizontalRule(null);resetTableInteractionState();
+  hideImageContextMenu();hideMathContextMenu();hideUniqueBlockContextMenu();hideHorizontalRuleContextMenu();hideTextContextMenu();
+  closeSourceSyntaxPopover();activeSourceChipEdit=null;
+  textContextRange=null;pendingTextContextRange=null;lastTextContextRange=null;colorTargetSnapshot=null;
+  state.savedPreviewRange=null;
+  if(state.pendingInsertionContext?.kind==='preview')state.pendingInsertionContext=null;
+  clearTimeout(previewMarkdownTimer);previewMarkdownTimer=null;
+  clearTimeout(editableCodeHighlightTimer);editableCodeHighlightTimer=null;pendingEditableCode=null;
+  if(rememberPreviewPointFrame)cancelAnimationFrame(rememberPreviewPointFrame);rememberPreviewPointFrame=0;
+  if(formatStateRefreshFrame)cancelAnimationFrame(formatStateRefreshFrame);formatStateRefreshFrame=0;
+  // Reading a live Range after a large contenteditable mutation can itself
+  // force an expensive selection/layout reconciliation. The preview is about
+  // to be replaced, so clearing the document selection is both safe and cheap.
+  if(hadPreviewSelection)window.getSelection()?.removeAllRanges();
+  scrollAnchorCache=null;
+}
 function renderMarkdown(text){
   if(state.editingPreview)return;
-  scrollAnchorCache=null;
+  releasePreviewInteractionReferences();
   lastRenderedMarkdownText=text;
-  selectedPreviewImage=null;
   let html='';
   try{html=markdownHtml(text)}catch(error){
     console.error('Markdown render failed',error);
@@ -4491,9 +4558,13 @@ function renderList(){
   renderSidebarImages();
 }
 function rebuildSidebarImageIndex(){
-  const oldUrls=new Set(Object.values(state.images));state.images={};
+  const retainedFiles=new Set([...state.assets].filter(([path])=>imageExt.test(path)).map(([,file])=>file));
+  for(const [file,url] of imageObjectUrls){
+    if(retainedFiles.has(file))continue;
+    URL.revokeObjectURL(url);imageObjectUrls.delete(file);
+  }
+  state.images={};
   state.assets.forEach((file,path)=>{sidebarUploadPaths.set(file,path);if(imageExt.test(path))addImage(file)});
-  oldUrls.forEach(url=>{if(url.startsWith('blob:'))URL.revokeObjectURL(url)});
 }
 function moveSidebarAssets(base,nextBase,root){
   for(const [path,file] of [...state.assets])if((state.assetRoots[path]||'업로드된 파일')===root&&path.startsWith(base+'/')){state.assets.delete(path);const next=nextBase+path.slice(base.length);sidebarUploadPaths.set(file,next);state.assets.set(next,file);delete state.assetRoots[path];state.assetRoots[next]=root}
@@ -5410,7 +5481,7 @@ function updateConvertPreview(){
 function conversionDirectionFor(file){return /\.pdf$/i.test(file?.originalName||file?.name||'')||file?.convertedFromPdf?'pdf-to-md':'md-to-pdf'}
 function renderConvertList(skipPreview=false){if(!els.convertList)return;if(!state.files.length){els.convertList.innerHTML='';if(!skipPreview)updateConvertPreview();return}els.convertList.innerHTML='';state.files.forEach((file,i)=>{const row=document.createElement('label');row.className='convert-item';row.dataset.index=i;const direction=conversionDirectionFor(file);const status=direction==='pdf-to-md'?'PDF → MD 자동 선택':file.convertedFromCode?`${file.codeLanguage||'text'} 코드블록 → MD 준비됨`:'MD → PDF 자동 선택';row.innerHTML=`<input type="checkbox" value="${i}" checked><span><span class="convert-name">${htmlEsc(file.displayName||file.name)}</span><div class="convert-meta">${status} · ${htmlEsc(file.path)}</div></span>`;row.querySelector('input').addEventListener('change',updateConvertPreview);row.addEventListener('mouseenter',showMergePreview);row.addEventListener('mouseleave',scheduleHideMergePreview);row.ondblclick=()=>openFile(i);els.convertList.appendChild(row)});if(!skipPreview)updateConvertPreview()}
 function renderHomeMergeList(){if(!els.homeMergeList)return;const checkedBefore=new Set([...els.homeMergeList.querySelectorAll('input:checked')].map(i=>i.value));const hadChecks=els.homeMergeList.querySelectorAll('input').length>0;els.homeMergeList.innerHTML='';if(state.homeMergeNotice){const note=document.createElement('div');note.className='muted';note.textContent=state.homeMergeNotice;els.homeMergeList.appendChild(note)}if(!state.files.length){const empty=document.createElement('div');empty.className='muted home-merge-empty';empty.textContent='왼쪽에서 MD 파일을 추가하면 여기에 표시됩니다.';els.homeMergeList.appendChild(empty);return}state.files.forEach((file,i)=>{const row=document.createElement('label');row.className='home-merge-item';row.innerHTML=`<input type="checkbox" ${!hadChecks||checkedBefore.has(String(i))?'checked':''} value="${i}"><span>${htmlEsc(file.displayName||file.name)}</span>`;els.homeMergeList.appendChild(row)})}
-function renderAll({forcePreview=false,deferPreview=false,visibleOnly=false}={}){const activeText=state.active>=0?(state.files[state.active]?.text||''):els.editor.value;if(state.active>=0&&els.editor.value!==activeText)els.editor.value=activeText;renderList();if(!visibleOnly||state.mode==='merge')renderMergeList(true);if(!visibleOnly||state.mode==='convert')renderConvertList(true);if(!visibleOnly||!els.home.classList.contains('hidden'))renderHomeMergeList();if(state.mode==='edit'&&(forcePreview||lastRenderedMarkdownText!==activeText)){if(deferPreview)scheduleModePreview('edit');else renderMarkdown(activeText)}if(!visibleOnly||!els.home.classList.contains('hidden'))updateHomeConvert();updateLineNumbers();const activePanel=document.querySelector('.panel.active');if(activePanel?.id==='panel-convert')scheduleModePreview('convert');else if(activePanel?.id==='panel-merge')scheduleModePreview('merge')}
+function renderAll({forcePreview=false,deferPreview=false,visibleOnly=false}={}){const activeText=state.active>=0?(state.files[state.active]?.text||''):els.editor.value;if(state.active>=0&&els.editor.value!==activeText)els.editor.value=activeText;renderList();if(!visibleOnly||state.mode==='merge')renderMergeList(true);if(!visibleOnly||state.mode==='convert')renderConvertList(true);if(!visibleOnly||!els.home.classList.contains('hidden'))renderHomeMergeList();if(state.mode==='edit'&&currentEditView()!=='md'&&(forcePreview||lastRenderedMarkdownText!==activeText)){if(deferPreview)scheduleModePreview('edit');else renderMarkdown(activeText)}if(!visibleOnly||!els.home.classList.contains('hidden'))updateHomeConvert();updateLineNumbers();const activePanel=document.querySelector('.panel.active');if(activePanel?.id==='panel-convert')scheduleModePreview('convert');else if(activePanel?.id==='panel-merge')scheduleModePreview('merge')}
 function updateHomeImageSummary(file){
   if(!els.homeImageSummary)return;
   const target=file||state.files[state.active];
@@ -5515,6 +5586,14 @@ function deferredEditorDelay(text,base,max){
 function renderMarkdownHighlight(text=els.editor.value){
   if(!els.markdownHighlight)return;
   const source=String(text||'');
+  const layer=els.editor.closest('.markdown-editor-layer');
+  const plainSource=source.length>1_000_000;
+  layer?.classList.toggle('source-highlight-disabled',plainSource);
+  if(plainSource){
+    lastMarkdownHighlightText=source;
+    els.markdownHighlight.replaceChildren();
+    return;
+  }
   if(source===lastMarkdownHighlightText){
     syncMarkdownHighlightScroll();
     return;
@@ -5541,7 +5620,8 @@ function syncMarkdownHighlightScroll(){
   els.markdownHighlight.scrollTop=els.editor.scrollTop;
   els.markdownHighlight.scrollLeft=els.editor.scrollLeft;
 }
-let previewLineNumberFrame=0,lastEditorLineNumberCount=0;
+let previewLineNumberFrame=0,lastEditorLineNumberCount=0,lastSourceLineWindow='';
+const SOURCE_LINE_NUMBER_VIRTUAL_THRESHOLD=5000;
 function previewVisualLineTops(){
   if(!els.preview)return[];
   const previewRect=els.preview.getBoundingClientRect();
@@ -5587,15 +5667,46 @@ function schedulePreviewLineNumbers(){
   if(previewLineNumberFrame)return;
   previewLineNumberFrame=requestAnimationFrame(renderPreviewLineNumbers);
 }
+function renderSourceLineNumberWindow(force=false){
+  if(!els.lineGutter||!document.querySelector('.editor-box')?.classList.contains('show-lines'))return;
+  const count=lastEditorLineNumberCount;
+  if(count<=SOURCE_LINE_NUMBER_VIRTUAL_THRESHOLD){
+    if(force||lastSourceLineWindow!=='all')els.lineGutter.textContent=Array.from({length:count},(_,i)=>i+1).join('\n');
+    els.lineGutter.style.removeProperty('padding-top');
+    els.lineGutter.style.removeProperty('padding-bottom');
+    lastSourceLineWindow='all';
+    els.lineGutter.scrollTop=els.editor.scrollTop;
+    return;
+  }
+  const lineHeight=parseFloat(getComputedStyle(els.editor).lineHeight)||24;
+  const overscan=12,first=Math.max(0,Math.floor(els.editor.scrollTop/lineHeight)-overscan);
+  const visible=Math.ceil(els.editor.clientHeight/lineHeight)+overscan*2;
+  const end=Math.min(count,first+visible),signature=`${first}:${end}:${count}`;
+  if(force||signature!==lastSourceLineWindow){
+    els.lineGutter.textContent=Array.from({length:end-first},(_,i)=>first+i+1).join('\n');
+    els.lineGutter.style.paddingTop=`${14+first*lineHeight}px`;
+    els.lineGutter.style.paddingBottom=`${14+Math.max(0,count-end)*lineHeight}px`;
+    lastSourceLineWindow=signature;
+  }
+  els.lineGutter.scrollTop=els.editor.scrollTop;
+}
 function updateLineNumbers(){
   if(!els.lineGutter)return;
+  const visible=document.querySelector('.editor-box')?.classList.contains('show-lines');
+  if(!visible){
+    if(els.lineGutter.hasChildNodes())els.lineGutter.replaceChildren();
+    els.lineGutter.style.removeProperty('padding-top');els.lineGutter.style.removeProperty('padding-bottom');
+    lastEditorLineNumberCount=0;lastSourceLineWindow='';
+    scheduleMarkdownHighlight();
+    return;
+  }
   let count=1;
   for(let index=els.editor.value.indexOf('\n');index>=0;index=els.editor.value.indexOf('\n',index+1))count++;
   if(count!==lastEditorLineNumberCount){
-    els.lineGutter.textContent=Array.from({length:count},(_,i)=>i+1).join('\n');
     lastEditorLineNumberCount=count;
+    lastSourceLineWindow='';
   }
-  els.lineGutter.scrollTop=els.editor.scrollTop;
+  renderSourceLineNumberWindow();
   if(document.querySelector('.preview-box')?.classList.contains('show-lines'))schedulePreviewLineNumbers();
   scheduleMarkdownHighlight();
 }
@@ -5628,15 +5739,19 @@ function createDraftFromEditor(){
   updateHomeConvert();
 }
 function currentEditView(){return els.editSplit.classList.contains('edit-md-only')?'md':els.editSplit.classList.contains('edit-preview-only')?'preview':'both'}
-const documentPreviewCache=new Map(),DOCUMENT_PREVIEW_CACHE_LIMIT=2;
+// Keep only the document needed for a quick back-and-forth switch. Retaining
+// two complete preview fragments can keep tens of thousands of detached DOM
+// nodes alive after a three-document switching session.
+const documentPreviewCache=new Map(),DOCUMENT_PREVIEW_CACHE_LIMIT=1;
 function cacheActiveDocumentPreview(){
   const file=state.files[state.active];
-  if(!file||state.mode!=='edit'||lastRenderedMarkdownText!==file.text||!els.preview.childNodes.length)return false;
+  if(!file||state.mode!=='edit'||currentEditView()==='md'||lastRenderedMarkdownText!==file.text||!els.preview.childNodes.length)return false;
   const mobile=matchMedia('(max-width: 860px)').matches;
-  const maxText=mobile?280000:700000,maxBlocks=mobile?2600:7000;
-  if(file.text.length>maxText||els.preview.childElementCount>maxBlocks)return false;
+  const maxText=mobile?180000:420000,maxBlocks=mobile?1600:4200,maxElements=mobile?8000:22000;
+  if(file.text.length>maxText||els.preview.childElementCount>maxBlocks||els.preview.getElementsByTagName('*').length>maxElements)return false;
   const range=document.createRange();range.selectNodeContents(els.preview);
   const fragment=range.extractContents();
+  releasePreviewInteractionReferences();
   documentPreviewCache.delete(file);
   documentPreviewCache.set(file,{text:file.text,fragment,enhancementsPending:els.preview.hasAttribute('aria-busy')});
   while(documentPreviewCache.size>DOCUMENT_PREVIEW_CACHE_LIMIT)documentPreviewCache.delete(documentPreviewCache.keys().next().value);
@@ -5689,8 +5804,19 @@ function restoreFileViewState(file){
     requestAnimationFrame(()=>{syncScrollLock=false});
   });
 }
-function activateFileState(index,{captureView=true}={}){if(captureView&&index!==state.active)captureActiveFileViewState();state.active=index;collapsedOutlineHeadings.clear();const file=state.files[index];els.editor.value=file?.text||'';state.history=[els.editor.value];state.future=[];state.savedText=file&&Object.hasOwn(file,'savedText')?file.savedText:els.editor.value;state.dirty=els.editor.value!==state.savedText;state.lastInput={type:'md',name:file?.name||'document.md'};state.savedPreviewRange=null;state.savedSelection=null;updateUndoRedoButtons()}
-function openFile(index){const switching=index!==state.active;if(switching){captureActiveFileViewState();cacheActiveDocumentPreview()}activateFileState(index,{captureView:!switching});const file=state.files[index];if(switching){if(!restoreCachedDocumentPreview(file))renderMarkdown(els.editor.value)}else if(lastRenderedMarkdownText!==els.editor.value)renderMarkdown(els.editor.value);renderList();updateHomeConvert();setMode('edit');scheduleLineNumbers();if(switching)restoreFileViewState(file)}
+function activateFileState(index,{captureView=true}={}){if(captureView&&index!==state.active)captureActiveFileViewState();state.active=index;collapsedOutlineHeadings.clear();const file=state.files[index];els.editor.value=file?.text||'';state.history=[els.editor.value];state.future=[];previewHistorySnapshots.clear();historyLocations.clear();state.savedText=file&&Object.hasOwn(file,'savedText')?file.savedText:els.editor.value;state.dirty=els.editor.value!==state.savedText;state.lastInput={type:'md',name:file?.name||'document.md'};state.savedPreviewRange=null;state.savedSelection=null;updateUndoRedoButtons()}
+function openFile(index){
+  const switching=index!==state.active;
+  if(switching){captureActiveFileViewState();cacheActiveDocumentPreview()}
+  activateFileState(index,{captureView:!switching});
+  const file=state.files[index],sourceOnly=currentEditView()==='md';
+  if(sourceOnly){
+    cancelPostRenderEnhancements();releasePreviewInteractionReferences();els.preview.replaceChildren();lastRenderedMarkdownText=null;
+  }else if(switching){
+    if(!restoreCachedDocumentPreview(file))renderMarkdown(els.editor.value);
+  }else if(lastRenderedMarkdownText!==els.editor.value)renderMarkdown(els.editor.value);
+  renderList();updateHomeConvert();setMode('edit');scheduleLineNumbers();if(switching)restoreFileViewState(file);
+}
 let modePreviewFrame=0,modePreviewTimer=0;
 function scheduleModePreview(mode){
   cancelAnimationFrame(modePreviewFrame);
@@ -5703,7 +5829,7 @@ function scheduleModePreview(mode){
       if(active?.id!==`panel-${mode}`)return;
       if(mode==='merge')updateMergePreview();
       else if(mode==='convert')updateConvertPreview();
-      else if(lastRenderedMarkdownText!==els.editor.value)renderMarkdown(els.editor.value);
+      else if(currentEditView()!=='md'&&lastRenderedMarkdownText!==els.editor.value)renderMarkdown(els.editor.value);
     },0);
   });
 }
@@ -5741,7 +5867,7 @@ function setMode(mode,showHome=false){
     if(mode==='edit'||mode==='convert'||mode==='merge')scheduleModeGuideWelcome(mode);
   }else{renderHomeMergeList();updateHomeConvert();scheduleModeGuideWelcome('home')}
 }
-const HISTORY_MAX_ENTRIES=80,HISTORY_MIN_ENTRIES=8,HISTORY_CHAR_BUDGET=12_000_000;
+const HISTORY_MAX_ENTRIES=80,HISTORY_MIN_ENTRIES=8,HISTORY_LARGE_DOCUMENT_MIN_ENTRIES=3,HISTORY_CHAR_BUDGET=12_000_000;
 const historyLocations=new Map();
 function captureHistoryLocation(){
   const editorStart=els.editor.selectionStart,editorEnd=els.editor.selectionEnd;
@@ -5768,7 +5894,9 @@ function trimHistoryLocations(){
 function trimHistoryBudget(){
   while(state.history.length>HISTORY_MAX_ENTRIES)state.history.shift();
   let chars=state.history.reduce((sum,value)=>sum+value.length,0);
-  while(state.history.length>HISTORY_MIN_ENTRIES&&chars>HISTORY_CHAR_BUDGET)chars-=state.history.shift().length;
+  const latestLength=state.history.at(-1)?.length||0;
+  const minimum=latestLength>500000?HISTORY_LARGE_DOCUMENT_MIN_ENTRIES:HISTORY_MIN_ENTRIES;
+  while(state.history.length>minimum&&chars>HISTORY_CHAR_BUDGET)chars-=state.history.shift().length;
   trimHistoryLocations();
 }
 function pushHistory(force=false){
@@ -5795,7 +5923,11 @@ function scheduleEditorRender(text){
   clearTimeout(editorRenderTimer);
   editorRenderTimer=setTimeout(()=>{
     editorRenderTimer=null;
-    if(pendingEditorRender===els.editor.value)renderMarkdown(pendingEditorRender);
+    if(pendingEditorRender!==els.editor.value)return;
+    // Source-only editing does not need a hidden duplicate DOM tree. Preview
+    // is rebuilt on demand when the user makes it visible again.
+    if(currentEditView()==='md')return;
+    renderMarkdown(pendingEditorRender);
   },deferredEditorDelay(text,110,650));
 }
 let lineNumberTimer=0;
@@ -6027,15 +6159,16 @@ function previewHasMeaningfulContent(root){
 let previewSyncTimer=null,previewSyncIdle=0;
 let lastPreviewEnterSplit=null;
 const previewHistorySnapshots=new Map();
-const PREVIEW_HISTORY_SNAPSHOT_LIMIT=6;
-const PREVIEW_HISTORY_SNAPSHOT_CHAR_LIMIT=180000;
+const PREVIEW_HISTORY_SNAPSHOT_LIMIT=3;
+const PREVIEW_HISTORY_SNAPSHOT_CHAR_LIMIT=120000;
+const PREVIEW_HISTORY_SNAPSHOT_ELEMENT_LIMIT=8000;
 function cachePreviewHistorySnapshot(){
   const source=els.editor.value;
   // A DOM snapshot makes a small-document format undo instant, but cloning and
   // cleaning a very large preview on the shortcut's keydown blocks the UI.
   // Large documents already have a source history entry and can safely use the
   // normal renderer when undone.
-  if(!source||source.length>PREVIEW_HISTORY_SNAPSHOT_CHAR_LIMIT||previewHistorySnapshots.has(source)||!els.preview.hasChildNodes())return;
+  if(!source||source.length>PREVIEW_HISTORY_SNAPSHOT_CHAR_LIMIT||previewHistorySnapshots.has(source)||!els.preview.hasChildNodes()||els.preview.getElementsByTagName('*').length>PREVIEW_HISTORY_SNAPSHOT_ELEMENT_LIMIT)return;
   const snapshot=els.preview.cloneNode(true);
   snapshot.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.img-resize-handle').forEach(node=>node.remove());
   snapshot.querySelectorAll('[data-resize-ready]').forEach(node=>node.removeAttribute('data-resize-ready'));
@@ -6131,7 +6264,9 @@ function restoreEditor(value,{onRendered}={}){
 }
 function trimFutureBudget(){
   let chars=state.future.reduce((sum,value)=>sum+value.length,0);
-  while(state.future.length>HISTORY_MIN_ENTRIES&&chars>HISTORY_CHAR_BUDGET)chars-=state.future.shift().length;
+  const latestLength=state.future.at(-1)?.length||0;
+  const minimum=latestLength>500000?HISTORY_LARGE_DOCUMENT_MIN_ENTRIES:HISTORY_MIN_ENTRIES;
+  while(state.future.length>minimum&&chars>HISTORY_CHAR_BUDGET)chars-=state.future.shift().length;
   trimHistoryLocations();
 }
 function restoreHistoryLocation(location){
@@ -6664,6 +6799,12 @@ function hideMergePreview(force=false){
   if(hoverPreviewPinned&&!force)return;
   clearTimeout(hoverPreviewHideTimer);hoverPreviewHideTimer=0;
   setHoverPreviewPinned(false);delete els.hoverPreview.dataset.source;els.hoverPreview.style.display='none';
+  // A hidden quick preview is still a live DOM tree. Preserve the fast cache
+  // for ordinary notes, but release large documents as soon as it closes.
+  if((hoverPreviewCache.text?.length||0)>160000||els.hoverPreview.getElementsByTagName('*').length>5000){
+    els.hoverPreview.replaceChildren();
+    hoverPreviewCache={file:null,text:null,theme:null};
+  }
 }
 function scheduleHideMergePreview(){
   clearTimeout(hoverPreviewHideTimer);
@@ -7487,6 +7628,12 @@ function setEditView(view,{persist=true}={}){
     const map={'view-both':'both','view-md-only':'md','view-preview-only':'preview'};
     const el=$(id);if(el)el.classList.toggle('active',map[id]===view);
   });
+  if(view==='md'&&((lastRenderedMarkdownText?.length||0)>220000||els.preview.getElementsByTagName('*').length>6000)){
+    cancelPostRenderEnhancements();releasePreviewInteractionReferences();els.preview.replaceChildren();lastRenderedMarkdownText=null;
+    documentPreviewCache.clear();
+  }else if(view!=='md'&&state.mode==='edit'&&lastRenderedMarkdownText!==els.editor.value){
+    clearTimeout(editorRenderTimer);editorRenderTimer=null;pendingEditorRender=els.editor.value;renderMarkdown(els.editor.value);
+  }
   if(persist)localStorage.setItem(EDIT_VIEW_STORAGE_KEY,view);
 }
 function selectionText(){const saved=state.savedSelection;const s=saved?saved.start:els.editor.selectionStart,e=saved?saved.end:els.editor.selectionEnd;state.savedSelection=null;return{start:s,end:e,text:els.editor.value.slice(s,e)}}
@@ -8900,7 +9047,7 @@ function insertPastedSyncBlock(id,content){
     if(replaceEmpty)anchor.replaceWith(block,exit);
     else anchor.after(block,exit);
   }else els.preview.append(block,exit);
-  addMovableElements(els.preview);
+  addMovableElements(block);
   syncFromPreview();
   pushHistory(true);
   activatePreviewExitTarget(exit,false);
@@ -9035,8 +9182,7 @@ function insertPastedTableBlock(table){
     if(empty)anchor.replaceWith(table,exit);
     else anchor.after(table,exit);
   }else els.preview.append(table,exit);
-  addTableResize(table);
-  addMovableElements(els.preview);
+  enhancePreviewRoots(table);
   syncFromPreview();
   pushHistory(true);
   activatePreviewExitTarget(exit,false);
@@ -9425,7 +9571,7 @@ function onPreviewScroll(){
   requestAnimationFrame(()=>{syncScrollLock=false});
 }
 els.editor.addEventListener('scroll',onEditorScroll);
-els.editor.addEventListener('scroll',()=>{if(els.lineGutter)els.lineGutter.scrollTop=els.editor.scrollTop});
+els.editor.addEventListener('scroll',()=>renderSourceLineNumberWindow());
 els.editor.addEventListener('scroll',syncMarkdownHighlightScroll);
 els.preview.addEventListener('scroll',onPreviewScroll);
 els.preview.addEventListener('scroll',()=>{if(els.previewLineGutter)els.previewLineGutter.scrollTop=els.preview.scrollTop});
@@ -9682,17 +9828,32 @@ function rememberPreviewRange(){
 function previewSelectionFontSizes(range,distinctLimit=Infinity){
   const sizes=[];
   const contextSizes=new Map();
+  const contextKeys=new WeakMap([[els.preview,'']]);
+  const codeHeadContexts=new WeakMap([[els.preview,false]]);
   const contextKey=element=>{
-    const parts=[];
-    for(let current=element;current&&current!==els.preview;current=current.parentElement){
-      const className=typeof current.className==='string'?current.className:'';
-      parts.push(`${current.tagName}#${current.id||''}.${className}|${current.style?.fontSize||''}|${current.getAttribute?.('size')||''}`);
-    }
-    return parts.join('>');
+    if(!element||element===els.preview)return'';
+    const cached=contextKeys.get(element);
+    if(cached!==undefined)return cached;
+    const className=typeof element.className==='string'?element.className:'';
+    const parentKey=contextKey(element.parentElement);
+    // Elements with the same selector/inline-style ancestry have the same font
+    // size in the editor stylesheet. Memoizing the ancestry prefix avoids
+    // rebuilding it for every paragraph in a whole-document selection.
+    const key=`${parentKey}>${element.tagName}#${element.id||''}.${className}|${element.style?.cssText||''}|${element.getAttribute?.('size')||''}`;
+    contextKeys.set(element,key);
+    return key;
+  };
+  const insideCodeHead=element=>{
+    if(!element||element===els.preview)return false;
+    const cached=codeHeadContexts.get(element);
+    if(cached!==undefined)return cached;
+    const value=element.classList?.contains('code-head')||insideCodeHead(element.parentElement);
+    codeHeadContexts.set(element,value);
+    return value;
   };
   const add=node=>{
     const el=node?.nodeType===1?node:node?.parentElement;
-    if(!el||el.closest('.code-head'))return;
+    if(!el||insideCodeHead(el))return;
     const key=contextKey(el);
     let size=contextSizes.get(key);
     if(size===undefined){size=parseFloat(getComputedStyle(el).fontSize);contextSizes.set(key,size)}
@@ -11509,12 +11670,8 @@ function insertPreviewHtml(html,enhancement='all'){
       if(!quote.querySelector(':scope > .block-move-handle'))quote.appendChild(makeMoveHandle('인용 위치 이동'));
     });
   }else{
-    fixSpanColors(els.preview);
-    runHighlight(els.preview);
-    decorateCodeBlocks(els.preview);
-    addTableResize(els.preview);
-    addImageResize(els.preview);
-    addMovableElements(els.preview);
+    fixSpanColors(els.preview);runHighlight(els.preview);decorateCodeBlocks(els.preview);
+    addTableResize(els.preview);addImageResize(els.preview);addMovableElements(els.preview);
   }
   rememberPreviewRange();
   syncFromPreview();
@@ -11539,18 +11696,7 @@ function insertPreviewHtmlAtContext(html,context,enhancement='all'){
   const selection=window.getSelection();
   selection.removeAllRanges();
   selection.addRange(caret);
-  if(enhancement==='quote'){
-    els.preview.querySelectorAll('blockquote').forEach(quote=>{
-      if(!quote.querySelector(':scope > .block-move-handle'))quote.appendChild(makeMoveHandle('인용 위치 이동'));
-    });
-  }else{
-    fixSpanColors(els.preview);
-    runHighlight(els.preview);
-    decorateCodeBlocks(els.preview);
-    addTableResize(els.preview);
-    addImageResize(els.preview);
-    addMovableElements(els.preview);
-  }
+  enhancePreviewRoots(inserted,enhancement==='quote');
   state.savedPreviewRange=caret.cloneRange();
   syncFromPreview();
   pushHistory(true);
@@ -11574,8 +11720,7 @@ function insertPreviewBlockBelow(html){
   pushHistory(true);
   if(anchor&&anchor.parentNode===els.preview)anchor.after(template.content);
   else els.preview.appendChild(template.content);
-  fixSpanColors(els.preview);
-  addMovableElements(els.preview);
+  enhancePreviewRoots(inserted);
   const insertion=document.createRange();
   insertion.setStartAfter(inserted[inserted.length-1]);
   insertion.collapse(true);
@@ -11595,7 +11740,7 @@ function insertPreviewInlineCode(){
   code.textContent=range.toString()||'코드';
   range.deleteContents();
   range.insertNode(code);
-  addMovableElements(els.preview);
+  addMovableElements(code);
   const next=document.createRange();
   next.selectNodeContents(code);
   const selection=window.getSelection();
@@ -11649,9 +11794,7 @@ function insertPreviewCodeBlock(){
       marker.replaceWith(pre,spacer);
     }
   }
-  runHighlight(els.preview);
-  decorateCodeBlocks(els.preview);
-  addMovableElements(els.preview);
+  enhancePreviewRoots(pre);
   const selectionRange=document.createRange();
   selectionRange.selectNodeContents(code);
   const selection=window.getSelection();
@@ -11722,9 +11865,17 @@ function placeCaretAtPreviewTextOffset(root,offset){
   placeCaretAtPreviewEnd(root);
 }
 function previewBlockPlainText(block){
+  if(!block.querySelector('.block-move-handle,.form-move-handle,.code-head'))return block.textContent||'';
   const clone=block.cloneNode(true);
   clone.querySelectorAll('.block-move-handle,.form-move-handle,.code-head').forEach(node=>node.remove());
   return clone.textContent||'';
+}
+function shouldDeferPreviewMarkdownSync(){
+  return els.editor.value.length>120000||els.preview.childElementCount>4000;
+}
+function finishPreviewMarkdownMutation(defer=shouldDeferPreviewMarkdownSync()){
+  if(defer)scheduleSyncFromPreview();
+  else{syncFromPreview();pushHistory(true)}
 }
 function previewMarkdownCaretOffset(source,offset){
   const holder=document.createElement('div');
@@ -11781,7 +11932,7 @@ function removePreviewTextPrefix(block,count){
 function applyPreviewQuoteKeepingFormat(block,text){
   const marker=text.match(/^\s{0,3}>\s+/);
   if(!marker||!block?.isConnected)return false;
-  pushHistory(true);
+  if(!shouldDeferPreviewMarkdownSync())pushHistory(true);
   removePreviewTextPrefix(block,marker[0].length);
   block.querySelectorAll(':scope > .block-move-handle,:scope > .form-move-handle').forEach(handle=>handle.remove());
   const quote=document.createElement('blockquote');
@@ -11805,7 +11956,7 @@ function applyPreviewQuoteKeepingFormat(block,text){
   }
   quote.appendChild(makeMoveHandle('인용 위치 이동'));
   placeCaretAtPreviewEnd(caretTarget);
-  rememberPreviewRange();syncFromPreview();
+  rememberPreviewRange();finishPreviewMarkdownMutation();
   return true;
 }
 function previewListMarker(text){
@@ -11817,7 +11968,7 @@ function previewListMarker(text){
 function applyPreviewListKeepingFormat(block,text){
   const marker=previewListMarker(text);
   if(!marker||!block?.isConnected||block.matches('li'))return false;
-  pushHistory(true);
+  if(!shouldDeferPreviewMarkdownSync())pushHistory(true);
   removePreviewTextPrefix(block,marker.length);
   const sizeWalker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT);
   let firstVisibleText=null,sizeNode;
@@ -11844,7 +11995,7 @@ function applyPreviewListKeepingFormat(block,text){
   }
   list.appendChild(item);block.replaceWith(list);
   addMovableElements(els.preview);placeCaretAtPreviewEnd(caretTarget);
-  rememberPreviewRange();syncFromPreview();pushHistory(true);
+  rememberPreviewRange();finishPreviewMarkdownMutation();
   return true;
 }
 function applyPreviewStructuralMarkdown(block,text,removeListFormatting=false,caretOffset=text.length){
@@ -11856,7 +12007,7 @@ function applyPreviewStructuralMarkdown(block,text,removeListFormatting=false,ca
   const heading=text.match(/^(\s{0,3})(#{1,6})\s+(.+)$/);
   if(heading){
     const prefixLength=heading[1].length+heading[2].length+text.slice(heading[1].length+heading[2].length).match(/^\s+/)[0].length;
-    pushHistory(true);
+    if(!shouldDeferPreviewMarkdownSync())pushHistory(true);
     removePreviewTextPrefix(block,prefixLength);
     const target=document.createElement(`h${heading[2].length}`);
     if(block.getAttribute('style'))target.setAttribute('style',block.getAttribute('style'));
@@ -11866,11 +12017,11 @@ function applyPreviewStructuralMarkdown(block,text,removeListFormatting=false,ca
     placeCaretAtPreviewTextOffset(target,Math.max(0,caretOffset-prefixLength));
     addMovableElements(els.preview);
     rememberPreviewRange();
-    syncFromPreview();
-    pushHistory(true);
+    finishPreviewMarkdownMutation();
     return true;
   }
   if(/^\s*---\s*$/.test(text)){
+    if(!shouldDeferPreviewMarkdownSync())pushHistory(true);
     const rule=document.createElement('hr');
     const paragraph=document.createElement('p');
     paragraph.appendChild(document.createElement('br'));
@@ -11879,8 +12030,7 @@ function applyPreviewStructuralMarkdown(block,text,removeListFormatting=false,ca
     target.replaceWith(rule,paragraph);
     addMovableElements(els.preview);
     placeCaretInPreviewBlock(paragraph);
-    syncFromPreview();
-    pushHistory(true);
+    finishPreviewMarkdownMutation();
     return true;
   }
   return false;
@@ -12064,12 +12214,12 @@ function applyPreviewMarkdown(block){
   // A pasted or already-written sentence can contain several **...** runs.
   // Convert them in one tree walk instead of rescanning a long paragraph once
   // per marker, which caused visible pauses on pasted lecture notes.
+  const deferSyntaxSync=shouldDeferPreviewMarkdownSync();
   const boldCount=applyPreviewBoldMarkup(block,boldCaretOffset,true);
   if(boldCount){
     boldCaretOffset=Math.max(0,boldCaretOffset-boldCount*4);
     placeCaretAtPreviewTextOffset(block,boldCaretOffset);
-    syncFromPreview();
-    pushHistory(true);
+    finishPreviewMarkdownMutation(deferSyntaxSync);
     return true;
   }
   // Rebuilding a formatted block from textContent discards existing color,
@@ -12077,32 +12227,32 @@ function applyPreviewMarkdown(block){
   // leave every other incomplete Markdown sequence as text until it can be
   // converted without flattening the block's existing DOM formatting.
   if(previewBlockHasInlineFormatting(block)){
-    if(correctedSpacing){syncFromPreview();pushHistory(true);return true}
+    if(correctedSpacing){finishPreviewMarkdownMutation(deferSyntaxSync);return true}
     return false;
   }
-  const renderedCaretOffset=previewMarkdownCaretOffset(text,caretOffset);
+  const caretAtEnd=caretOffset>=text.length;
+  const renderedCaretOffset=caretAtEnd?null:previewMarkdownCaretOffset(text,caretOffset);
   const holder=document.createElement('div');
   holder.innerHTML=markdownHtml(text).trim();
   if(!holder.firstElementChild)return false;
-  let caretTarget;
+  let caretTarget,enhancementRoots;
   if(block.tagName==='P'&&holder.children.length===1&&holder.firstElementChild.tagName==='P'){
     if(holder.firstElementChild.innerHTML===block.innerHTML)return false;
     block.innerHTML=holder.firstElementChild.innerHTML;
-    caretTarget=block;
+    caretTarget=block;enhancementRoots=[block];
   }else{
     const nodes=[...holder.childNodes];
     if(!nodes.length)return false;
     block.replaceWith(...nodes);
     caretTarget=[...nodes].reverse().find(node=>node.nodeType===1)||nodes[nodes.length-1];
+    enhancementRoots=nodes;
   }
-  if(caretTarget?.nodeType===1)placeCaretAtPreviewTextOffset(caretTarget,renderedCaretOffset);
-  fixSpanColors(els.preview);
-  runHighlight(els.preview);
-  decorateCodeBlocks(els.preview);
-  addMovableElements(els.preview);
-  addTableResize(els.preview);
-  syncFromPreview();
-  pushHistory(true);
+  if(caretTarget?.nodeType===1){
+    if(caretAtEnd)placeCaretAtPreviewEnd(caretTarget);
+    else placeCaretAtPreviewTextOffset(caretTarget,renderedCaretOffset);
+  }
+  enhancePreviewRoots(enhancementRoots);
+  finishPreviewMarkdownMutation(deferSyntaxSync);
   return true;
 }
 function schedulePreviewMarkdownApply(node){
@@ -13308,8 +13458,9 @@ let formatStateRefreshFrame=0;
 function scheduleFormatStateRefresh(){
   if(formatStateRefreshFrame)return;
   // Selection changes can fire dozens of times while dragging. Toolbar state
-  // does not need a full-document style scan every animation frame.
-  formatStateRefreshFrame=setTimeout(()=>{
+  // is coalesced to one paint instead of imposing a fixed 45 ms delay. This
+  // keeps dragging cheap while making Ctrl+A and short selections feel instant.
+  formatStateRefreshFrame=requestAnimationFrame(()=>{
     formatStateRefreshFrame=0;
     const selection=window.getSelection();
     const range=selection?.rangeCount?selection.getRangeAt(0):null;
@@ -13317,7 +13468,7 @@ function scheduleFormatStateRefresh(){
       updateFormatButtons();
       updatePreviewFontSize();
     }else if(document.activeElement===els.editor)updateFormatButtons();
-  },45);
+  });
 }
 els.editor.addEventListener('mouseup',scheduleFormatStateRefresh);
 els.editor.addEventListener('keyup',scheduleFormatStateRefresh);
@@ -15099,8 +15250,7 @@ function insertMarkdownBlockAtContext(syntax,context){
     if(anchor)anchor.after(template.content);
     else if(range.commonAncestorContainer===els.preview&&range.endOffset===0)els.preview.prepend(template.content);
     else els.preview.appendChild(template.content);
-    fixSpanColors(els.preview);
-    addMovableElements(els.preview);
+    enhancePreviewRoots(inserted);
     const caret=document.createRange();
     caret.setStartAfter(inserted[inserted.length-1]);
     caret.collapse(true);
@@ -16328,8 +16478,7 @@ function applyWorkspaceSnapshot(snapshot){
   state.sidebarFolders=snapshot.sidebarFolders||[];
   state.sidebarOrder=snapshot.sidebarOrder||{};
   state.assetRoots=snapshot.assetRoots||{};
-  state.assets=new Map(snapshot.assets||[]);state.images={};
-  state.assets.forEach((file,path)=>{sidebarUploadPaths.set(file,path);if(imageExt.test(path))addImage(file)});
+  state.assets=new Map(snapshot.assets||[]);rebuildSidebarImageIndex();
   state.active=state.files.length?Math.max(0,Math.min(snapshot.active??0,state.files.length-1)):-1;
   els.editor.value=state.files[state.active]?.text||'';
   state.history=[els.editor.value];
