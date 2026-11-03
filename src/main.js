@@ -1194,7 +1194,7 @@ function showDocumentSplitPicker(){
   if(!documentSplitEnabled)return;
   if(state.files.length<2){showInfoNotice('문서 분할 편집','분할해서 열 다른 문서를 먼저 추가해 주세요.');return}
   const wrap=document.createElement('div');wrap.className='modal-backdrop document-split-picker';
-  const choices=state.files.map((file,index)=>index===state.active?'':`<button type="button" data-split-file="${index}"><strong>${htmlEsc(documentPaneFileName(file))}</strong><small>${htmlEsc(file.path||file.name||'')}</small></button>`).join('');
+  const choices=state.files.map((file,index)=>index===state.active?'':`<button type="button" data-split-file="${index}"><strong>${htmlEsc(documentPaneFileName(file))}</strong><small>${htmlEsc(documentLocationLabel(file))}</small></button>`).join('');
   wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="document-split-picker-title"><h3 id="document-split-picker-title">새 분할에서 열기</h3><p>함께 편집할 문서를 선택하세요.</p><div class="document-split-picker-list">${choices}</div><div class="modal-actions"><button class="tool" type="button" data-split-cancel>취소</button></div></div>`;
   const close=()=>{document.removeEventListener('keydown',onKey);wrap.remove()};
   const onKey=event=>{if(event.key==='Escape')close()};
