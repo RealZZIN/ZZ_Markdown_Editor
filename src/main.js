@@ -1007,15 +1007,24 @@ function applyDocumentPaneZoom(pane){
   const secondary=pane==='secondary',file=secondary?documentSplitState.secondaryFile:state.files[state.active];
   const zoom=documentZoomValue(file),ratio=zoom/100,paneElement=secondary?els.secondaryDocumentPane:els.primaryDocumentPane;
   const preview=secondary?els.secondaryPreview:els.preview,output=$(secondary?'secondary-document-zoom':'primary-document-zoom');
+  const scrollRange=preview?Math.max(0,preview.scrollHeight-preview.clientHeight):0;
+  const scrollRatio=scrollRange?preview.scrollTop/scrollRange:0;
   paneElement?.style.setProperty('--document-zoom',String(ratio));
   paneElement?.toggleAttribute('data-document-zoom-low',zoom<=50);
   paneElement?.toggleAttribute('data-document-zoom-high',zoom>=200);
   if(output)output.textContent=`${zoom}%`;
   if(preview){
-    preview.style.zoom=String(ratio);
-    preview.style.width=`${100/ratio}%`;
-    preview.style.height=`${100/ratio}%`;
-    preview.style.flex='0 0 auto';
+    // Keep the scroll container at a fixed size. Zooming the container itself
+    // scales and repositions its native scrollbars, so only its document
+    // blocks inherit the zoom factor through CSS.
+    preview.style.removeProperty('zoom');
+    preview.style.removeProperty('width');
+    preview.style.removeProperty('height');
+    preview.style.removeProperty('flex');
+    requestAnimationFrame(()=>{
+      const nextRange=Math.max(0,preview.scrollHeight-preview.clientHeight);
+      preview.scrollTop=scrollRatio*nextRange;
+    });
   }
 }
 function changeDocumentPaneZoom(pane,step){
