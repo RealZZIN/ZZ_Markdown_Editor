@@ -17505,7 +17505,8 @@ document.addEventListener('keydown',e=>{
   }
   if(e.altKey&&!command)return;
   const target=e.target,dialog=target.closest?.('.modal-backdrop,[role="dialog"],.find-replace-panel');
-  const auxiliary=target!==els.editor&&!els.preview.contains(target)&&target.closest?.('textarea,input:not([type="checkbox"]),[contenteditable="true"]');
+  const editorSurface=target===els.editor||target===els.secondaryEditor||els.preview.contains(target)||els.secondaryPreview.contains(target);
+  const auxiliary=!editorSurface&&target.closest?.('textarea,input:not([type="checkbox"]),[contenteditable="true"]');
   const modal=document.querySelector('.modal-backdrop');
   const consume=()=>{e.preventDefault();e.stopImmediatePropagation()};
   if(command==='previewPin'){
