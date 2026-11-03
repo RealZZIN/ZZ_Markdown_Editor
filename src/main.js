@@ -31,7 +31,7 @@ const codeLanguageByExt={
 };
 const codeLanguageByName={dockerfile:'dockerfile',makefile:'makefile'};
 const els={app:$('app'),sidebar:$('sidebar'),list:$('file-list'),outline:$('outline-list'),count:$('file-count'),status:$('status'),editor:$('editor'),markdownHighlight:$('markdown-highlight'),preview:$('preview'),convertPreview:$('convert-preview'),convertList:$('convert-list'),home:$('home'),homeMergeList:$('home-merge-list'),homeImageSummary:$('home-image-summary'),mergeList:$('merge-list'),mergeResult:$('merge-result'),editSplit:$('edit-split'),documentSplit:$('document-split'),primaryDocumentPane:$('primary-document-pane'),secondaryDocumentPane:$('secondary-document-pane'),secondaryEditor:$('secondary-editor'),secondaryPreview:$('secondary-preview'),secondaryEditSplit:$('secondary-edit-split'),hoverPreview:$('hover-preview'),lineGutter:$('line-gutter'),previewLineGutter:$('preview-line-gutter'),folderInput:$('folder-input'),fileInput:$('file-input'),imageInput:$('image-input'),pdfInput:$('pdf-input'),homeSource:$('home-source-name'),homeOutput:$('home-output-name'),homeOutputExt:$('home-output-ext')};
-const documentSplitState={activePane:'primary',secondaryFile:null,secondaryView:localStorage.getItem('md-secondary-edit-view')||'both',secondaryTimer:0,secondaryRenderFrame:0,maximizedPane:null};
+const documentSplitState={activePane:'primary',secondaryFile:null,secondaryView:localStorage.getItem('md-secondary-edit-view')||'both',secondaryTimer:0,secondaryHistoryTimer:0,secondaryHistoryFile:null,secondaryRenderFrame:0,maximizedPane:null};
 // ── Mermaid + marked setup ──
 if(window.mermaid){
   mermaid.initialize({startOnLoad:false,theme:'neutral',securityLevel:'loose'});
@@ -389,7 +389,7 @@ async function addFiles(files){
     if(state.mode==='convert'){
       state.active=0;
       els.editor.value=state.files[0]?.text||'';
-      state.history=[els.editor.value];
+      loadPrimaryHistoryState(state.files[0]);
       state.savedText=els.editor.value;
     }else{
       activateFileState(0);
@@ -1074,10 +1074,13 @@ function updateDocumentPaneViewButtons(){
 }
 function setDocumentActivePane(pane){
   if(pane==='secondary'&&!documentSplitState.secondaryFile)pane='primary';
+  if(documentSplitState.activePane==='primary'&&pane!=='primary')storePrimaryHistoryState(state.files[state.active],{flush:true});
+  if(documentSplitState.activePane==='secondary'&&pane!=='secondary')flushSecondaryHistory();
   documentSplitState.activePane=pane;
   els.primaryDocumentPane?.classList.toggle('active',pane==='primary');
   els.secondaryDocumentPane?.classList.toggle('active',pane==='secondary');
   updateDocumentPaneViewButtons();
+  updateUndoRedoButtons();
   renderList();
 }
 function renderSecondaryPreview({defer=false}={}){
@@ -1104,6 +1107,7 @@ function setSecondaryView(view,{persist=true,deferRender=false}={}){
 }
 function closeSecondaryDocument(){
   clearTimeout(documentSplitState.secondaryTimer);
+  flushSecondaryHistory();
   if(documentSplitState.secondaryRenderFrame)cancelAnimationFrame(documentSplitState.secondaryRenderFrame);
   documentSplitState.secondaryRenderFrame=0;
   resetDocumentScrollSync();
@@ -1125,8 +1129,10 @@ function openFileInSecondary(index,{activate=true,focus=true}={}){
     showInfoNotice('문서 분할 편집','현재 문서는 이미 왼쪽 편집 영역에 열려 있습니다. 다른 문서를 선택해 주세요.');
     return;
   }
+  if(documentSplitState.secondaryFile&&documentSplitState.secondaryFile!==file)flushSecondaryHistory();
   setDocumentSplitEnabled(true);
   documentSplitState.secondaryFile=file;
+  ensureDocumentHistory(file);
   els.secondaryDocumentPane.hidden=false;
   $('document-split-resizer').hidden=false;
   els.documentSplit.classList.add('has-secondary');
@@ -5508,8 +5514,7 @@ async function removeSidebarFile(index){
     state.active=Math.min(index,state.files.length-1);
     const file=state.files[state.active];
     els.editor.value=file.text||'';
-    state.history=[els.editor.value];
-    state.future=[];
+    loadPrimaryHistoryState(file);
     state.savedText=Object.hasOwn(file,'savedText')?file.savedText:els.editor.value;
     state.dirty=els.editor.value!==state.savedText;
     state.lastInput={type:'md',name:file.name||'document.md'};
@@ -5708,7 +5713,16 @@ function updateHomeImageSummary(file){
   els.homeImageSummary.innerHTML=`<b>이미지 확인</b><span>연결됨 ${linked.length}개 · 누락 ${missing.length}개</span>${missing.length?`<span>함께 업로드 필요: ${htmlEsc(missing.slice(0,6).join(', '))}${missing.length>6?' 외 '+(missing.length-6)+'개':''}</span>`:''}`;
 }
 function updateHomeConvert(){const active=state.files[state.active];const files=state.files.filter(Boolean);const input=files.length>1?{type:'batch',name:`${files.length}개 문서`}:state.lastInput||active&&{type:active.convertedFromPdf?'pdf':'md',name:active.name};const outExt=input?.type==='pdf'?'.md':input?.type==='md'?'.pdf':'';els.homeSource.textContent=input?input.name:'업로드된 문서 없음';if(els.homeOutputExt){els.homeOutputExt.textContent=outExt;els.homeOutputExt.classList.toggle('pending',!outExt)}if(input&&!els.homeOutput.dataset.touched)els.homeOutput.value=input.type==='batch'?'converted-documents':input.name.replace(/\.(pdf|md|markdown)$/i,'')||'converted-document';updateHomeImageSummary(active)}
-function updateUndoRedoButtons(){const undo=$('fmt-undo'),redo=$('fmt-redo');if(!undo||!redo)return;undo.disabled=state.history.length<2;redo.disabled=!state.future.length}
+function updateUndoRedoButtons(){
+  const undo=$('fmt-undo'),redo=$('fmt-redo');if(!undo||!redo)return;
+  if(documentSplitState.activePane==='secondary'&&documentSplitState.secondaryFile){
+    const file=ensureDocumentHistory(documentSplitState.secondaryFile),current=els.secondaryEditor?.value??file.text??'';
+    undo.disabled=file.editHistory.length<2&&file.editHistory.at(-1)===current;
+    redo.disabled=!file.editFuture.length;
+    return;
+  }
+  undo.disabled=state.history.length<2;redo.disabled=!state.future.length;
+}
 function mdHighlightToken(className,value){return `<span class="${className}">${htmlEsc(value)}</span>`}
 function highlightMarkdownHtmlTag(raw){
   if(raw.startsWith('<!--'))return mdHighlightToken('md-quote',raw);
@@ -6019,12 +6033,12 @@ function restoreFileViewState(file){
     requestAnimationFrame(()=>{syncScrollLock=false});
   });
 }
-function activateFileState(index,{captureView=true}={}){if(captureView&&index!==state.active)captureActiveFileViewState();state.active=index;collapsedOutlineHeadings.clear();const file=state.files[index];els.editor.value=file?.text||'';state.history=[els.editor.value];state.future=[];previewHistorySnapshots.clear();historyLocations.clear();state.savedText=file&&Object.hasOwn(file,'savedText')?file.savedText:els.editor.value;state.dirty=els.editor.value!==state.savedText;state.lastInput={type:'md',name:file?.name||'document.md'};state.savedPreviewRange=null;state.savedSelection=null;updateUndoRedoButtons()}
+function activateFileState(index,{captureView=true}={}){if(captureView&&index!==state.active)captureActiveFileViewState();state.active=index;collapsedOutlineHeadings.clear();const file=state.files[index];els.editor.value=file?.text||'';loadPrimaryHistoryState(file);state.savedText=file&&Object.hasOwn(file,'savedText')?file.savedText:els.editor.value;state.dirty=els.editor.value!==state.savedText;state.lastInput={type:'md',name:file?.name||'document.md'};state.savedPreviewRange=null;state.savedSelection=null;updateUndoRedoButtons()}
 function openFile(index){
   if(state.files[index]===documentSplitState.secondaryFile)closeSecondaryDocument();
   documentSplitState.activePane='primary';
   const switching=index!==state.active;
-  if(switching){captureActiveFileViewState();cacheActiveDocumentPreview()}
+  if(switching){storePrimaryHistoryState(state.files[state.active],{flush:true});captureActiveFileViewState();cacheActiveDocumentPreview()}
   activateFileState(index,{captureView:!switching});
   const file=state.files[index],sourceOnly=currentEditView()==='md';
   if(sourceOnly){
@@ -6085,7 +6099,33 @@ function setMode(mode,showHome=false){
   }else{renderHomeMergeList();updateHomeConvert();scheduleModeGuideWelcome('home')}
 }
 const HISTORY_MAX_ENTRIES=80,HISTORY_MIN_ENTRIES=8,HISTORY_LARGE_DOCUMENT_MIN_ENTRIES=3,HISTORY_CHAR_BUDGET=12_000_000;
-const historyLocations=new Map();
+let historyLocations=new Map();
+function ensureDocumentHistory(file){
+  if(!file)return null;
+  const text=String(file.text??'');
+  if(!Array.isArray(file.editHistory)||!file.editHistory.length)file.editHistory=[text];
+  if(!Array.isArray(file.editFuture))file.editFuture=[];
+  if(!(file.editHistoryLocations instanceof Map))file.editHistoryLocations=new Map();
+  if(!(file.previewHistorySnapshots instanceof Map))file.previewHistorySnapshots=new Map();
+  return file;
+}
+function storePrimaryHistoryState(file,{flush=false}={}){
+  if(!file)return;
+  if(flush)pushHistory(true);
+  ensureDocumentHistory(file);
+  file.editHistory=state.history;
+  file.editFuture=state.future;
+  file.editHistoryLocations=historyLocations;
+  file.previewHistorySnapshots=previewHistorySnapshots;
+}
+function loadPrimaryHistoryState(file){
+  if(!file){state.history=[''];state.future=[];historyLocations=new Map();previewHistorySnapshots=new Map();return}
+  ensureDocumentHistory(file);
+  state.history=file.editHistory;
+  state.future=file.editFuture;
+  historyLocations=file.editHistoryLocations;
+  previewHistorySnapshots=file.previewHistorySnapshots;
+}
 function captureHistoryLocation(){
   const editorStart=els.editor.selectionStart,editorEnd=els.editor.selectionEnd;
   const location={surface:state.lastInsertionSurface,editorStart,editorEnd,editorTop:els.editor.scrollTop};
@@ -6375,7 +6415,7 @@ function previewHasMeaningfulContent(root){
 }
 let previewSyncTimer=null,previewSyncIdle=0;
 let lastPreviewEnterSplit=null;
-const previewHistorySnapshots=new Map();
+let previewHistorySnapshots=new Map();
 const PREVIEW_HISTORY_SNAPSHOT_LIMIT=3;
 const PREVIEW_HISTORY_SNAPSHOT_CHAR_LIMIT=120000;
 const PREVIEW_HISTORY_SNAPSHOT_ELEMENT_LIMIT=8000;
@@ -6507,8 +6547,67 @@ function restoreHistoryEntry(value){
   const location=historyLocations.get(value);
   restoreEditor(value,{onRendered:rendered=>{if(rendered)restoreHistoryLocation(location)}});
 }
-function undoEdit(){if(state.history.length<2)return;state.future.push(state.history.pop());trimFutureBudget();restoreHistoryEntry(state.history[state.history.length-1])}
-function redoEdit(){if(!state.future.length)return;const v=state.future.pop();state.history.push(v);trimHistoryBudget();restoreHistoryEntry(v)}
+function trimStandaloneHistory(file,list){
+  while(list.length>HISTORY_MAX_ENTRIES)list.shift();
+  let chars=list.reduce((sum,value)=>sum+value.length,0),latest=list.at(-1)?.length||0;
+  const minimum=latest>500000?HISTORY_LARGE_DOCUMENT_MIN_ENTRIES:HISTORY_MIN_ENTRIES;
+  while(list.length>minimum&&chars>HISTORY_CHAR_BUDGET)chars-=list.shift().length;
+  const retained=new Set([...file.editHistory,...file.editFuture]);
+  file.editHistoryLocations.forEach((_,value)=>{if(!retained.has(value))file.editHistoryLocations.delete(value)});
+}
+function secondaryHistoryLocation(){return{surface:'editor',editorStart:els.secondaryEditor.selectionStart,editorEnd:els.secondaryEditor.selectionEnd,editorTop:els.secondaryEditor.scrollTop}}
+function commitSecondaryHistory(file=documentSplitState.secondaryFile){
+  if(!file)return;
+  clearTimeout(documentSplitState.secondaryHistoryTimer);documentSplitState.secondaryHistoryTimer=0;documentSplitState.secondaryHistoryFile=null;
+  ensureDocumentHistory(file);
+  const value=file===documentSplitState.secondaryFile?els.secondaryEditor.value:String(file.text??'');
+  file.text=value;
+  file.editHistoryLocations.set(value,file===documentSplitState.secondaryFile?secondaryHistoryLocation():{surface:'editor',editorStart:0,editorEnd:0,editorTop:0});
+  if(file.editHistory.at(-1)!==value){file.editHistory.push(value);trimStandaloneHistory(file,file.editHistory);file.editFuture=[]}
+  updateUndoRedoButtons();
+}
+function scheduleSecondaryHistory(file=documentSplitState.secondaryFile){
+  if(!file)return;
+  ensureDocumentHistory(file);file.editFuture=[];updateUndoRedoButtons();
+  clearTimeout(documentSplitState.secondaryHistoryTimer);documentSplitState.secondaryHistoryFile=file;
+  documentSplitState.secondaryHistoryTimer=setTimeout(()=>commitSecondaryHistory(file),650);
+}
+function flushSecondaryHistory(){
+  const file=documentSplitState.secondaryHistoryFile||documentSplitState.secondaryFile;
+  if(file)commitSecondaryHistory(file);
+  else{clearTimeout(documentSplitState.secondaryHistoryTimer);documentSplitState.secondaryHistoryTimer=0}
+}
+function restoreSecondaryHistoryEntry(file,value){
+  if(file!==documentSplitState.secondaryFile)return;
+  clearTimeout(documentSplitState.secondaryTimer);
+  els.secondaryEditor.value=value;file.text=value;
+  const location=file.editHistoryLocations.get(value)||{};
+  const start=Math.max(0,Math.min(value.length,Number(location.editorStart)||0)),end=Math.max(start,Math.min(value.length,Number(location.editorEnd)||start));
+  els.secondaryEditor.setSelectionRange(start,end);els.secondaryEditor.scrollTop=Math.max(0,Number(location.editorTop)||0);
+  if(documentSplitState.secondaryView!=='md')renderSecondaryPreview({defer:true});
+  updateUndoRedoButtons();scheduleWorkspaceSave();
+}
+function undoSecondaryEdit(){
+  const file=documentSplitState.secondaryFile;if(!file)return;
+  flushSecondaryHistory();if(file.editHistory.length<2)return;
+  file.editFuture.push(file.editHistory.pop());trimStandaloneHistory(file,file.editFuture);restoreSecondaryHistoryEntry(file,file.editHistory.at(-1));
+}
+function redoSecondaryEdit(){
+  const file=documentSplitState.secondaryFile;if(!file)return;
+  flushSecondaryHistory();if(!file.editFuture.length)return;
+  const value=file.editFuture.pop();file.editHistory.push(value);trimStandaloneHistory(file,file.editHistory);restoreSecondaryHistoryEntry(file,value);
+}
+function commitActiveHistory(){
+  if(documentSplitState.activePane==='secondary'&&documentSplitState.secondaryFile)commitSecondaryHistory();else pushHistory(true);
+}
+function undoEdit(){
+  if(documentSplitState.activePane==='secondary'&&documentSplitState.secondaryFile){undoSecondaryEdit();return}
+  if(state.history.length<2)return;state.future.push(state.history.pop());trimFutureBudget();restoreHistoryEntry(state.history[state.history.length-1]);storePrimaryHistoryState(state.files[state.active]);
+}
+function redoEdit(){
+  if(documentSplitState.activePane==='secondary'&&documentSplitState.secondaryFile){redoSecondaryEdit();return}
+  if(!state.future.length)return;const v=state.future.pop();state.history.push(v);trimHistoryBudget();restoreHistoryEntry(v);storePrimaryHistoryState(state.files[state.active]);
+}
 function download(name,text,type='text/markdown;charset=utf-8'){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([text],{type}));a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),800)}
 // PDF layout reconstruction. Coordinates are normalized to the rendered page.
 function pdfMedian(values){
@@ -9281,8 +9380,8 @@ els.editor.addEventListener('keydown',e=>{
     insertMarkdownHardBreak();
     return;
   }
-  if(shortcutMatches(e,'undo')){e.preventDefault();undoEdit()}
-  else if(shortcutMatches(e,'redo')){e.preventDefault();redoEdit()}
+  if(shortcutMatches(e,'undo')){e.preventDefault();commitActiveHistory();undoEdit()}
+  else if(shortcutMatches(e,'redo')){e.preventDefault();commitActiveHistory();redoEdit()}
 });
 $('run-merge').onclick=mergeSelected;
 $('home-run-merge').onclick=mergeAllFromHome;
@@ -9753,14 +9852,14 @@ els.preview.addEventListener('keydown',e=>{
   }
   if(preservePreviewFormatOnDelete(e))return;
   if(insertPlainPreviewParagraph(e))return;
-  if(shortcutMatches(e,'undo')){e.preventDefault();undoEdit()}
-  else if(shortcutMatches(e,'redo')){e.preventDefault();redoEdit()}
+  if(shortcutMatches(e,'undo')){e.preventDefault();commitActiveHistory();undoEdit()}
+  else if(shortcutMatches(e,'redo')){e.preventDefault();commitActiveHistory();redoEdit()}
 });
 document.addEventListener('keydown',e=>{
   if(e.defaultPrevented||state.mode!=='edit'||!(e.ctrlKey||e.metaKey))return;
   if(e.target!==els.editor&&!els.preview.contains(e.target)&&e.target.closest?.('input,textarea,[contenteditable="true"],[role="dialog"],.modal-backdrop'))return;
-  if(shortcutMatches(e,'undo')){e.preventDefault();undoEdit()}
-  else if(shortcutMatches(e,'redo')){e.preventDefault();redoEdit()}
+  if(shortcutMatches(e,'undo')){e.preventDefault();commitActiveHistory();undoEdit()}
+  else if(shortcutMatches(e,'redo')){e.preventDefault();commitActiveHistory();redoEdit()}
 });
 $('view-both').onclick=()=>setActivePaneView('both');
 $('view-md-only').onclick=()=>setActivePaneView('md');
@@ -9807,6 +9906,7 @@ els.secondaryDocumentPane.addEventListener('pointerdown',()=>{if(documentSplitSt
 els.secondaryEditor.addEventListener('input',()=>{
   const file=documentSplitState.secondaryFile;if(!file)return;
   file.text=els.secondaryEditor.value;
+  scheduleSecondaryHistory(file);
   file.secondaryEditView=documentSplitState.secondaryView;
   clearTimeout(documentSplitState.secondaryTimer);
   documentSplitState.secondaryTimer=setTimeout(()=>{if(documentSplitState.secondaryView!=='md')renderSecondaryPreview({defer:true});scheduleWorkspaceSave()},180);
@@ -9818,9 +9918,17 @@ els.secondaryPreview.addEventListener('input',()=>{
     try{
       const clone=els.secondaryPreview.cloneNode(true);cleanPreviewHtml(clone);
       const source=previewHasMeaningfulContent(clone)?serializePreviewHtml(clone):'';
-      file.text=source;els.secondaryEditor.value=source;scheduleWorkspaceSave();
+      file.text=source;els.secondaryEditor.value=source;commitSecondaryHistory(file);scheduleWorkspaceSave();
     }catch(error){console.error('Secondary preview sync failed',error)}
   },220);
+});
+els.secondaryEditor.addEventListener('keydown',event=>{
+  if(shortcutMatches(event,'undo')){event.preventDefault();commitActiveHistory();undoEdit()}
+  else if(shortcutMatches(event,'redo')){event.preventDefault();commitActiveHistory();redoEdit()}
+});
+els.secondaryPreview.addEventListener('keydown',event=>{
+  if(shortcutMatches(event,'undo')){event.preventDefault();commitActiveHistory();undoEdit()}
+  else if(shortcutMatches(event,'redo')){event.preventDefault();commitActiveHistory();redoEdit()}
 });
 const documentSplitResizer=$('document-split-resizer');
 documentSplitResizer.addEventListener('mousedown',event=>{
@@ -16977,8 +17085,7 @@ function applyWorkspaceSnapshot(snapshot){
   state.assets=new Map(snapshot.assets||[]);rebuildSidebarImageIndex();
   state.active=state.files.length?Math.max(0,Math.min(snapshot.active??0,state.files.length-1)):-1;
   els.editor.value=state.files[state.active]?.text||'';
-  state.history=[els.editor.value];
-  state.future=[];
+  loadPrimaryHistoryState(state.files[state.active]);
   state.savedText=state.files[state.active]?.savedText||'';
   state.dirty=els.editor.value!==state.savedText;
   lastVersionSignature='';
@@ -17426,7 +17533,7 @@ document.addEventListener('keydown',e=>{
     // Commit a still-pending Preview edit before navigating history. Otherwise
     // Ctrl+Z can skip the visible table edit and restore unrelated geometry.
     if(command==='undo'&&(previewSyncTimer||previewSyncIdle||state.editingPreview))syncFromPreview();
-    pushHistory(true);command==='redo'?redoEdit():undoEdit();return;
+    commitActiveHistory();command==='redo'?redoEdit():undoEdit();return;
   }
   const button={bold:'fmt-bold',italic:'fmt-italic',underline:'fmt-underline',link:'fmt-link'}[command];
   if(button){
