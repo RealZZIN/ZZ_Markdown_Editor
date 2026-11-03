@@ -305,15 +305,59 @@
       </section>
 
       <section class="panel" id="panel-edit">
-        <div class="split" id="edit-split">
-          <div class="box editor-box">
-            <div class="box-head">Markdown</div>
-            <div class="box-body"><div class="line-gutter" id="line-gutter"></div><div class="markdown-editor-layer"><pre class="markdown-highlight" id="markdown-highlight" aria-hidden="true"></pre><textarea id="editor" spellcheck="false"></textarea></div></div>
-          </div>
-          <div class="split-resizer" id="split-resizer"></div>
-          <div class="box preview-box">
-            <div class="box-head">Preview</div>
-            <div class="box-body"><div class="line-gutter" id="preview-line-gutter"></div><article class="preview" id="preview" contenteditable="true" spellcheck="false"></article></div>
+        <div class="document-split" id="document-split">
+          <section class="document-pane active" id="primary-document-pane" data-document-pane="primary">
+            <header class="document-pane-head">
+              <span class="document-pane-identity"><span class="document-pane-leading-actions"><button type="button" data-pane-close="primary" title="이 문서 닫기" aria-label="왼쪽 문서 닫기"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7m0-7-7 7"/></svg></button><button type="button" data-pane-maximize="primary" title="크게 보기" aria-label="왼쪽 문서 크게 보기" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3H13v3.5M6.5 13H3V9.5M13 3 9 7M3 13l4-4"/></svg></button></span><strong id="primary-document-title">문서 없음</strong></span>
+              <span class="document-pane-actions">
+                <span class="document-pane-view" role="group" aria-label="왼쪽 문서 보기 방식">
+                  <button type="button" data-primary-view="md">Markdown</button>
+                  <button type="button" data-primary-view="both">분할</button>
+                  <button type="button" data-primary-view="preview">미리보기</button>
+                </span>
+                <span class="document-pane-zoom" role="group" aria-label="왼쪽 문서 배율"><button type="button" data-document-zoom="primary" data-zoom-step="-10" aria-label="왼쪽 문서 축소">−</button><output id="primary-document-zoom" title="더블클릭하여 100%로 초기화">100%</output><button type="button" data-document-zoom="primary" data-zoom-step="10" aria-label="왼쪽 문서 확대">+</button></span>
+              </span>
+            </header>
+            <div class="split" id="edit-split">
+              <div class="box editor-box">
+                <div class="box-head">Markdown</div>
+                <div class="box-body"><div class="line-gutter" id="line-gutter"></div><div class="markdown-editor-layer"><pre class="markdown-highlight" id="markdown-highlight" aria-hidden="true"></pre><textarea id="editor" spellcheck="false"></textarea></div></div>
+              </div>
+              <div class="split-resizer" id="split-resizer"></div>
+              <div class="box preview-box">
+                <div class="box-head" id="primary-preview-title">Preview</div>
+                <div class="box-body"><div class="line-gutter" id="preview-line-gutter"></div><article class="preview" id="preview" contenteditable="true" spellcheck="false"></article></div>
+              </div>
+            </div>
+          </section>
+          <div class="document-split-resizer" id="document-split-resizer" role="separator" aria-orientation="vertical" title="문서 분할 너비 조절" hidden></div>
+          <section class="document-pane secondary-document-pane" id="secondary-document-pane" data-document-pane="secondary" hidden>
+            <header class="document-pane-head">
+              <span class="document-pane-identity"><span class="document-pane-leading-actions"><button type="button" data-pane-close="secondary" title="이 문서 닫기" aria-label="오른쪽 문서 닫기"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7m0-7-7 7"/></svg></button><button type="button" data-pane-maximize="secondary" title="크게 보기" aria-label="오른쪽 문서 크게 보기" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3H13v3.5M6.5 13H3V9.5M13 3 9 7M3 13l4-4"/></svg></button></span><strong id="secondary-document-title">분할 문서</strong></span>
+              <span class="document-pane-actions">
+                <span class="document-pane-view" role="group" aria-label="오른쪽 문서 보기 방식">
+                  <button type="button" data-secondary-view="md">Markdown</button>
+                  <button type="button" data-secondary-view="both">분할</button>
+                  <button type="button" data-secondary-view="preview">미리보기</button>
+                </span>
+                <span class="document-pane-zoom" role="group" aria-label="오른쪽 문서 배율"><button type="button" data-document-zoom="secondary" data-zoom-step="-10" aria-label="오른쪽 문서 축소">−</button><output id="secondary-document-zoom" title="더블클릭하여 100%로 초기화">100%</output><button type="button" data-document-zoom="secondary" data-zoom-step="10" aria-label="오른쪽 문서 확대">+</button></span>
+              </span>
+            </header>
+            <div class="secondary-edit-split" id="secondary-edit-split">
+              <div class="box secondary-editor-box">
+                <div class="box-head">Markdown</div>
+                <div class="box-body"><textarea id="secondary-editor" spellcheck="false"></textarea></div>
+              </div>
+              <div class="secondary-split-resizer" id="secondary-split-resizer" role="separator" aria-orientation="horizontal" title="편집·미리보기 높이 조절"></div>
+              <div class="box secondary-preview-box">
+                <div class="box-head" id="secondary-preview-title">Preview</div>
+                <div class="box-body"><article class="preview" id="secondary-preview" contenteditable="true" spellcheck="false"></article></div>
+              </div>
+            </div>
+          </section>
+          <div class="document-drop-zones" id="document-drop-zones" aria-hidden="true">
+            <div data-document-drop="primary">왼쪽 분할에 열기</div>
+            <div data-document-drop="secondary">오른쪽 분할에 열기</div>
           </div>
         </div>
       </section>
