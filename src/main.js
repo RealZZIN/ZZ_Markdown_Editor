@@ -13,6 +13,7 @@ const savedOption=(key,fallback=false)=>{
 let hashtagNavigatorEnabled=savedOption('md-option-hashtag-navigator',false);
 let documentSplitEnabled=savedOption('md-option-document-split',false);
 let documentSyncScrollEnabled=savedOption('md-option-document-sync-scroll',false);
+let splitPreviewWrapEnabled=savedOption('md-option-split-preview-wrap',true);
 const collapsedOutlineSections={structure:false,tags:false};
 const collapsedOutlineHeadings=new Set();
 const imageExt=/\.(png|jpe?g|gif|webp|svg|bmp)$/i,mdExt=/\.(md|markdown)$/i;
@@ -31,7 +32,7 @@ const codeLanguageByExt={
 };
 const codeLanguageByName={dockerfile:'dockerfile',makefile:'makefile'};
 const els={app:$('app'),sidebar:$('sidebar'),list:$('file-list'),outline:$('outline-list'),count:$('file-count'),status:$('status'),editor:$('editor'),markdownHighlight:$('markdown-highlight'),preview:$('preview'),convertPreview:$('convert-preview'),convertList:$('convert-list'),home:$('home'),homeMergeList:$('home-merge-list'),homeImageSummary:$('home-image-summary'),mergeList:$('merge-list'),mergeResult:$('merge-result'),editSplit:$('edit-split'),documentSplit:$('document-split'),primaryDocumentPane:$('primary-document-pane'),secondaryDocumentPane:$('secondary-document-pane'),secondaryEditor:$('secondary-editor'),secondaryPreview:$('secondary-preview'),secondaryEditSplit:$('secondary-edit-split'),hoverPreview:$('hover-preview'),lineGutter:$('line-gutter'),previewLineGutter:$('preview-line-gutter'),folderInput:$('folder-input'),fileInput:$('file-input'),imageInput:$('image-input'),pdfInput:$('pdf-input'),homeSource:$('home-source-name'),homeOutput:$('home-output-name'),homeOutputExt:$('home-output-ext')};
-const documentSplitState={activePane:'primary',secondaryFile:null,secondaryView:localStorage.getItem('md-secondary-edit-view')||'both',secondaryTimer:0,secondaryHistoryTimer:0,secondaryHistoryFile:null,secondaryRenderFrame:0,maximizedPane:null};
+const documentSplitState={activePane:'primary',secondaryFile:null,secondaryView:localStorage.getItem('md-secondary-edit-view')||'both',secondaryTimer:0,secondaryHistoryTimer:0,secondaryHistoryFile:null,secondaryRenderFrame:0,maximizedPane:null,secondarySelection:{start:0,end:0},secondarySurface:'editor',secondaryPreviewRange:null,secondaryPendingInsertionContext:null};
 // ── Mermaid + marked setup ──
 if(window.mermaid){
   mermaid.initialize({startOnLoad:false,theme:'neutral',securityLevel:'loose'});
@@ -1003,29 +1004,38 @@ function documentLocationLabel(file){
   return parent?`${root} / ${parent}`:root;
 }
 function documentZoomValue(file){return Math.max(50,Math.min(200,Number(file?.documentZoom)||100))}
+const documentZoomFrames={primary:0,secondary:0};
+const documentZoomRestoreFrames={primary:0,secondary:0};
+const documentZoomScrollRatios={primary:0,secondary:0};
 function applyDocumentPaneZoom(pane){
   const secondary=pane==='secondary',file=secondary?documentSplitState.secondaryFile:state.files[state.active];
   const zoom=documentZoomValue(file),ratio=zoom/100,paneElement=secondary?els.secondaryDocumentPane:els.primaryDocumentPane;
   const preview=secondary?els.secondaryPreview:els.preview,output=$(secondary?'secondary-document-zoom':'primary-document-zoom');
-  const scrollRange=preview?Math.max(0,preview.scrollHeight-preview.clientHeight):0;
-  const scrollRatio=scrollRange?preview.scrollTop/scrollRange:0;
-  paneElement?.style.setProperty('--document-zoom',String(ratio));
-  paneElement?.toggleAttribute('data-document-zoom-low',zoom<=50);
-  paneElement?.toggleAttribute('data-document-zoom-high',zoom>=200);
   if(output)output.textContent=`${zoom}%`;
   if(preview){
-    // Keep the scroll container at a fixed size. Zooming the container itself
-    // scales and repositions its native scrollbars, so only its document
-    // blocks inherit the zoom factor through CSS.
-    preview.style.removeProperty('zoom');
-    preview.style.removeProperty('width');
-    preview.style.removeProperty('height');
-    preview.style.removeProperty('flex');
-    requestAnimationFrame(()=>{
-      const nextRange=Math.max(0,preview.scrollHeight-preview.clientHeight);
-      preview.scrollTop=scrollRatio*nextRange;
-    });
+    const range=Math.max(0,preview.scrollHeight-preview.clientHeight);
+    documentZoomScrollRatios[pane]=range?preview.scrollTop/range:0;
   }
+  if(documentZoomFrames[pane])cancelAnimationFrame(documentZoomFrames[pane]);
+  if(documentZoomRestoreFrames[pane]){cancelAnimationFrame(documentZoomRestoreFrames[pane]);documentZoomRestoreFrames[pane]=0}
+  documentZoomFrames[pane]=requestAnimationFrame(()=>{
+    documentZoomFrames[pane]=0;
+    paneElement?.style.setProperty('--document-zoom',String(ratio));
+    paneElement?.toggleAttribute('data-document-zoom-low',zoom<=50);
+    paneElement?.toggleAttribute('data-document-zoom-high',zoom>=200);
+    // The preview itself stays unscaled so its native scrollbars never move.
+    // Reading scrollHeight before and after every zoom forced two full layouts
+    // on large documents; the browser already preserves scrollTop here.
+    preview?.style.removeProperty('zoom');
+    preview?.style.removeProperty('width');
+    preview?.style.removeProperty('height');
+    preview?.style.removeProperty('flex');
+    if(preview)documentZoomRestoreFrames[pane]=requestAnimationFrame(()=>{
+      documentZoomRestoreFrames[pane]=0;
+      const nextRange=Math.max(0,preview.scrollHeight-preview.clientHeight);
+      preview.scrollTop=documentZoomScrollRatios[pane]*nextRange;
+    });
+  });
 }
 function changeDocumentPaneZoom(pane,step){
   const file=pane==='secondary'?documentSplitState.secondaryFile:state.files[state.active];
@@ -1208,8 +1218,17 @@ function setDocumentSplitEnabled(enabled,{persist=true}={}){
   if(picker){picker.disabled=!documentSplitEnabled;picker.setAttribute('aria-disabled',String(!documentSplitEnabled))}
   const syncCheckbox=$('enable-document-sync-scroll');
   if(syncCheckbox)syncCheckbox.disabled=!documentSplitEnabled;
+  const wrapCheckbox=$('enable-split-preview-wrap');
+  if(wrapCheckbox)wrapCheckbox.disabled=!documentSplitEnabled;
   if(!documentSplitEnabled&&documentSplitState.secondaryFile)closeSecondaryDocument();
   if(persist)localStorage.setItem('md-option-document-split',documentSplitEnabled?'1':'0');
+}
+function setSplitPreviewWrap(enabled,{persist=true}={}){
+  splitPreviewWrapEnabled=!!enabled;
+  const checkbox=$('enable-split-preview-wrap');
+  if(checkbox)checkbox.checked=splitPreviewWrapEnabled;
+  els.documentSplit?.classList.toggle('split-preview-nowrap',!splitPreviewWrapEnabled);
+  if(persist)localStorage.setItem('md-option-split-preview-wrap',splitPreviewWrapEnabled?'1':'0');
 }
 function standardMarkdownHtml(text){
   const source=String(text??'')
@@ -8080,16 +8099,16 @@ function setEditView(view,{persist=true}={}){
   updateDocumentPaneViewButtons();
 }
 function selectionText(){const saved=state.savedSelection;const s=saved?saved.start:els.editor.selectionStart,e=saved?saved.end:els.editor.selectionEnd;state.savedSelection=null;return{start:s,end:e,text:els.editor.value.slice(s,e)}}
-function previewTopLevelAnchor(range){
+function previewTopLevelAnchor(range,root=els.preview){
   if(!range)return null;
   let anchor=range.endContainer;
-  if(anchor===els.preview){
-    const index=Math.min(range.endOffset,els.preview.childNodes.length)-1;
-    return index>=0?els.preview.childNodes[index]:null;
+  if(anchor===root){
+    const index=Math.min(range.endOffset,root.childNodes.length)-1;
+    return index>=0?root.childNodes[index]:null;
   }
   if(anchor.nodeType!==Node.ELEMENT_NODE)anchor=anchor.parentNode;
-  while(anchor&&anchor.parentNode!==els.preview)anchor=anchor.parentNode;
-  return anchor&&anchor.parentNode===els.preview?anchor:null;
+  while(anchor&&anchor.parentNode!==root)anchor=anchor.parentNode;
+  return anchor&&anchor.parentNode===root?anchor:null;
 }
 function captureInsertionContext(){
   if(state.pendingInsertionContext){
@@ -9940,15 +9959,37 @@ els.secondaryPreview.addEventListener('keydown',event=>{
   else if(shortcutMatches(event,'redo')){event.preventDefault();commitActiveHistory();redoEdit()}
 });
 const documentSplitResizer=$('document-split-resizer');
+function setDocumentSplitRatio(value,{persist=false}={}){
+  const ratio=Math.max(.2,Math.min(.8,Number(value)||.5));
+  els.documentSplit.style.removeProperty('--document-left');
+  els.documentSplit.style.setProperty('--document-left-ratio',String(ratio));
+  if(persist)localStorage.setItem('md-document-split-ratio',String(ratio));
+  return ratio;
+}
 documentSplitResizer.addEventListener('mousedown',event=>{
   if(!documentSplitState.secondaryFile)return;
   event.preventDefault();const rect=els.documentSplit.getBoundingClientRect();
-  const move=moveEvent=>{const width=Math.max(300,Math.min(rect.width-310,moveEvent.clientX-rect.left));els.documentSplit.style.setProperty('--document-left',width+'px')};
-  const up=upEvent=>{move(upEvent);document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);const width=els.primaryDocumentPane.getBoundingClientRect().width;localStorage.setItem('md-document-split-width',String(Math.round(width)))};
+  const available=Math.max(1,rect.width-documentSplitResizer.getBoundingClientRect().width),minimum=Math.min(300,available/2);
+  const ratioFromEvent=moveEvent=>Math.max(minimum,Math.min(available-minimum,moveEvent.clientX-rect.left))/available;
+  const move=moveEvent=>setDocumentSplitRatio(ratioFromEvent(moveEvent));
+  const up=upEvent=>{const ratio=setDocumentSplitRatio(ratioFromEvent(upEvent),{persist:true});document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);localStorage.removeItem('md-document-split-width');return ratio};
   document.addEventListener('mousemove',move);document.addEventListener('mouseup',up);
 });
+documentSplitResizer.addEventListener('dblclick',event=>{
+  if(!documentSplitState.secondaryFile)return;
+  event.preventDefault();event.stopPropagation();
+  setDocumentSplitRatio(.5,{persist:true});
+  localStorage.removeItem('md-document-split-width');
+});
+const savedDocumentSplitRatio=Number(localStorage.getItem('md-document-split-ratio'));
 const savedDocumentSplitWidth=Number(localStorage.getItem('md-document-split-width'));
-if(savedDocumentSplitWidth>=300)els.documentSplit.style.setProperty('--document-left',savedDocumentSplitWidth+'px');
+if(savedDocumentSplitRatio>0)setDocumentSplitRatio(savedDocumentSplitRatio);
+else if(savedDocumentSplitWidth>=300){
+  const splitWidth=els.documentSplit.getBoundingClientRect().width,dividerWidth=documentSplitResizer.getBoundingClientRect().width;
+  const available=splitWidth-dividerWidth;
+  setDocumentSplitRatio(available>=610?savedDocumentSplitWidth/available:.5,{persist:true});
+  localStorage.removeItem('md-document-split-width');
+}else setDocumentSplitRatio(.5);
 const secondarySplitResizer=$('secondary-split-resizer');
 secondarySplitResizer.addEventListener('mousedown',event=>{
   if(!documentSplitState.secondaryFile||documentSplitState.secondaryView!=='both')return;
@@ -9962,27 +10003,93 @@ if(savedSecondarySplitHeight>=120)els.secondaryEditSplit.style.setProperty('--se
 updateDocumentPaneTitles();updateDocumentPaneViewButtons();
 
 // ── 툴바 클릭 시 에디터 선택 유지 (capture=true → color mousedown보다 먼저 실행) ──
+let secondaryFormatContext=null;
+function beginSecondaryFormatContext(){
+  if(secondaryFormatContext||documentSplitState.activePane!=='secondary'||!documentSplitState.secondaryFile)return false;
+  const file=documentSplitState.secondaryFile,index=state.files.indexOf(file);
+  if(index<0)return false;
+  ensureDocumentHistory(file);
+  commitSecondaryHistory(file);
+  secondaryFormatContext={
+    editor:els.editor,preview:els.preview,active:state.active,history:state.history,future:state.future,
+    savedText:state.savedText,dirty:state.dirty,savedSelection:state.savedSelection,lastEditorSelection:state.lastEditorSelection,
+    lastInsertionSurface:state.lastInsertionSurface,savedPreviewRange:state.savedPreviewRange,pendingInsertionContext:state.pendingInsertionContext,
+    initialText:els.secondaryEditor.value
+  };
+  els.editor=els.secondaryEditor;els.preview=els.secondaryPreview;
+  state.active=index;state.history=file.editHistory;state.future=file.editFuture;state.savedText=file.savedText??file.text??'';
+  state.savedSelection={...documentSplitState.secondarySelection};
+  state.lastEditorSelection={...documentSplitState.secondarySelection};
+  state.lastInsertionSurface=documentSplitState.secondarySurface;
+  state.savedPreviewRange=documentSplitState.secondaryPreviewRange?.cloneRange?.()||null;
+  state.pendingInsertionContext=documentSplitState.secondaryPendingInsertionContext||null;
+  return true;
+}
+function endSecondaryFormatContext(){
+  const context=secondaryFormatContext,file=documentSplitState.secondaryFile;
+  if(!context)return;
+  clearTimeout(editorRenderTimer);editorRenderTimer=null;
+  clearTimeout(state.historyTimer);state.historyTimer=null;
+  if(file){
+    file.text=els.secondaryEditor.value;file.editHistory=state.history;file.editFuture=state.future;
+    documentSplitState.secondarySelection={start:els.secondaryEditor.selectionStart,end:els.secondaryEditor.selectionEnd};
+    documentSplitState.secondarySurface=state.lastInsertionSurface;
+    documentSplitState.secondaryPreviewRange=state.savedPreviewRange?.cloneRange?.()||null;
+    documentSplitState.secondaryPendingInsertionContext=state.pendingInsertionContext;
+  }
+  const sourceChanged=context.initialText!==els.secondaryEditor.value,surface=state.lastInsertionSurface;
+  els.editor=context.editor;els.preview=context.preview;
+  state.active=context.active;state.history=context.history;state.future=context.future;state.savedText=context.savedText;state.dirty=context.dirty;
+  state.savedSelection=context.savedSelection;state.lastEditorSelection=context.lastEditorSelection;
+  state.lastInsertionSurface=context.lastInsertionSurface;state.savedPreviewRange=context.savedPreviewRange;state.pendingInsertionContext=context.pendingInsertionContext;
+  secondaryFormatContext=null;
+  if(file)commitSecondaryHistory(file);
+  if(sourceChanged&&surface!=='preview')renderSecondaryPreview({defer:true});
+  updateUndoRedoButtons();scheduleWorkspaceSave();
+}
+const secondaryFormatUiSelector='#format-tools,#fmt-heading-menu,#fmt-size-menu,#text-color-panel,#bg-color-panel,.custom-format-panel,.saved-custom-format-window';
+const secondaryFormatEvents=new WeakSet();
+for(const eventName of ['click','change','input','keydown'])document.addEventListener(eventName,event=>{
+  if(!event.target.closest?.(secondaryFormatUiSelector)||!beginSecondaryFormatContext())return;
+  secondaryFormatEvents.add(event);
+  setTimeout(endSecondaryFormatContext,0);
+},true);
+for(const eventName of ['click','change','input','keydown'])document.addEventListener(eventName,event=>{
+  if(secondaryFormatEvents.has(event)&&secondaryFormatContext)endSecondaryFormatContext();
+});
 document.getElementById('format-tools').addEventListener('mousedown',e=>{
-  if(e.target.closest('.cp-wrap'))captureColorTarget();
+  const secondary=documentSplitState.activePane==='secondary'&&documentSplitState.secondaryFile;
+  if(e.target.closest('.cp-wrap')){
+    const entered=secondary&&beginSecondaryFormatContext();
+    captureColorTarget();
+    if(entered)endSecondaryFormatContext();
+  }
+  const activePreview=secondary?els.secondaryPreview:els.preview,activeEditor=secondary?els.secondaryEditor:els.editor;
   const sel=window.getSelection();
   if(sel&&sel.rangeCount){
     const range=sel.getRangeAt(0);
-    if(els.preview.contains(range.commonAncestorContainer)){
-      state.lastInsertionSurface='preview';
-      state.savedPreviewRange=range.cloneRange();
-      state.pendingInsertionContext={kind:'preview',range:range.cloneRange(),anchor:previewTopLevelAnchor(range),text:range.toString()};
-      state.savedSelection=null;
+    if(activePreview.contains(range.commonAncestorContainer)){
+      if(secondary){
+        documentSplitState.secondarySurface='preview';documentSplitState.secondaryPreviewRange=range.cloneRange();
+        documentSplitState.secondaryPendingInsertionContext={kind:'preview',range:range.cloneRange(),anchor:previewTopLevelAnchor(range,activePreview),text:range.toString()};
+      }else{
+        state.lastInsertionSurface='preview';state.savedPreviewRange=range.cloneRange();
+        state.pendingInsertionContext={kind:'preview',range:range.cloneRange(),anchor:previewTopLevelAnchor(range),text:range.toString()};state.savedSelection=null;
+      }
       if(e.target.closest('button'))e.preventDefault();
       return;
     }
   }
-  if(state.savedPreviewRange&&e.target.closest('button'))e.preventDefault();
-  if(document.activeElement===els.editor||els.editor.selectionStart!==els.editor.selectionEnd){
-    state.lastInsertionSurface='editor';
-    state.savedSelection={start:els.editor.selectionStart,end:els.editor.selectionEnd};
-    state.lastEditorSelection={...state.savedSelection};
-    state.pendingInsertionContext={kind:'editor',...state.savedSelection,text:els.editor.value.slice(state.savedSelection.start,state.savedSelection.end)};
-    state.savedPreviewRange=null;
+  if((secondary?documentSplitState.secondaryPreviewRange:state.savedPreviewRange)&&e.target.closest('button'))e.preventDefault();
+  if(document.activeElement===activeEditor||activeEditor.selectionStart!==activeEditor.selectionEnd){
+    const selection={start:activeEditor.selectionStart,end:activeEditor.selectionEnd};
+    if(secondary){
+      documentSplitState.secondarySurface='editor';documentSplitState.secondarySelection=selection;documentSplitState.secondaryPreviewRange=null;
+      documentSplitState.secondaryPendingInsertionContext={kind:'editor',...selection,text:activeEditor.value.slice(selection.start,selection.end)};
+    }else{
+      state.lastInsertionSurface='editor';state.savedSelection=selection;state.lastEditorSelection={...selection};
+      state.pendingInsertionContext={kind:'editor',...selection,text:activeEditor.value.slice(selection.start,selection.end)};state.savedPreviewRange=null;
+    }
   }
 },true);
 
@@ -14608,8 +14715,6 @@ const acPanelHtml=`
   </div>
   <div class="ac-group">
     <div class="ac-group-title">보기 옵션</div>
-    <label class="ac-split-option"><input type="checkbox" id="enable-document-split"><span><b>문서 분할 편집</b><div class="ac-desc">다른 문서를 좌우에 배치해 동시에 편집</div></span><button type="button" class="ac-next" id="open-document-split" title="분할할 문서 선택" aria-label="분할할 문서 선택">›</button></label>
-    <label title="왼쪽과 오른쪽 문서의 스크롤 위치를 서로 맞춥니다."><input type="checkbox" id="enable-document-sync-scroll"><span><b>분할 문서 스크롤 동기화</b><div class="ac-desc">나란히 열린 두 문서의 스크롤 위치를 맞춤</div></span></label>
     <label title="편집창과 미리보기의 세로 스크롤 위치를 서로 맞춥니다.">
       <input type="checkbox" id="enable-sync-scroll">
       <span><b>Markdown·Preview 스크롤 동기화</b><div class="ac-desc">한 문서의 편집창과 미리보기를 함께 스크롤</div></span>
@@ -14628,6 +14733,12 @@ const acPanelHtml=`
       <span><b>해시태그 탐색</b><div class="ac-desc">문서의 #태그를 모아 빠르게 이동</div></span>
     </label>
   </div>
+  <div class="ac-group">
+    <div class="ac-group-title">분할 옵션</div>
+    <label class="ac-split-option"><input type="checkbox" id="enable-document-split"><span><b>문서 분할 편집</b><div class="ac-desc">다른 문서를 좌우에 배치해 동시에 편집</div></span><button type="button" class="ac-next" id="open-document-split" title="분할할 문서 선택" aria-label="분할할 문서 선택">›</button></label>
+    <label title="왼쪽과 오른쪽 문서의 스크롤 위치를 서로 맞춥니다."><input type="checkbox" id="enable-document-sync-scroll"><span><b>분할 문서 스크롤 동기화</b><div class="ac-desc">나란히 열린 두 문서의 스크롤 위치를 맞춤</div></span></label>
+    <label title="분할 문서의 미리보기에서 긴 문장을 영역 너비에 맞춰 줄바꿈합니다. 끄면 가로 스크롤로 확인합니다."><input type="checkbox" id="enable-split-preview-wrap"><span><b>분할 미리보기 긴 줄 자동 줄바꿈</b><div class="ac-desc">끄면 긴 줄을 가로 스크롤로 표시</div></span></label>
+  </div>
 </div>`;
 document.body.insertAdjacentHTML('beforeend',acPanelHtml);
 PANELS.push('ac-panel');TOGGLES.push('autocorrect-toggle');
@@ -14640,6 +14751,7 @@ const optionPreviewExamples={
   'enable-color-correct':{title:'색상 가독성 보정',body:'<div class="option-live-demo"><small>테마와 비슷해 잘 보이지 않는 글자색을 읽기 쉽게 바꿉니다.</small><div class="option-color-animation"><div class="option-color-scene"><span>LIGHT</span><b>문서 내용</b></div><i>테마 전환</i><div class="option-color-status">글자색 자동 보정</div></div></div>'},
   'enable-table-filter':{title:'표 필터·정렬',body:'<div class="option-live-demo"><small>머리글을 누른 뒤 필터 조건이나 정렬 순서를 선택합니다.</small><div class="option-table-animation"><div class="option-table-head"><b>이름</b><button type="button">점수 <i>▾</i></button></div><div class="option-table-menu"><span>높은 점수순</span><span>낮은 점수순</span></div><div class="option-table-rows"><span>서준</span><span>88</span><span>민지</span><span>95</span></div></div></div>'},
   'enable-document-sync-scroll':{title:'분할 문서 스크롤 동기화',body:`<div class="option-live-demo"><small>한 문서를 스크롤하면 나란히 열린 다른 문서도 같은 위치로 이동합니다.</small><div class="option-sync-playground option-document-sync-playground"><div><b>문서 A</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 왼쪽 문서 내용</p>`).join('')}</div></section></div><i>↔</i><div><b>문서 B</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 오른쪽 문서 내용</p>`).join('')}</div></section></div></div></div>`},
+  'enable-split-preview-wrap':{title:'분할 미리보기 긴 줄 자동 줄바꿈',body:'<div class="option-live-demo"><small>켜면 영역 너비에 맞춰 줄바꿈하고, 끄면 한 줄을 유지한 채 가로로 스크롤합니다.</small><div class="option-wrap-playground"><div><b>자동 줄바꿈</b><section><span>확대해도 긴 문장을 미리보기 너비에 맞춰 자연스럽게 표시합니다.</span></section></div><div><b>가로 스크롤</b><section><span>확대해도 긴 문장을 한 줄로 유지하여 가로 스크롤로 확인합니다.</span><i></i></section></div></div></div>'},
   'enable-sync-scroll':{title:'스크롤 동기화',body:`<div class="option-live-demo"><small>한쪽을 내리면 다른 쪽도 같은 위치로 이동합니다.</small><div class="option-sync-playground"><div><b>Markdown</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 문서 내용</p>`).join('')}</div></section></div><i>↔</i><div><b>Preview</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 문서 내용</p>`).join('')}</div></section></div></div></div>`},
   'enable-line-numbers':{title:'행 번호 보기',body:'<div class="option-example-code"><i>1</i><span># 제목</span><i>2</i><span>본문 내용</span><i>3</i><span>- 목록</span></div>'},
   'enable-swap-panes':{title:'분할 위치 바꾸기',body:'<div class="option-live-demo"><small>Markdown과 Preview의 위아래 순서가 서로 바뀝니다.</small><div class="option-swap-animation"><div class="option-swap-pane option-swap-md"><b>Markdown</b><span>**문서 내용**</span></div><i>⇅</i><div class="option-swap-pane option-swap-preview"><b>Preview</b><strong>문서 내용</strong></div></div></div>'},
@@ -14696,6 +14808,8 @@ $('open-document-split').onclick=e=>{e.preventDefault();e.stopPropagation();if(!
 $('enable-document-sync-scroll').checked=documentSyncScrollEnabled;
 $('enable-document-sync-scroll').onchange=e=>{documentSyncScrollEnabled=e.target.checked;if(!documentSyncScrollEnabled)resetDocumentScrollSync();localStorage.setItem('md-option-document-sync-scroll',documentSyncScrollEnabled?'1':'0')};
 setDocumentSplitEnabled(documentSplitEnabled,{persist:false});
+$('enable-split-preview-wrap').onchange=e=>setSplitPreviewWrap(e.target.checked);
+setSplitPreviewWrap(splitPreviewWrapEnabled,{persist:false});
 $('enable-autocorrect').checked=acEnabled;
 $('enable-color-correct').checked=colorCorrectEnabled;
 $('enable-paragraph-break').checked=paragraphBreakEnabled;
@@ -15055,7 +15169,7 @@ const EN_TEXT={
   '가이드':'Guide','기능 가이드 표시':'Show feature guides','설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.':'Hover over a feature to see instructions and examples.','설명이 필요한 기능을 길게 누르면 사용법과 예시를 보여줍니다.':'Press and hold a feature to see instructions and examples.',
   '가이드 다시 보기':'View guides again','목록에서 다시 볼 가이드를 선택합니다.':'Choose a guide to view again.',
   '단축키':'Shortcuts','단축키 설정':'Shortcut settings','17개 명령의 단축키를 확인하고 변경합니다.':'Review and change shortcuts for 17 commands.',
-  '편집 설정':'Editor settings','작성·보기 옵션':'Writing and view options','자동 보정과 편집 화면 표시 기능을 설정합니다.':'Configure automatic corrections and editor display options.',
+  '편집 설정':'Editor settings','작성·보기·분할 옵션':'Writing, view, and split options','작성 보정, 화면 표시와 분할 편집 기능을 설정합니다.':'Configure writing assistance, editor display, and split editing.',
   '테마':'Theme','화면 테마':'Display theme','라이트·다크 테마를 선택하거나 사용자 지정 색상을 편집합니다.':'Choose a light or dark theme, or edit custom colors.',
   '라이트':'Light','다크':'Dark','사용자 지정':'Custom','테마 설정':'Theme settings','화면에 사용할 테마를 선택하세요.':'Choose a theme for the interface.',
   '사용자 지정 테마 편집':'Edit custom theme','배경색과 글자색을 직접 설정합니다.':'Set the background and text colors manually.',
@@ -15066,9 +15180,11 @@ const EN_TEXT={
   '이미지':'Images','업로드한 이미지가 없습니다.':'No uploaded images.','이미지 정보':'Image details','파일명':'File name','확장자':'Extension','경로':'Path','파일 크기':'File size','이미지 크기':'Dimensions','확인 중...':'Checking...','확인할 수 없음':'Unavailable','사용 중인 업로드 MD':'Uploaded Markdown files using this image','업로드된 MD에서 이 이미지를 참조하지 않습니다.':'No uploaded Markdown file references this image.',
   '닫기':'Close','완료':'Done','취소':'Cancel','확인':'OK','복구':'Restore','작업 복구':'Restore workspace',
   '브라우저 저장소가 지워지기 전까지 이 기록을 복구할 수 있습니다.':'This workspace can be restored until the browser storage is cleared.',
-  '작성 옵션':'Writing options','보기 옵션':'View options','Enter로 줄바꿈':'Line break with Enter','Enter를 누른 위치에서 바로 줄바꿈':'Insert a line break where Enter is pressed',
+  '작성 옵션':'Writing options','보기 옵션':'View options','분할 옵션':'Split options','Enter로 줄바꿈':'Line break with Enter','Enter를 누른 위치에서 바로 줄바꿈':'Insert a line break where Enter is pressed',
   '문서 분할 편집':'Split document editing','다른 문서를 좌우에 배치해 동시에 편집':'Place different documents side by side and edit them at the same time','분할할 문서 선택':'Choose a document for split view',
   '분할 문서 스크롤 동기화':'Sync split document scrolling','나란히 열린 두 문서의 스크롤 위치를 맞춤':'Keep side-by-side documents at matching scroll positions','왼쪽과 오른쪽 문서의 스크롤 위치를 서로 맞춥니다.':'Keeps the left and right documents at matching scroll positions.',
+  '분할 미리보기 긴 줄 자동 줄바꿈':'Wrap long lines in split previews','끄면 긴 줄을 가로 스크롤로 표시':'Turn off to show long lines with horizontal scrolling','분할 문서의 미리보기에서 긴 문장을 영역 너비에 맞춰 줄바꿈합니다. 끄면 가로 스크롤로 확인합니다.':'Wrap long lines to the pane width in split document previews. Turn this off to use horizontal scrolling.',
+  '켜면 영역 너비에 맞춰 줄바꿈하고, 끄면 한 줄을 유지한 채 가로로 스크롤합니다.':'When enabled, long lines wrap to the pane width. When disabled, they stay on one line and scroll horizontally.','자동 줄바꿈':'Wrap lines','가로 스크롤':'Horizontal scroll','확대해도 긴 문장을 미리보기 너비에 맞춰 자연스럽게 표시합니다.':'Long lines wrap naturally to the preview width even when zoomed in.','확대해도 긴 문장을 한 줄로 유지하여 가로 스크롤로 확인합니다.':'Long lines remain on one line when zoomed in and can be viewed by scrolling horizontally.',
   'Markdown·Preview 스크롤 동기화':'Sync Markdown and Preview scrolling','한 문서의 편집창과 미리보기를 함께 스크롤':'Scroll a document’s editor and preview together',
   '한 문서를 스크롤하면 나란히 열린 다른 문서도 같은 위치로 이동합니다.':'Scrolling one document moves the other side-by-side document to the same position.','문서 A':'Document A','문서 B':'Document B','왼쪽 문서 내용':'Left document content','오른쪽 문서 내용':'Right document content',
   '새 분할에서 열기':'Open in split view','함께 편집할 문서를 선택하세요.':'Choose a document to edit side by side.','왼쪽 분할에 열기':'Open in left pane','오른쪽 분할에 열기':'Open in right pane',
@@ -15562,7 +15678,7 @@ async function showAppSettings(initialCategory='general'){
       <button class="app-settings-replay" type="button" data-shortcut-settings><span>단축키 설정</span><small>${SHORTCUT_DEFINITIONS.length}개 명령의 단축키를 확인하고 변경합니다.</small></button>
     </section>
     <section class="app-settings-group mobile-settings-only" data-settings-panel="general" ${settingsCategory==='general'?'':'hidden'}><h4>편집 설정</h4>
-      <button class="app-settings-replay mobile-settings-entry" type="button" data-edit-settings><span><b>작성·보기 옵션</b><small>자동 보정과 편집 화면 표시 기능을 설정합니다.</small></span><i>설정</i></button>
+      <button class="app-settings-replay mobile-settings-entry" type="button" data-edit-settings><span><b>작성·보기·분할 옵션</b><small>작성 보정, 화면 표시와 분할 편집 기능을 설정합니다.</small></span><i>설정</i></button>
     </section>
     <section class="app-settings-group mobile-settings-only" data-settings-panel="general" ${settingsCategory==='general'?'':'hidden'}><h4>테마</h4>
       <button class="app-settings-replay mobile-settings-entry" type="button" data-theme-settings><span><b>화면 테마</b><small>라이트·다크 테마를 선택하거나 사용자 지정 색상을 편집합니다.</small></span><i>설정</i></button>
