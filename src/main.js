@@ -10490,6 +10490,7 @@ let documentSyncScrollFrame=0;
 let documentFormatScrollLock=false;
 let documentExpectedScroll=new WeakMap();
 let documentScrollIntent=new WeakMap();
+let documentScrollIntentTop=new WeakMap();
 const pendingDocumentScrolls=new Map();
 const documentScrollAnimations=new Map();
 let documentScrollAnimationFrame=0;
@@ -10506,7 +10507,7 @@ function runDocumentScrollAnimations(){
     // Ease large proportional jumps over several frames. The cap prevents a
     // short document's small wheel step from throwing a much longer document
     // thousands of pixels in a single paint.
-    const step=Math.sign(distance)*Math.min(Math.abs(distance),Math.max(18,Math.min(180,Math.abs(distance)*.28)));
+    const step=Math.sign(distance)*Math.min(Math.abs(distance),Math.max(8,Math.min(48,Math.abs(distance)*.18)));
     const next=target.scrollTop+step;
     documentExpectedScroll.set(target,next);target.scrollTop=next;
   });
@@ -10519,6 +10520,7 @@ function animateDocumentScroll(target,destination){
 function markDocumentScrollIntent(surface){
   if(surface){
     documentScrollAnimations.delete(surface);
+    documentScrollIntentTop.set(surface,surface.scrollTop);
     documentScrollIntent.set(surface,performance.now());
   }
 }
@@ -10541,7 +10543,7 @@ documentScrollSurfaces.forEach(surface=>{
 function resetDocumentScrollSync(){
   if(documentSyncScrollFrame)cancelAnimationFrame(documentSyncScrollFrame);
   if(documentScrollAnimationFrame)cancelAnimationFrame(documentScrollAnimationFrame);
-  documentSyncScrollFrame=0;documentScrollAnimationFrame=0;pendingDocumentScrolls.clear();documentScrollAnimations.clear();documentExpectedScroll=new WeakMap();documentScrollIntent=new WeakMap();
+  documentSyncScrollFrame=0;documentScrollAnimationFrame=0;pendingDocumentScrolls.clear();documentScrollAnimations.clear();documentExpectedScroll=new WeakMap();documentScrollIntent=new WeakMap();documentScrollIntentTop=new WeakMap();
 }
 function documentPaneScrollTarget(pane,preferred){
   const view=pane==='secondary'?documentSplitState.secondaryView:currentEditView();
@@ -10562,20 +10564,31 @@ function syncDocumentPaneScroll(source,target){
   // Keep only the newest position for each target. Fast wheel/touchpad input
   // can emit several scroll events before paint; applying every intermediate
   // value makes the opposite pane visibly judder.
-  pendingDocumentScrolls.set(target,{source,target});
+  const start=documentScrollIntentTop.get(source);
+  const pending=pendingDocumentScrolls.get(target);
+  const priorTop=pending?.source===source?pending.lastTop:start;
+  const delta=Number.isFinite(priorTop)?source.scrollTop-priorTop:0;
+  pendingDocumentScrolls.set(target,{source,target,lastTop:source.scrollTop,delta:(pending?.source===source?pending.delta:0)+delta});
   if(documentSyncScrollFrame)return;
   documentSyncScrollFrame=requestAnimationFrame(()=>{
     documentSyncScrollFrame=0;
     const updates=[...pendingDocumentScrolls.values()];pendingDocumentScrolls.clear();
     if(!documentSyncScrollEnabled||!documentSplitState.secondaryFile)return;
-    updates.forEach(({source,target})=>{
+    updates.forEach(({source,target,delta})=>{
       documentScrollIntent.delete(source);
+      documentScrollIntentTop.delete(source);
       const sourceRange=Math.max(1,source.scrollHeight-source.clientHeight);
       const targetRange=Math.max(0,target.scrollHeight-target.clientHeight);
       const ratio=Math.max(0,Math.min(1,source.scrollTop/sourceRange));
-      const next=ratio*targetRange;
-      if(Math.abs(target.scrollTop-next)<=.5)return;
       const rangeDifference=Math.max(sourceRange/Math.max(1,targetRange),targetRange/sourceRange);
+      let next=ratio*targetRange;
+      if(rangeDifference>1.75){
+        const gain=Math.max(.75,Math.min(1.25,Math.sqrt(targetRange/sourceRange)));
+        next=Math.max(0,Math.min(targetRange,target.scrollTop+delta*gain));
+        if(source.scrollTop<=1)next=0;
+        else if(source.scrollTop>=sourceRange-1)next=targetRange;
+      }
+      if(Math.abs(target.scrollTop-next)<=.5)return;
       if(rangeDifference>1.75)animateDocumentScroll(target,next);
       else{documentExpectedScroll.set(target,next);target.scrollTop=next}
     });
@@ -15206,9 +15219,9 @@ const acPanelHtml=`
       <input type="checkbox" id="enable-line-numbers">
       <span><b>행 번호 보기</b><div class="ac-desc">Markdown 편집창 왼쪽에 행 번호 표시</div></span>
     </label>
-    <label title="분할 보기에서 Preview와 Markdown의 위아래 순서를 바꿉니다.">
+    <label title="한 문서를 분할해서 볼 때 Preview와 Markdown의 좌우 순서를 바꿉니다.">
       <input type="checkbox" id="enable-swap-panes">
-      <span><b>분할 위치 바꾸기</b><div class="ac-desc">Preview와 Markdown의 좌우 순서 변경</div></span>
+      <span><b>한 문서 분할 위치</b><div class="ac-desc">Preview와 Markdown의 좌우 순서 변경</div></span>
     </label>
     <label title="문서 탐색 하단에 현재 문서에서 사용한 해시태그를 모아서 표시합니다.">
       <input type="checkbox" id="enable-hashtag-navigator">
@@ -15217,10 +15230,10 @@ const acPanelHtml=`
   </div>
   <div class="ac-group" id="document-split-options">
     <div class="ac-group-title">분할 옵션</div>
-    <label class="ac-split-option"><span><span class="ac-option-title-row"><b>문서 분할 편집</b><input type="checkbox" id="enable-document-split"></span><div class="ac-desc">다른 문서를 좌우에 배치해 동시에 편집</div></span><button type="button" class="ac-next" id="open-document-split" title="분할할 문서 선택" aria-label="분할할 문서 선택">›</button></label>
+    <label class="ac-split-option"><span><span class="ac-option-title-row"><input type="checkbox" id="enable-document-split"><b>문서 분할 편집</b></span><div class="ac-desc">다른 문서를 좌우에 배치해 동시에 편집</div></span><button type="button" class="ac-next" id="open-document-split" title="분할할 문서 선택" aria-label="분할할 문서 선택">›</button></label>
     <label title="왼쪽과 오른쪽 문서의 스크롤 위치를 서로 맞춥니다."><input type="checkbox" id="enable-document-sync-scroll"><span><b>분할 문서 스크롤 동기화</b><div class="ac-desc">나란히 열린 두 문서의 스크롤 위치를 맞춤</div></span></label>
-    <label title="두 문서를 나란히 열었을 때 양쪽 모두 미리보기를 위에, Markdown 편집창을 아래에 배치합니다."><input type="checkbox" id="enable-split-preview-first"><span><b>분할 문서 미리보기 위에 배치</b><div class="ac-desc">끄면 편집 위·보기 아래로 배치</div></span></label>
-    <label title="분할 문서의 미리보기에서 긴 문장을 영역 너비에 맞춰 줄바꿈합니다. 끄면 가로 스크롤로 확인합니다."><input type="checkbox" id="enable-split-preview-wrap"><span><b>분할 미리보기 긴 줄 자동 줄바꿈</b><div class="ac-desc">끄면 긴 줄을 가로 스크롤로 표시</div></span></label>
+    <label title="두 문서를 열었을 때 각 문서 안에서 미리보기를 위에, 편집창을 아래에 놓습니다."><input type="checkbox" id="enable-split-preview-first"><span><b>두 문서 내부 배치</b><div class="ac-desc">미리보기 위 · 편집 아래</div></span></label>
+    <label title="두 문서의 미리보기에서 긴 줄을 각 칸의 너비에 맞춰 줄바꿈합니다."><input type="checkbox" id="enable-split-preview-wrap"><span><b>두 문서 미리보기 줄바꿈</b><div class="ac-desc">긴 줄을 칸 너비에 맞춤</div></span></label>
   </div>
 </div>`;
 document.body.insertAdjacentHTML('beforeend',acPanelHtml);
@@ -15228,16 +15241,18 @@ PANELS.push('ac-panel');TOGGLES.push('autocorrect-toggle');
 const optionPreviewExamples={
   'enable-paragraph-break':{title:'Enter로 줄바꿈',body:'<div class="option-live-demo"><small>Enter를 누르면 다음 줄이 바로 만들어집니다.</small><div class="option-enter-animation"><span>첫 번째 줄</span><i>Enter ↵</i><span>두 번째 줄</span><b></b></div></div>'},
   'enable-preview-markdown':{title:'프리뷰 MD 문법 적용',body:'<div class="option-live-demo"><small>입력한 Markdown 문법이 바로 서식으로 바뀝니다.</small><div class="option-markdown-animation"><div class="option-demo-input"><span>**텍스트**</span><b></b></div><i>서식 적용</i><div class="option-demo-output"><strong>텍스트</strong></div></div></div>'},
+  'enable-list-format-confirm':{title:'목록 변환 전 서식 확인',body:'<div class="option-live-demo"><small>서식이 있는 문장을 목록으로 바꾸기 전에 처리 방법을 확인합니다.</small><div class="option-list-confirm-demo"><div class="option-list-confirm-source"><mark>중요한 문장</mark><i>목록으로 변환</i></div><div class="option-list-confirm-card"><b>서식을 유지할까요?</b><p>강조와 색상을 유지한 채 목록으로 바꿀 수 있습니다.</p><div><span>서식 없이</span><strong>서식 유지</strong></div></div></div></div>'},
   'enable-auto-link':{title:'URL 자동 링크',body:'<div class="option-live-demo"><small>붙여넣은 주소가 클릭 가능한 링크로 바뀝니다.</small><div class="option-link-animation"><div class="option-demo-input"><span>https://example.com</span><b></b></div><i>붙여넣기</i><div class="option-demo-output"><a>https://example.com</a></div></div></div>'},
   'enable-source-syntax-hover':{title:'문법 빠른 편집',body:'<div class="option-live-demo"><small>Preview의 문장에 마우스를 올리면 Markdown 원문을 고칠 수 있는 창이 열립니다.</small><div class="option-quick-edit-animation"><div class="option-preview-sentence"><span>중요한 문장입니다.</span><b>마우스</b></div><div class="option-source-editor"><code>**중요한 문장**입니다.</code><i>수정</i></div><div class="option-quick-edit-result"><strong>수정한 문장</strong>입니다.</div></div></div>'},
   'enable-autocorrect':{title:'기호 공백 보정',body:'<div class="option-live-demo"><small>Markdown 기호 안에 잘못 들어간 공백을 자동으로 정리합니다.</small><div class="option-space-animation"><div><span>**김밥 </span><em> </em><span>**</span><b></b></div><i>공백 제거</i><strong>**김밥**</strong></div></div>'},
   'enable-color-correct':{title:'색상 가독성 보정',body:'<div class="option-live-demo"><small>테마와 비슷해 잘 보이지 않는 글자색을 읽기 쉽게 바꿉니다.</small><div class="option-color-animation"><div class="option-color-scene"><span>LIGHT</span><b>문서 내용</b></div><i>테마 전환</i><div class="option-color-status">글자색 자동 보정</div></div></div>'},
   'enable-table-filter':{title:'표 필터·정렬',body:'<div class="option-live-demo"><small>머리글을 누른 뒤 필터 조건이나 정렬 순서를 선택합니다.</small><div class="option-table-animation"><div class="option-table-head"><b>이름</b><button type="button">점수 <i>▾</i></button></div><div class="option-table-menu"><span>높은 점수순</span><span>낮은 점수순</span></div><div class="option-table-rows"><span>서준</span><span>88</span><span>민지</span><span>95</span></div></div></div>'},
   'enable-document-sync-scroll':{title:'분할 문서 스크롤 동기화',body:`<div class="option-live-demo"><small>한 문서를 스크롤하면 나란히 열린 다른 문서도 같은 위치로 이동합니다.</small><div class="option-sync-playground option-document-sync-playground"><div><b>문서 A</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 왼쪽 문서 내용</p>`).join('')}</div></section></div><i>↔</i><div><b>문서 B</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 오른쪽 문서 내용</p>`).join('')}</div></section></div></div></div>`},
-  'enable-split-preview-wrap':{title:'분할 미리보기 긴 줄 자동 줄바꿈',body:'<div class="option-live-demo"><small>켜면 영역 너비에 맞춰 줄바꿈하고, 끄면 한 줄을 유지한 채 가로로 스크롤합니다.</small><div class="option-wrap-playground"><div><b>자동 줄바꿈</b><section><span>확대해도 긴 문장을 미리보기 너비에 맞춰 자연스럽게 표시합니다.</span></section></div><div><b>가로 스크롤</b><section><span>확대해도 긴 문장을 한 줄로 유지하여 가로 스크롤로 확인합니다.</span><i></i></section></div></div></div>'},
+  'enable-split-preview-first':{title:'두 문서 내부 배치',body:'<div class="option-live-demo"><small>각 문서 안의 미리보기와 편집창이 위아래로 배치됩니다.</small><div class="option-dual-inner-layout"><div><b>문서 A</b><span>미리보기</span><span>편집</span></div><div><b>문서 B</b><span>미리보기</span><span>편집</span></div></div></div>'},
+  'enable-split-preview-wrap':{title:'두 문서 미리보기 줄바꿈',body:'<div class="option-live-demo"><small>켜면 칸 너비에 맞춰 줄바꿈하고, 끄면 한 줄을 가로로 스크롤합니다.</small><div class="option-wrap-playground"><div><b>자동 줄바꿈</b><section><span>긴 문장을 미리보기 너비에 맞춰 자연스럽게 표시합니다.</span></section></div><div><b>가로 스크롤</b><section><span>긴 문장을 한 줄로 유지하여 가로 스크롤로 확인합니다.</span><i></i></section></div></div></div>'},
   'enable-sync-scroll':{title:'스크롤 동기화',body:`<div class="option-live-demo"><small>한쪽을 내리면 다른 쪽도 같은 위치로 이동합니다.</small><div class="option-sync-playground"><div><b>Markdown</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 문서 내용</p>`).join('')}</div></section></div><i>↔</i><div><b>Preview</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 문서 내용</p>`).join('')}</div></section></div></div></div>`},
   'enable-line-numbers':{title:'행 번호 보기',body:'<div class="option-example-code"><i>1</i><span># 제목</span><i>2</i><span>본문 내용</span><i>3</i><span>- 목록</span></div>'},
-  'enable-swap-panes':{title:'분할 위치 바꾸기',body:'<div class="option-live-demo"><small>Markdown과 Preview의 좌우 순서가 서로 바뀝니다.</small><div class="option-swap-animation"><div class="option-swap-pane option-swap-md"><b>Markdown</b><span>**문서 내용**</span></div><i>⇄</i><div class="option-swap-pane option-swap-preview"><b>Preview</b><strong>문서 내용</strong></div></div></div>'},
+  'enable-swap-panes':{title:'한 문서 분할 위치',body:'<div class="option-live-demo"><small>한 문서를 분할해서 볼 때 Preview와 Markdown의 좌우 위치를 바꿉니다.</small><div class="option-swap-animation"><div class="option-swap-pane option-swap-preview"><b>Preview</b><strong>문서 내용</strong></div><i>⇄</i><div class="option-swap-pane option-swap-md"><b>Markdown</b><span>**문서 내용**</span></div></div></div>'},
   'enable-hashtag-navigator':{title:'해시태그 탐색',body:'<div class="option-live-demo"><small>문서의 태그를 모아 보여주고, 선택한 태그가 있는 위치로 이동합니다.</small><div class="option-tag-animation"><div class="option-tag-document"><span>프로젝트 기록 <mark>#프로젝트</mark></span><span>새로운 생각 <mark>#아이디어</mark></span><span>오늘 할 일 <mark>#할일</mark></span></div><div class="option-tag-list"><b>#프로젝트</b><b>#아이디어</b><b>#할일</b></div><i>↖</i></div></div>'}
 };
 const optionPreview=document.createElement('div');
@@ -15257,6 +15272,7 @@ function showOptionPreview(label,id){
   clearTimeout(optionPreviewTimer);clearTimeout(optionPreviewCloseTimer);
   optionPreviewTimer=setTimeout(()=>{
     optionPreview.innerHTML=`<div class="option-example-head"><strong>${example.title}</strong><button type="button" aria-label="가이드 닫기">×</button></div><div>${example.body}</div>`;
+    if(uiLanguage==='en')translateUi(optionPreview);
     optionPreview.querySelector('.option-example-head button').onclick=event=>{event.stopPropagation();hideOptionPreview(true)};
     optionPreview.hidden=false;
     const rect=label.getBoundingClientRect(),panelRect=$('ac-panel').getBoundingClientRect(),width=Math.min(390,innerWidth-16),gap=12;
@@ -15681,8 +15697,8 @@ const EN_TEXT={
   '작성 옵션':'Writing options','보기 옵션':'View options','분할 옵션':'Split options','Enter로 줄바꿈':'Line break with Enter','Enter를 누른 위치에서 바로 줄바꿈':'Insert a line break where Enter is pressed',
   '문서 분할 편집':'Split document editing','다른 문서를 좌우에 배치해 동시에 편집':'Place documents side by side and edit them together','분할할 문서 선택':'Choose a document for split view','문서 분할 편집은 데스크톱 화면에서만 사용할 수 있습니다.':'Split document editing is available on desktop screens only.',
   '분할 문서 스크롤 동기화':'Sync split document scrolling','나란히 열린 두 문서의 스크롤 위치를 맞춤':'Keep side-by-side documents at matching scroll positions','왼쪽과 오른쪽 문서의 스크롤 위치를 서로 맞춥니다.':'Keeps the left and right documents at matching scroll positions.',
-  '분할 문서 미리보기 위에 배치':'Place split previews on top','끄면 편집 위·보기 아래로 배치':'Turn off for Edit above and View below','두 문서를 나란히 열었을 때 양쪽 모두 미리보기를 위에, Markdown 편집창을 아래에 배치합니다.':'When two documents are side by side, places View above and the Markdown editor below in both panes.',
-  '분할 미리보기 긴 줄 자동 줄바꿈':'Wrap long lines in split previews','끄면 긴 줄을 가로 스크롤로 표시':'Turn off to show long lines with horizontal scrolling','분할 문서의 미리보기에서 긴 문장을 영역 너비에 맞춰 줄바꿈합니다. 끄면 가로 스크롤로 확인합니다.':'Wrap long lines to the pane width in split document previews. Turn this off to use horizontal scrolling.',
+  '두 문서 내부 배치':'Two-document inner layout','미리보기 위 · 편집 아래':'Preview above · Edit below','두 문서를 열었을 때 각 문서 안에서 미리보기를 위에, 편집창을 아래에 놓습니다.':'Places Preview above and Edit below inside each document when two documents are open.','각 문서 안의 미리보기와 편집창이 위아래로 배치됩니다.':'Preview and Edit are stacked inside each document.','문서 A':'Document A','문서 B':'Document B',
+  '두 문서 미리보기 줄바꿈':'Wrap two-document previews','긴 줄을 칸 너비에 맞춤':'Fit long lines to each pane','두 문서의 미리보기에서 긴 줄을 각 칸의 너비에 맞춰 줄바꿈합니다.':'Wraps long lines to each pane width in two-document previews.','켜면 칸 너비에 맞춰 줄바꿈하고, 끄면 한 줄을 가로로 스크롤합니다.':'Wrap to the pane width when on; scroll horizontally on one line when off.',
   '켜면 영역 너비에 맞춰 줄바꿈하고, 끄면 한 줄을 유지한 채 가로로 스크롤합니다.':'When enabled, long lines wrap to the pane width. When disabled, they stay on one line and scroll horizontally.','자동 줄바꿈':'Wrap lines','가로 스크롤':'Horizontal scroll','확대해도 긴 문장을 미리보기 너비에 맞춰 자연스럽게 표시합니다.':'Long lines wrap naturally to the preview width even when zoomed in.','확대해도 긴 문장을 한 줄로 유지하여 가로 스크롤로 확인합니다.':'Long lines remain on one line when zoomed in and can be viewed by scrolling horizontally.',
   'Markdown·Preview 스크롤 동기화':'Sync Markdown and Preview scrolling','한 문서의 편집창과 미리보기를 함께 스크롤':'Scroll a document’s editor and preview together',
   '분할 보기 스크롤 동기화':'Sync split-view scrolling','편집·보기를 함께 스크롤':'Scroll Edit and View together','분할 보기에서 편집창과 보기창의 세로 스크롤 위치를 서로 맞춥니다.':'Keeps Edit and View at matching vertical positions in Split view.',
@@ -15694,7 +15710,7 @@ const EN_TEXT={
   '현재 문서는 이미 왼쪽 편집 영역에 열려 있습니다. 다른 문서를 선택해 주세요.':'The current document is already open in the left pane. Choose another document.','분할해서 열 다른 문서를 먼저 추가해 주세요.':'Add another document before opening split view.',
   '문서 닫기':'Close documents','문서 저장':'Save documents','닫을 문서를 선택하세요.':'Choose the documents to close.','저장할 문서를 선택하세요.':'Choose the documents to save.','선택 문서 닫기':'Close selected documents','선택 문서 저장':'Save selected documents','닫을 문서를 하나 이상 선택해 주세요.':'Select at least one document to close.','저장할 문서를 하나 이상 선택해 주세요.':'Select at least one document to save.',
   '프리뷰 MD 문법 적용':'Render Markdown in Preview','Preview에 입력한 Markdown 문법을 서식으로 변환':'Render Markdown syntax entered in Preview',
-  '목록 변환 전 서식 확인':'Confirm formatting before list conversion','색상·강조가 있는 문장을 목록으로 바꿀 때 확인':'Ask before converting formatted text into a list',
+  '목록 변환 전 서식 확인':'Confirm formatting before list conversion','색상·강조가 있는 문장을 목록으로 바꿀 때 확인':'Ask before converting formatted text into a list','서식이 있는 문장을 목록으로 바꾸기 전에 처리 방법을 확인합니다.':'Choose how formatting is handled before converting styled text into a list.','중요한 문장':'Important sentence','목록으로 변환':'Convert to list','서식을 유지할까요?':'Keep the formatting?','강조와 색상을 유지한 채 목록으로 바꿀 수 있습니다.':'Convert to a list while keeping emphasis and colors.','서식 없이':'Without formatting','서식 유지':'Keep formatting',
   'URL 자동 링크':'Automatic URL links','붙여넣은 주소를 링크로 자동 변환':'Convert pasted URLs into links',
   '문법 빠른 편집':'Quick syntax editing','문장에 마우스를 올려 원문 수정':'Hover over a sentence to edit its source',
   '창 표시까지':'Show after','초':'sec','기호 공백 보정':'Fix syntax spacing','MD 기호 안의 불필요한 공백 제거':'Remove unnecessary spaces inside Markdown syntax',
@@ -15702,7 +15718,7 @@ const EN_TEXT={
   '표 필터·정렬':'Table filter and sort','표 머리글에서 행을 필터링하거나 정렬하며 원문은 유지':'Filter or sort rows from table headers without changing the source',
   '스크롤 동기화':'Sync scrolling','Markdown과 Preview를 함께 스크롤':'Scroll Markdown and Preview together',
   '행 번호 보기':'Show line numbers','Markdown 편집창 왼쪽에 행 번호 표시':'Show line numbers beside the Markdown editor',
-  '분할 위치 바꾸기':'Swap split panes','Preview와 Markdown의 좌우 순서 변경':'Swap the horizontal order of Preview and Markdown','Markdown과 Preview의 좌우 순서가 서로 바뀝니다.':'Swaps the left and right positions of Markdown and Preview.',
+  '한 문서 분할 위치':'Single-document split layout','Preview와 Markdown의 좌우 순서 변경':'Swap the horizontal order of Preview and Markdown','한 문서를 분할해서 볼 때 Preview와 Markdown의 좌우 순서를 바꿉니다.':'Swaps Preview and Markdown horizontally when viewing one document in split mode.','한 문서를 분할해서 볼 때 Preview와 Markdown의 좌우 위치를 바꿉니다.':'Swaps the left and right positions of Preview and Markdown in a single-document split.','Markdown과 Preview의 좌우 순서가 서로 바뀝니다.':'Swaps the left and right positions of Markdown and Preview.',
   '해시태그 탐색':'Hashtag navigation','문서의 #태그를 모아 빠르게 이동':'Collect document hashtags for quick navigation',
   '새 문서':'New document','열기':'Open','파일 삽입':'Insert file','버전 기록':'Version history','저장':'Save','찾기':'Find','찾기 및 바꾸기':'Find and replace',
   '사이드바 열기':'Open sidebar','사이드바 닫기':'Close sidebar','서식 도구 접기':'Collapse formatting tools','서식 도구 펼치기':'Expand formatting tools',
