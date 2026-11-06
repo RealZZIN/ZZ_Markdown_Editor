@@ -1244,6 +1244,8 @@ function setDocumentSplitEnabled(enabled,{persist=true}={}){
   if(picker){picker.disabled=mobile||!documentSplitEnabled;picker.setAttribute('aria-disabled',String(mobile||!documentSplitEnabled))}
   const syncCheckbox=$('enable-document-sync-scroll');
   if(syncCheckbox)syncCheckbox.disabled=mobile||!documentSplitEnabled;
+  const layoutCheckbox=$('enable-split-preview-first');
+  if(layoutCheckbox)layoutCheckbox.disabled=mobile||!documentSplitEnabled;
   const wrapCheckbox=$('enable-split-preview-wrap');
   if(wrapCheckbox)wrapCheckbox.disabled=mobile||!documentSplitEnabled;
   $('document-split-options')?.classList.toggle('mobile-unavailable',mobile);
@@ -10552,6 +10554,19 @@ function documentPaneScrollTarget(pane,preferred){
   if(preferred==='preview')return pane==='secondary'?els.secondaryPreview:els.preview;
   return pane==='secondary'?els.secondaryEditor:els.editor;
 }
+function alignSplitDocumentScrollFromActivePane(){
+  if(!documentSyncScrollEnabled||!documentSplitState.secondaryFile)return;
+  const sourcePane=documentSplitState.activePane==='secondary'?'secondary':'primary';
+  const targetPane=sourcePane==='secondary'?'primary':'secondary';
+  const preferred=sourcePane==='secondary'?documentSplitState.secondarySurface:state.lastInsertionSurface;
+  const source=documentPaneScrollTarget(sourcePane,preferred);
+  const target=documentPaneScrollTarget(targetPane,preferred);
+  if(!source||!target)return;
+  const targetRange=Math.max(0,target.scrollHeight-target.clientHeight);
+  const next=Math.max(0,Math.min(targetRange,source.scrollTop));
+  documentExpectedScroll.set(target,next);
+  target.scrollTop=next;
+}
 function syncDocumentPaneScroll(source,target){
   if(documentFormatScrollLock||!documentSyncScrollEnabled||!documentSplitState.secondaryFile||!target)return;
   const expected=documentExpectedScroll.get(source);
@@ -10577,20 +10592,10 @@ function syncDocumentPaneScroll(source,target){
     updates.forEach(({source,target,delta})=>{
       documentScrollIntent.delete(source);
       documentScrollIntentTop.delete(source);
-      const sourceRange=Math.max(1,source.scrollHeight-source.clientHeight);
       const targetRange=Math.max(0,target.scrollHeight-target.clientHeight);
-      const ratio=Math.max(0,Math.min(1,source.scrollTop/sourceRange));
-      const rangeDifference=Math.max(sourceRange/Math.max(1,targetRange),targetRange/sourceRange);
-      let next=ratio*targetRange;
-      if(rangeDifference>1.75){
-        const gain=Math.max(.75,Math.min(1.25,Math.sqrt(targetRange/sourceRange)));
-        next=Math.max(0,Math.min(targetRange,target.scrollTop+delta*gain));
-        if(source.scrollTop<=1)next=0;
-        else if(source.scrollTop>=sourceRange-1)next=targetRange;
-      }
+      const next=Math.max(0,Math.min(targetRange,target.scrollTop+delta));
       if(Math.abs(target.scrollTop-next)<=.5)return;
-      if(rangeDifference>1.75)animateDocumentScroll(target,next);
-      else{documentExpectedScroll.set(target,next);target.scrollTop=next}
+      documentExpectedScroll.set(target,next);target.scrollTop=next;
     });
   });
 }
@@ -14913,6 +14918,7 @@ function restoreTableInsertScroll(snapshot){
 const PANELS=['text-color-panel','bg-color-panel','custom-theme-panel','ins-menu','syntax-menu','table-size-panel'];
 const TOGGLES=['text-color-toggle','bg-color-toggle','fmt-insert-toggle','fmt-syntax-toggle','fmt-table-toggle'];
 let quoteColorTarget=null;
+let quoteDesignClipboard=null;
 function ensureQuoteColorTabs(){
   const panel=$('text-color-panel');if(!panel||panel.querySelector('.quote-color-tabs'))return;
   const tabs=document.createElement('div');tabs.className='quote-color-tabs';
@@ -15019,12 +15025,17 @@ function showQuoteColorContextMenu(event){
   event.preventDefault();event.stopImmediatePropagation();
   document.querySelector('.quote-color-context-menu')?.remove();
   const menu=document.createElement('div');menu.className='file-context-menu quote-color-context-menu';menu.hidden=false;
-  const unify=document.createElement('button'),reset=document.createElement('button');
-  unify.type=reset.type='button';unify.textContent=kind==='border'?'모든 인용선에 이 색상 적용':'모든 인용문 배경에 이 색상 적용';reset.textContent='기본 색상으로 되돌리기';
+  const label=text=>uiLanguage==='en'?translatedUiText(text):text;
+  const copy=document.createElement('button'),paste=document.createElement('button'),separator=document.createElement('hr'),unify=document.createElement('button'),reset=document.createElement('button');
+  copy.type=paste.type=unify.type=reset.type='button';
+  copy.textContent=label('인용문 디자인 복사');paste.textContent=label('인용문 디자인 붙여넣기');paste.disabled=!quoteDesignClipboard;
+  unify.textContent=label(kind==='border'?'모든 인용선에 이 색상 적용':'모든 인용문 배경에 이 색상 적용');reset.textContent=label('기본 색상으로 되돌리기');
+  copy.onclick=()=>{const style=getComputedStyle(quote);quoteDesignClipboard={borderLeftColor:style.borderLeftColor,backgroundColor:style.backgroundColor};menu.remove()};
+  paste.onclick=()=>{if(!quoteDesignClipboard)return;pushPreviewFormatHistory();quote.style.borderLeftColor=quoteDesignClipboard.borderLeftColor;quote.style.backgroundColor=quoteDesignClipboard.backgroundColor;syncFromPreview();menu.remove()};
   unify.onclick=()=>{pushPreviewFormatHistory();const property=quoteColorProperty(kind),value=getComputedStyle(quote)[property];root.querySelectorAll('blockquote').forEach(item=>item.style[property]=value);syncFromPreview();menu.remove()};
   reset.onclick=()=>{pushPreviewFormatHistory();quote.style.removeProperty(quoteColorProperty(kind,true));syncFromPreview();menu.remove()};
-  menu.append(unify,reset);document.body.appendChild(menu);menu.style.left=Math.min(event.clientX,innerWidth-menu.offsetWidth-8)+'px';menu.style.top=Math.min(event.clientY,innerHeight-menu.offsetHeight-8)+'px';
-  setTimeout(()=>document.addEventListener('pointerdown',()=>menu.remove(),{once:true}),0);
+  menu.append(copy,paste,separator,unify,reset);document.body.appendChild(menu);menu.style.left=Math.min(event.clientX,innerWidth-menu.offsetWidth-8)+'px';menu.style.top=Math.min(event.clientY,innerHeight-menu.offsetHeight-8)+'px';
+  setTimeout(()=>document.addEventListener('pointerdown',event=>{if(!menu.contains(event.target))menu.remove()},{once:true}),0);
 }
 els.preview.addEventListener('contextmenu',showQuoteColorContextMenu,true);
 els.secondaryPreview.addEventListener('contextmenu',showQuoteColorContextMenu,true);
@@ -15231,7 +15242,7 @@ const acPanelHtml=`
   <div class="ac-group" id="document-split-options">
     <div class="ac-group-title">분할 옵션</div>
     <label class="ac-split-option"><span><span class="ac-option-title-row"><input type="checkbox" id="enable-document-split"><b>문서 분할 편집</b></span><div class="ac-desc">다른 문서를 좌우에 배치해 동시에 편집</div></span><button type="button" class="ac-next" id="open-document-split" title="분할할 문서 선택" aria-label="분할할 문서 선택">›</button></label>
-    <label title="왼쪽과 오른쪽 문서의 스크롤 위치를 서로 맞춥니다."><input type="checkbox" id="enable-document-sync-scroll"><span><b>분할 문서 스크롤 동기화</b><div class="ac-desc">나란히 열린 두 문서의 스크롤 위치를 맞춤</div></span></label>
+    <label title="한 문서를 내린 거리만큼 다른 문서도 함께 이동합니다."><input type="checkbox" id="enable-document-sync-scroll"><span><b>분할 문서 스크롤 동기화</b><div class="ac-desc">한쪽을 내린 거리만큼 다른 쪽도 이동</div></span></label>
     <label title="두 문서를 열었을 때 각 문서 안에서 미리보기를 위에, 편집창을 아래에 놓습니다."><input type="checkbox" id="enable-split-preview-first"><span><b>두 문서 내부 배치</b><div class="ac-desc">미리보기 위 · 편집 아래</div></span></label>
     <label title="두 문서의 미리보기에서 긴 줄을 각 칸의 너비에 맞춰 줄바꿈합니다."><input type="checkbox" id="enable-split-preview-wrap"><span><b>두 문서 미리보기 줄바꿈</b><div class="ac-desc">긴 줄을 칸 너비에 맞춤</div></span></label>
   </div>
@@ -15247,7 +15258,7 @@ const optionPreviewExamples={
   'enable-autocorrect':{title:'기호 공백 보정',body:'<div class="option-live-demo"><small>Markdown 기호 안에 잘못 들어간 공백을 자동으로 정리합니다.</small><div class="option-space-animation"><div><span>**김밥 </span><em> </em><span>**</span><b></b></div><i>공백 제거</i><strong>**김밥**</strong></div></div>'},
   'enable-color-correct':{title:'색상 가독성 보정',body:'<div class="option-live-demo"><small>테마와 비슷해 잘 보이지 않는 글자색을 읽기 쉽게 바꿉니다.</small><div class="option-color-animation"><div class="option-color-scene"><span>LIGHT</span><b>문서 내용</b></div><i>테마 전환</i><div class="option-color-status">글자색 자동 보정</div></div></div>'},
   'enable-table-filter':{title:'표 필터·정렬',body:'<div class="option-live-demo"><small>머리글을 누른 뒤 필터 조건이나 정렬 순서를 선택합니다.</small><div class="option-table-animation"><div class="option-table-head"><b>이름</b><button type="button">점수 <i>▾</i></button></div><div class="option-table-menu"><span>높은 점수순</span><span>낮은 점수순</span></div><div class="option-table-rows"><span>서준</span><span>88</span><span>민지</span><span>95</span></div></div></div>'},
-  'enable-document-sync-scroll':{title:'분할 문서 스크롤 동기화',body:`<div class="option-live-demo"><small>한 문서를 스크롤하면 나란히 열린 다른 문서도 같은 위치로 이동합니다.</small><div class="option-sync-playground option-document-sync-playground"><div><b>문서 A</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 왼쪽 문서 내용</p>`).join('')}</div></section></div><i>↔</i><div><b>문서 B</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 오른쪽 문서 내용</p>`).join('')}</div></section></div></div></div>`},
+  'enable-document-sync-scroll':{title:'분할 문서 스크롤 동기화',body:`<div class="option-live-demo"><small>한 문서를 내린 거리만큼 나란히 열린 다른 문서도 이동합니다.</small><div class="option-sync-playground option-document-sync-playground"><div><b>문서 A</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 왼쪽 문서 내용</p>`).join('')}</div></section></div><i>↔</i><div><b>문서 B</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 오른쪽 문서 내용</p>`).join('')}</div></section></div></div></div>`},
   'enable-split-preview-first':{title:'두 문서 내부 배치',body:'<div class="option-live-demo"><small>각 문서 안의 미리보기와 편집창이 위아래로 배치됩니다.</small><div class="option-dual-inner-layout"><div><b>문서 A</b><span>미리보기</span><span>편집</span></div><div><b>문서 B</b><span>미리보기</span><span>편집</span></div></div></div>'},
   'enable-split-preview-wrap':{title:'두 문서 미리보기 줄바꿈',body:'<div class="option-live-demo"><small>켜면 칸 너비에 맞춰 줄바꿈하고, 끄면 한 줄을 가로로 스크롤합니다.</small><div class="option-wrap-playground"><div><b>자동 줄바꿈</b><section><span>긴 문장을 미리보기 너비에 맞춰 자연스럽게 표시합니다.</span></section></div><div><b>가로 스크롤</b><section><span>긴 문장을 한 줄로 유지하여 가로 스크롤로 확인합니다.</span><i></i></section></div></div></div>'},
   'enable-sync-scroll':{title:'스크롤 동기화',body:`<div class="option-live-demo"><small>한쪽을 내리면 다른 쪽도 같은 위치로 이동합니다.</small><div class="option-sync-playground"><div><b>Markdown</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 문서 내용</p>`).join('')}</div></section></div><i>↔</i><div><b>Preview</b><section><div>${Array.from({length:10},(_,i)=>`<p>${i+1}. 문서 내용</p>`).join('')}</div></section></div></div></div>`},
@@ -15305,7 +15316,12 @@ $('autocorrect-toggle').onclick=e=>{
 $('enable-document-split').onchange=e=>setDocumentSplitEnabled(e.target.checked);
 $('open-document-split').onclick=e=>{e.preventDefault();e.stopPropagation();if(!documentSplitEnabled)return;closeAllPanels();showDocumentSplitPicker()};
 $('enable-document-sync-scroll').checked=documentSyncScrollEnabled;
-$('enable-document-sync-scroll').onchange=e=>{documentSyncScrollEnabled=e.target.checked;if(!documentSyncScrollEnabled)resetDocumentScrollSync();localStorage.setItem('md-option-document-sync-scroll',documentSyncScrollEnabled?'1':'0')};
+$('enable-document-sync-scroll').onchange=e=>{
+  documentSyncScrollEnabled=e.target.checked;
+  resetDocumentScrollSync();
+  if(documentSyncScrollEnabled)requestAnimationFrame(alignSplitDocumentScrollFromActivePane);
+  localStorage.setItem('md-option-document-sync-scroll',documentSyncScrollEnabled?'1':'0');
+};
 setDocumentSplitEnabled(documentSplitEnabled,{persist:false});
 const documentSplitMobileQuery=matchMedia('(max-width: 860px)');
 documentSplitMobileQuery.addEventListener('change',()=>setDocumentSplitEnabled(documentSplitEnabled,{persist:false}));
@@ -15696,13 +15712,13 @@ const EN_TEXT={
   '브라우저 저장소가 지워지기 전까지 이 기록을 복구할 수 있습니다.':'This workspace can be restored until the browser storage is cleared.',
   '작성 옵션':'Writing options','보기 옵션':'View options','분할 옵션':'Split options','Enter로 줄바꿈':'Line break with Enter','Enter를 누른 위치에서 바로 줄바꿈':'Insert a line break where Enter is pressed',
   '문서 분할 편집':'Split document editing','다른 문서를 좌우에 배치해 동시에 편집':'Place documents side by side and edit them together','분할할 문서 선택':'Choose a document for split view','문서 분할 편집은 데스크톱 화면에서만 사용할 수 있습니다.':'Split document editing is available on desktop screens only.',
-  '분할 문서 스크롤 동기화':'Sync split document scrolling','나란히 열린 두 문서의 스크롤 위치를 맞춤':'Keep side-by-side documents at matching scroll positions','왼쪽과 오른쪽 문서의 스크롤 위치를 서로 맞춥니다.':'Keeps the left and right documents at matching scroll positions.',
+  '분할 문서 스크롤 동기화':'Sync split document scrolling','한쪽을 내린 거리만큼 다른 쪽도 이동':'Move the other document by the same scroll distance','한 문서를 내린 거리만큼 다른 문서도 함께 이동합니다.':'Moves the other document by the same distance you scroll one document.',
   '두 문서 내부 배치':'Two-document inner layout','미리보기 위 · 편집 아래':'Preview above · Edit below','두 문서를 열었을 때 각 문서 안에서 미리보기를 위에, 편집창을 아래에 놓습니다.':'Places Preview above and Edit below inside each document when two documents are open.','각 문서 안의 미리보기와 편집창이 위아래로 배치됩니다.':'Preview and Edit are stacked inside each document.','문서 A':'Document A','문서 B':'Document B',
   '두 문서 미리보기 줄바꿈':'Wrap two-document previews','긴 줄을 칸 너비에 맞춤':'Fit long lines to each pane','두 문서의 미리보기에서 긴 줄을 각 칸의 너비에 맞춰 줄바꿈합니다.':'Wraps long lines to each pane width in two-document previews.','켜면 칸 너비에 맞춰 줄바꿈하고, 끄면 한 줄을 가로로 스크롤합니다.':'Wrap to the pane width when on; scroll horizontally on one line when off.',
   '켜면 영역 너비에 맞춰 줄바꿈하고, 끄면 한 줄을 유지한 채 가로로 스크롤합니다.':'When enabled, long lines wrap to the pane width. When disabled, they stay on one line and scroll horizontally.','자동 줄바꿈':'Wrap lines','가로 스크롤':'Horizontal scroll','확대해도 긴 문장을 미리보기 너비에 맞춰 자연스럽게 표시합니다.':'Long lines wrap naturally to the preview width even when zoomed in.','확대해도 긴 문장을 한 줄로 유지하여 가로 스크롤로 확인합니다.':'Long lines remain on one line when zoomed in and can be viewed by scrolling horizontally.',
   'Markdown·Preview 스크롤 동기화':'Sync Markdown and Preview scrolling','한 문서의 편집창과 미리보기를 함께 스크롤':'Scroll a document’s editor and preview together',
   '분할 보기 스크롤 동기화':'Sync split-view scrolling','편집·보기를 함께 스크롤':'Scroll Edit and View together','분할 보기에서 편집창과 보기창의 세로 스크롤 위치를 서로 맞춥니다.':'Keeps Edit and View at matching vertical positions in Split view.',
-  '한 문서를 스크롤하면 나란히 열린 다른 문서도 같은 위치로 이동합니다.':'Scrolling one document moves the other side-by-side document to the same position.','문서 A':'Document A','문서 B':'Document B','왼쪽 문서 내용':'Left document content','오른쪽 문서 내용':'Right document content',
+  '한 문서를 내린 거리만큼 나란히 열린 다른 문서도 이동합니다.':'The side-by-side document moves by the same distance you scroll one document.','문서 A':'Document A','문서 B':'Document B','왼쪽 문서 내용':'Left document content','오른쪽 문서 내용':'Right document content',
   '새 분할에서 열기':'Open in split view','함께 편집할 문서를 선택하세요.':'Choose a document to edit side by side.','왼쪽 분할에 열기':'Open in left pane','오른쪽 분할에 열기':'Open in right pane',
   '이 문서 닫기':'Close this document','왼쪽 문서 닫기':'Close left document','오른쪽 문서 닫기':'Close right document','크게 보기':'Maximize','분할 보기로 복귀':'Return to split view','왼쪽 문서 크게 보기':'Maximize left document','오른쪽 문서 크게 보기':'Maximize right document',
   '왼쪽 문서 보기 방식':'Left document view mode','오른쪽 문서 보기 방식':'Right document view mode','왼쪽 문서 배율':'Left document zoom','오른쪽 문서 배율':'Right document zoom','왼쪽 문서 축소':'Zoom out left document','오른쪽 문서 축소':'Zoom out right document','왼쪽 문서 확대':'Zoom in left document','오른쪽 문서 확대':'Zoom in right document',
@@ -15788,7 +15804,7 @@ const EN_TEXT={
   '수평선':'Horizontal rule','줄바꿈':'Line break','페이지 구분':'Page break','인용':'Quote','중첩 인용':'Nested quote','각주':'Footnote','출처 인용':'Citation','참고문헌':'Bibliography','출처':'Source',
   '인라인 코드':'Inline code','코드 블록':'Code block','순서없는 목록':'Unordered list','순서있는 목록':'Ordered list',
   '빈 표 생성':'Create empty table','데이터로 표 만들기':'Create table from data','행·열 직접 입력...':'Enter rows and columns…',
-  '사용자 지정 테마':'Custom theme','배경색':'Background','글자색':'Text','인용선':'Quote line','적용':'Apply','빠른 색상':'Quick colors','최근 사용':'Recent','저장됨':'Saved','우클릭으로 삭제':'Right-click to delete','색 저장':'Save color',
+  '사용자 지정 테마':'Custom theme','배경색':'Background','글자색':'Text','인용선':'Quote line','적용':'Apply','빠른 색상':'Quick colors','최근 사용':'Recent','저장됨':'Saved','우클릭으로 삭제':'Right-click to delete','색 저장':'Save color','인용문 디자인 복사':'Copy quote design','인용문 디자인 붙여넣기':'Paste quote design','모든 인용선에 이 색상 적용':'Apply this color to all quote lines','모든 인용문 배경에 이 색상 적용':'Apply this color to all quote backgrounds','기본 색상으로 되돌리기':'Restore default color',
   '색 조절':'Color adjustment','저장된 색 없음':'No saved colors','사용 기록 없음':'No recent colors','기본':'Default'
   ,'사이드바 접기':'Collapse sidebar','사이드바 보기':'Sidebar view','화면 테마 도움말':'Theme help','파일을 현재 문서에 삽입':'Insert file into the current document',
   '사용자 지정 서식 (Ctrl+Alt+S)':'Custom formatting (Ctrl+Alt+S)','서식 목록':'Style list','글씨 크기(px)':'Font size (px)','글씨 크기 목록':'Font size list',
