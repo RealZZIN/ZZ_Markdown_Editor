@@ -1324,19 +1324,7 @@ function updateInlineCodeInk(){
   corrections.forEach(([el,color])=>{el.dataset.codeSurface='1';el.style.setProperty('--code-surface-fix',color)});
 }
 let chipContrastFrame=0,chipContrastNeedsCode=false,chipContrastNeedsTables=false,chipContrastNeedsEyedroppers=false;
-const chipContrastObserver=new MutationObserver(mutations=>{
-  const contains=(node,selector)=>node.nodeType===Node.ELEMENT_NODE&&(node.matches(selector)||node.querySelector(selector));
-  for(const mutation of mutations){
-    if(mutation.type==='attributes'){
-      if(mutation.target===document.body&&mutation.attributeName==='class'&&!customThemeEditingLive)chipContrastNeedsCode=true;
-      continue;
-    }
-    for(const node of mutation.addedNodes){
-      if(!chipContrastNeedsCode&&contains(node,'code,[data-inline-code-ink],[data-code-surface]'))chipContrastNeedsCode=true;
-      if(!chipContrastNeedsTables&&contains(node,'table'))chipContrastNeedsTables=true;
-      if(!chipContrastNeedsEyedroppers&&contains(node,'.cp-head'))chipContrastNeedsEyedroppers=true;
-    }
-  }
+function scheduleChipContrastRefresh(){
   if(chipContrastFrame||(!chipContrastNeedsCode&&!chipContrastNeedsTables&&!chipContrastNeedsEyedroppers))return;
   chipContrastFrame=requestAnimationFrame(()=>{
     chipContrastFrame=0;
@@ -1346,8 +1334,23 @@ const chipContrastObserver=new MutationObserver(mutations=>{
     if(needsCodeRefresh)updateInlineCodeInk();
     if(needsTableRefresh)installTableFilters();
   });
+}
+const chipContrastObserver=new MutationObserver(mutations=>{
+  const contains=(node,selector)=>node.nodeType===Node.ELEMENT_NODE&&(node.matches(selector)||node.querySelector(selector));
+  for(const mutation of mutations){
+    for(const node of mutation.addedNodes){
+      if(!chipContrastNeedsCode&&contains(node,'code,[data-inline-code-ink],[data-code-surface]'))chipContrastNeedsCode=true;
+      if(!chipContrastNeedsTables&&contains(node,'table'))chipContrastNeedsTables=true;
+      if(!chipContrastNeedsEyedroppers&&contains(node,'.cp-head'))chipContrastNeedsEyedroppers=true;
+    }
+  }
+  scheduleChipContrastRefresh();
 });
-chipContrastObserver.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});
+chipContrastObserver.observe(document.body,{subtree:true,childList:true});
+new MutationObserver(()=>{
+  if(customThemeEditingLive)return;
+  chipContrastNeedsCode=true;scheduleChipContrastRefresh();
+}).observe(document.body,{attributes:true,attributeFilter:['class']});
 installColorEyedroppers();
 function fixSpanColors(container){
   scopedElements(container,'[data-readable-color]').forEach(el=>{el.removeAttribute('data-readable-color');el.style.removeProperty('--readable-color')});
@@ -7058,7 +7061,7 @@ async function extractPdfWithLayout(file){
   try{
     state.lastInput={type:'pdf',name:file.name};updateHomeConvert();
     const base='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/';
-    const pdfjs=await import(base+'pdf.min.mjs');
+    const pdfjs=await import(/* @vite-ignore */ base+'pdf.min.mjs');
     pdfjs.GlobalWorkerOptions.workerSrc=base+'pdf.worker.min.mjs';
     const assets='https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/';
     loading=pdfjs.getDocument({data:await file.arrayBuffer(),cMapUrl:assets+'cmaps/',cMapPacked:true,standardFontDataUrl:assets+'standard_fonts/'});

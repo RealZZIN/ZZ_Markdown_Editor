@@ -52,30 +52,49 @@ async function mapWithConcurrency(items,limit,worker){
   await Promise.all(runners);
 }
 
+function withTimeout(promise,timeout,message){
+  let timer=0;
+  return Promise.race([
+    promise,
+    new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(message)),timeout)})
+  ]).finally(()=>clearTimeout(timer));
+}
+
+function equationFallback(equation,latex,display){
+  if(!equation.isConnected)return;
+  const fallback=document.createElement(display?'p':'span');
+  fallback.textContent=latex||equation.textContent?.trim()||'수식';
+  fallback.style.cssText=`font-family:"Cambria Math","Times New Roman",serif;white-space:pre-wrap;${display?'text-align:center;margin:0.6em 0':'vertical-align:middle'}`;
+  equation.replaceWith(fallback);
+}
+
 async function rasterizeEquations(root){
   const equations=[...root.querySelectorAll('.katex-display,.katex')].filter(node=>
     node.classList.contains('katex-display')||!node.closest('.katex-display')
   );
   if(!equations.length)return;
   const {toPng}=await import('html-to-image');
-  for(const equation of equations){
+  await mapWithConcurrency(equations,2,async equation=>{
+    const display=equation.classList.contains('katex-display');
+    const latex=equation.querySelector('annotation[encoding="application/x-tex"]')?.textContent?.trim()||'';
     try{
       const rect=equation.getBoundingClientRect();
-      if(!rect.width||!rect.height)continue;
-      const data=await toPng(equation,{pixelRatio:2.5,backgroundColor:'transparent',cacheBust:false,
-        width:Math.ceil(rect.width),height:Math.ceil(rect.height)});
+      if(!rect.width||!rect.height){equationFallback(equation,latex,display);return}
+      const width=Math.ceil(rect.width),height=Math.ceil(rect.height);
+      const pixelRatio=Math.max(1.4,Math.min(2.5,Math.sqrt(4_000_000/Math.max(1,width*height))));
+      const data=await withTimeout(toPng(equation,{pixelRatio,backgroundColor:'transparent',cacheBust:false,width,height}),10000,'Equation rendering timed out.');
       const image=document.createElement('img');
       image.src=data;
-      image.alt=equation.querySelector('annotation[encoding="application/x-tex"]')?.textContent?.trim()||equation.textContent?.trim()||'수식';
-      image.style.width=`${Math.ceil(rect.width)}px`;
-      image.style.height=`${Math.ceil(rect.height)}px`;
+      image.alt=latex||equation.textContent?.trim()||'수식';
+      image.style.width=`${width}px`;
+      image.style.height=`${height}px`;
       image.style.maxWidth='100%';
-      if(equation.classList.contains('katex-display')){
+      if(display){
         image.style.display='block';image.style.margin='0.6em auto';
       }else image.style.verticalAlign='middle';
       equation.replaceWith(image);
-    }catch(error){console.warn('Equation image export failed',error)}
-  }
+    }catch(error){console.warn('Equation image export failed',error);equationFallback(equation,latex,display)}
+  });
 }
 
 function normalizeHwpxSemantics(root){
