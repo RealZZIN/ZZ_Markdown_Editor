@@ -33,6 +33,7 @@ async function sourceToDataUri(source){
     const response=await fetch(source,{signal:controller.signal});
     if(!response.ok)throw new Error(`HTTP ${response.status}`);
     const blob=await response.blob();
+    if(blob.size>32*1024*1024)throw new Error('Image is too large to embed safely.');
     return await new Promise((resolve,reject)=>{
       const reader=new FileReader();
       reader.onload=()=>resolve(String(reader.result||''));
@@ -156,7 +157,10 @@ function normalizeHwpxSemantics(root){
 
 export async function prepareDocumentHtml(root,title='document',{format='docx',fontFamily=''}={}){
   if(!(root instanceof Element))throw new TypeError('A document preview element is required.');
-  if(document.fonts?.ready)await document.fonts.ready.catch(()=>{});
+  if(document.fonts?.ready)await Promise.race([
+    document.fonts.ready.catch(()=>{}),
+    new Promise(resolve=>setTimeout(resolve,3000))
+  ]);
   const clone=root.cloneNode(true);
   clone.querySelectorAll('script,button,input,select,textarea,.block-move-handle,.unique-block-move-handle,.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.img-resize-handle').forEach(node=>node.remove());
   if(format==='hwpx')normalizeHwpxSemantics(clone);
@@ -173,18 +177,25 @@ export async function prepareDocumentHtml(root,title='document',{format='docx',f
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>${pageCss(fontFamily)}</style></head><body>${clone.innerHTML}</body></html>`;
 }
 
+async function validateOfficeZip(blob,label){
+  if(!(blob instanceof Blob)||blob.size<4)throw new Error(`${label} conversion returned an empty document.`);
+  const signature=new Uint8Array(await blob.slice(0,4).arrayBuffer());
+  if(signature[0]!==0x50||signature[1]!==0x4b||signature[2]!==0x03||signature[3]!==0x04){
+    throw new Error(`${label} conversion returned an invalid package.`);
+  }
+  return blob;
+}
+
 export async function createDocxBlob(html){
   const {asBlob:htmlToDocxBlob}=await import('html-docx-js-typescript');
   const result=await htmlToDocxBlob(html,{orientation:'portrait',margins:{top:1020,right:964,bottom:1020,left:964}});
   const blob=result instanceof Blob?result:new Blob([result],{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
-  if(!blob.size)throw new Error('DOCX conversion returned an empty document.');
-  return blob;
+  return validateOfficeZip(blob,'DOCX');
 }
 
 export async function createHwpxBlob(html,{title='document'}={}){
   const {htmlToHwpx}=await import('hwp-convert/browser');
   const bytes=await htmlToHwpx(html,{title,creator:'ZZ Markdown Editor',page:{size:'A4',orientation:'portrait'}});
   const blob=new Blob([bytes],{type:'application/hwp+zip'});
-  if(!blob.size)throw new Error('HWPX conversion returned an empty document.');
-  return blob;
+  return validateOfficeZip(blob,'HWPX');
 }

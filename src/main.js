@@ -4460,6 +4460,7 @@ function installLazyTableResize(){
 }
 function cancelPostRenderEnhancements(){
   postRenderEnhancementToken++;
+  els.preview?.removeAttribute('aria-busy');
   if(postRenderEnhancementFrame)cancelAnimationFrame(postRenderEnhancementFrame);
   postRenderEnhancementFrame=0;
   if(postRenderEnhancementIdle&&'cancelIdleCallback' in window)cancelIdleCallback(postRenderEnhancementIdle);
@@ -4472,21 +4473,25 @@ function schedulePostRenderEnhancements(text){
   const token=postRenderEnhancementToken;
   let stage=0;
   els.preview.setAttribute('aria-busy','true');
+  const hasMermaid=!!els.preview.querySelector('.mermaid:not([data-processed])');
+  const hasCode=!!els.preview.querySelector('pre code');
+  const hasTables=!!els.preview.querySelector('table');
+  const hasImages=!!els.preview.querySelector('img');
+  const hasMovables=!!els.preview.querySelector('table,blockquote,.zz-lens,.obsidian-callout,.zz-sync-block,.zz-toc,.zz-sheet,.zz-html-embed,.zz-doc-embed,.reference-list,img,a,code:not(pre code),hr,.zz-math,.zz-form-control,mark.obsidian-highlight');
   const stages=[
-    ()=>fixSpanColors(els.preview),
-    ()=>runMermaid(els.preview),
-    ()=>runHighlight(els.preview),
-    ()=>{
+    hasMermaid?()=>runMermaid(els.preview):null,
+    hasCode?()=>runHighlight(els.preview):null,
+    hasTables?()=>{
       const previewTables=els.preview.querySelectorAll('table');
       const previewCells=els.preview.querySelectorAll('th,td').length;
       if(previewTables.length>120||previewCells>2000)installLazyTableResize();
       else addTableResize(els.preview);
-    },
-    ()=>addImageResize(els.preview),
-    ()=>addMovableElements(els.preview),
+    }:null,
+    hasImages?()=>addImageResize(els.preview):null,
+    hasMovables?()=>addMovableElements(els.preview):null,
     ()=>renderDocumentOutline(),
     ()=>schedulePreviewLineNumbers()
-  ];
+  ].filter(Boolean);
   const scheduleNext=()=>{
     if(token!==postRenderEnhancementToken)return;
     if('requestIdleCallback' in window)postRenderEnhancementIdle=requestIdleCallback(enhance,{timeout:650});
@@ -5413,7 +5418,7 @@ function ensureFileContextMenu(){
     <button type="button" data-file-action="duplicate">복제</button>
     <button type="button" data-file-action="rename">이름 변경</button>
     <hr>
-    <button type="button" class="danger" data-file-action="remove">제거</button>`;
+    <button type="button" class="danger" data-file-action="remove">닫기</button>`;
   fileContextMenu.addEventListener('click',e=>{
     const action=e.target.closest('[data-file-action]')?.dataset.fileAction;
     const index=fileContextIndex;
@@ -5604,9 +5609,9 @@ function confirmFileRemoval(files,label){
     const wrap=document.createElement('div');wrap.className='modal-backdrop file-remove-dialog';
     const unsaved=changed.length>0;
     wrap.innerHTML=`<div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="file-remove-title">
-      <h3 id="file-remove-title">${unsaved?'저장되지 않은 변경사항':'파일 제거'}</h3>
-      <p>${unsaved?`${htmlEsc(changed.length===1?(changed[0].displayName||changed[0].name):`${changed.length}개 문서`)}의 변경사항이 저장되지 않았습니다. 제거하면 변경사항을 복구할 수 없습니다.`:`${htmlEsc(label)}을(를) 목록에서 제거할까요?`}</p>
-      <div class="modal-actions"><button class="tool" type="button" data-remove-choice="cancel">취소</button><button class="tool danger" type="button" data-remove-choice="remove">${unsaved?'저장하지 않고 제거':'제거'}</button></div>
+      <h3 id="file-remove-title">${unsaved?'저장되지 않은 변경사항':'파일 닫기'}</h3>
+      <p>${unsaved?`${htmlEsc(changed.length===1?(changed[0].displayName||changed[0].name):`${changed.length}개 문서`)}의 변경사항이 저장되지 않았습니다. 닫으면 변경사항을 복구할 수 없습니다.`:`${htmlEsc(label)}을(를) 닫을까요?`}</p>
+      <div class="modal-actions"><button class="tool" type="button" data-remove-choice="cancel">취소</button><button class="tool danger" type="button" data-remove-choice="remove">${unsaved?'저장하지 않고 닫기':'닫기'}</button></div>
     </div>`;
     const done=value=>{document.removeEventListener('keydown',onKey);wrap.remove();resolve(value)};
     const onKey=event=>{if(event.key==='Escape')done(false)};
@@ -5625,7 +5630,7 @@ async function removeSidebarFile(index){
     clearOpenDocument();
     renderAll();
     scheduleWorkspaceSave();
-    setStatus('파일을 제거했습니다.');
+    setStatus('파일을 닫았습니다.');
     return;
   }
   if(state.active>index)state.active--;
@@ -5640,7 +5645,7 @@ async function removeSidebarFile(index){
   }
   renderAll();
   scheduleWorkspaceSave();
-  setStatus('파일을 제거했습니다.');
+  setStatus('파일을 닫았습니다.');
 }
 function standaloneFilePreview(file,index){
   const previousActive=state.active;
@@ -6733,7 +6738,7 @@ function redoEdit(){
   if(!state.future.length)return;const v=state.future.pop();state.history.push(v);trimHistoryBudget();restoreHistoryEntry(v);storePrimaryHistoryState(state.files[state.active]);
 }
 function download(name,text,type='text/markdown;charset=utf-8'){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([text],{type}));a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),800)}
-function downloadBlob(name,blob){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500)}
+function downloadBlob(name,blob){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),15000)}
 // PDF layout reconstruction. Coordinates are normalized to the rendered page.
 function pdfMedian(values){
   const sorted=values.filter(Number.isFinite).sort((a,b)=>a-b);
@@ -7356,6 +7361,7 @@ function officeExportFontName(){
   return String(font?.name||'').replace(/\.(?:ttf|otf|woff2?)$/i,'').trim()||'Malgun Gothic';
 }
 async function saveOfficeDocuments(files,format){
+  if(!['docx','hwpx'].includes(format))return false;
   if(officeExportInProgress){showInfoNotice('문서 저장 중','현재 문서 변환이 끝난 뒤 다시 시도해 주세요.');return false}
   const targets=[...new Set((files||[]).filter(Boolean))];
   if(!targets.length)return false;
@@ -15941,7 +15947,7 @@ const EN_TEXT={
   '문서 추가':'Add document','새 문서를 만들거나 기존 파일을 불러올 수 있습니다.':'Create a new document or open an existing file.','빈 Markdown 문서를 새로 만듭니다.':'Create a blank Markdown document.','MD, 코드, 이미지 등의 파일을 불러옵니다.':'Open Markdown, code, image, and other files.',
   '라이트·다크·사용자 지정 테마는 PDF로 저장할 때 적용됩니다. MD 파일로 저장할 때는 배경색과 글자색이 문서 내용에 포함되지 않습니다.':'Light, dark, and custom themes are applied when saving as PDF. Background and text colors are not included in document content when saving as MD.',
   '저장되지 않은 변경사항':'Unsaved changes','현재 문서에 저장되지 않은 수정사항이 있습니다. 계속하기 전에 어떻게 처리할까요?':'The current document has unsaved changes. What would you like to do before continuing?','저장 후 닫기':'Save and close','저장하지 않고 닫기':'Close without saving',
-  '파일 제거':'Remove file','저장하지 않고 제거':'Remove without saving','파일을 제거했습니다.':'File removed.'
+  '파일 닫기':'Close file','파일을 닫았습니다.':'File closed.'
   ,'스포이드 사용 불가':'Eyedropper unavailable','현재 브라우저에서는 화면 색 선택을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 사용해 주세요.':'Screen color picking is not supported in this browser. Use the latest Chrome or Edge.','스포이드 오류':'Eyedropper error','색을 선택하지 못했습니다. 브라우저에서 화면 색 선택이 허용되는지 확인해 주세요.':'Could not pick a color. Check that the browser allows screen color selection.',
   'Enter를 누르면 마크다운 강제 줄바꿈 문법인 공백 두 칸 + 줄바꿈을 넣습니다.':'Pressing Enter inserts two spaces and a line break, the Markdown hard-break syntax.','프리뷰에서 완성한 마크다운 문법을 굵게, 코드, 제목, 목록 등의 실제 서식으로 바로 변환합니다.':'Immediately converts completed Markdown syntax in Preview into formatting such as bold, code, headings, and lists.','색상이나 강조가 있는 줄을 목록으로 바꿀 때 서식 유지 여부를 확인합니다.':'Asks whether to preserve formatting when converting a line with color or emphasis into a list.','URL을 붙여넣으면 클릭할 수 있는 링크 서식으로 자동 변환합니다.':'Automatically converts pasted URLs into clickable links.','미리보기의 글씨에 설정한 시간 동안 마우스를 올리면 원문을 수정할 수 있는 작은 창을 표시합니다.':'Shows a small source editor after you hover over Preview text for the selected delay.','편집창과 미리보기의 세로 스크롤 위치를 서로 맞춥니다.':'Keeps the vertical scroll positions of Markdown and Preview in sync.','마크다운 편집창 왼쪽에 행 번호를 표시합니다.':'Shows line numbers beside the Markdown editor.','분할 보기에서 Preview와 Markdown의 위아래 순서를 바꿉니다.':'Swaps the vertical order of Preview and Markdown in split view.','문서 탐색 하단에 현재 문서에서 사용한 해시태그를 모아서 표시합니다.':'Lists hashtags used in the current document at the bottom of Document navigation.',
   '확장자 필터':'Filter by extension','홈':'Home','글씨색':'Text color','글씨 색상 코드':'Text color code','선택한 글자의 색상 지정을 제거':'Clear the selected text color','배경 색상 코드':'Background color code','빠른 편집 대기 시간 조절':'Adjust quick-edit delay','대기 시간 1초 늘리기':'Increase delay by 1 second','대기 시간 1초 줄이기':'Decrease delay by 1 second','색상 팔레트 · PC에서 더블클릭하면 저장된 글자색 창 열기':'Color palette · Double-click on PC to open saved text colors','색상 팔레트 · PC에서 더블클릭하면 저장된 배경색 창 열기':'Color palette · Double-click on PC to open saved background colors','단축키 분류':'Shortcut categories',
@@ -15970,7 +15976,12 @@ const EN_TEXT={
   '화면 테마는 PDF에 적용됩니다.\nMD 파일에는 테마 정보가 저장되지 않습니다.':'The display theme is applied to PDF output.\nTheme information is not saved in MD files.',
   '문서의 제목을 찾아 클릭 가능한 이동 목록을 만듭니다. 제목을 바꾸면 목차도 함께 바뀝니다.':'Creates a clickable navigation list from document headings. The table of contents updates when headings change.','포함할 제목':'Headings to include','큰 제목만 (제목 1-2)':'Major headings only (Heading 1–2)','일반 목차 (제목 2-4)':'Standard contents (Heading 2–4)','모든 제목 (제목 1-6)':'All headings (Heading 1–6)','숫자가 클수록 더 작은 하위 제목까지 포함합니다.':'Higher numbers include smaller nested headings.','항목 방향':'Item direction','세로':'Vertical','가로':'Horizontal','목차 항목이 이어지는 방향을 정합니다.':'Choose the direction in which contents items flow.','목차 모양':'Contents style','세로 목록':'Vertical list','간단한 2열':'Compact two-column','번호와 연결선':'Numbers and connector lines','문서 내용은 바뀌지 않고 목차의 모양만 달라집니다.':'Only the appearance of the contents changes; document content is unchanged.','1, 1.1처럼 번호 붙이기':'Number as 1, 1.1','현재 문서에서 보이는 항목':'Items visible in the current document','이 범위에 해당하는 제목이 없습니다.':'No headings match this range.','적용':'Apply',
   '같은 ID를 사용한 블록은 어느 한 곳을 편집해도 함께 바뀝니다.':'Blocks using the same ID update together when any one is edited.','블록 ID':'Block ID','예: project-summary':'e.g. project-summary','블록 ID를 입력해 주세요.':'Enter a block ID.',
-  '범위':'Range','전체 문서':'Entire document','일부 선택':'Select a range','원문 미리보기':'Source preview','삽입된 내용은 편집할 수 없습니다. 블록을 선택하면 복사·붙여넣기·삭제·이동할 수 있습니다.':'Inserted content is read-only. Select the block to copy, paste, delete, or move it.'
+  '범위':'Range','전체 문서':'Entire document','일부 선택':'Select a range','제목':'Title','원문 미리보기':'Source preview','삽입된 내용은 편집할 수 없습니다. 블록을 선택하면 복사·붙여넣기·삭제·이동할 수 있습니다.':'Inserted content is read-only. Select the block to copy, paste, delete, or move it.',
+  'Ctrl로 고정':'Hold Ctrl to pin','MD 파일을 업로드하거나 왼쪽 목록에서 선택하세요.':'Upload an MD file or select one from the list.','PDF 저장 미리보기':'PDF export preview','Q: 질문 / A: 답 형식으로 내용을 작성해 주세요.':'Write content using Q: question / A: answer format.','계속 저장':'Continue saving','관련 항목':'Related items','긴 내용에서 핵심 문장을 모아 봅니다.':'Collect key sentences from long content.','긴 문장을 미리보기 너비에 맞춰 자연스럽게 표시합니다.':'Wrap long lines naturally to the Preview width.','긴 문장을 한 줄로 유지하여 가로 스크롤로 확인합니다.':'Keep long lines on one line and use horizontal scrolling.','내보내기 미리보기':'Export preview',
+  '네트워크 연결을 확인해 주세요.':'Check your network connection.','다중 보기 블록':'Multi-view block','동기화':'Sync','링크로 이동하시겠습니까?':'Open this link?','만들어지는 모습':'Result preview','문서 안에서 이 블록을 구별할 이름입니다.':'A name that identifies this block in the document.','문서를 찾을 수 없음':'Document not found','미리보기는 성능을 위해 최대 40행 × 20열만 표시합니다. 삽입되는 데이터는 선택한 범위를 그대로 유지합니다.':'For performance, Preview shows at most 40 rows × 20 columns. Inserted data preserves the full selected range.','배율':'Zoom','배율 (%)':'Zoom (%)','복사할 서식 선택':'Choose formatting to copy','본문과 참고문헌':'Body and bibliography',
+  '브라우저 기본 글꼴이 운영체제의 기본 설정과 다릅니다.':'The browser default font differs from the operating system default.','브라우저 사용자 글꼴 감지':'Detect browser user font','새 창에서 다음 주소를 엽니다.':'Opens the following address in a new window.','선택 1':'Option 1','선택 문법 편집':'Edit selected syntax','선택 영역 전체에 동일하게 적용된 항목만 복사할 수 있습니다.':'Only formatting applied consistently across the selection can be copied.','선택한 글이 있으면 자동으로 들어옵니다. 만든 뒤에도 본문에서 수정할 수 있습니다.':'Selected text is inserted automatically and can still be edited in the document.','선택한 셀에 표를 어떤 방식으로 넣을까요?':'How should the table be inserted into the selected cell?',
+  '셀 덮어쓰기':'Overwrite cells','셀 안에 표':'Nested table','셀을 드래그해 표시 범위를 선택하세요':'Drag across cells to choose the display range.','스크롤 허용':'Allow scrolling','시간 순서':'Timeline','시간 순서의 항목을 작성해 주세요.':'Enter timeline items.','시트':'Sheet','시트당 페이지':'Pages per sheet','아래에 새 표':'New table below','연결된 위키 링크나 해시태그가 없습니다.':'No linked wiki links or hashtags.','요약할 문장이 없습니다.':'There are no sentences to summarize.','용도':'Purpose','원문':'Source','이동':'Move','이동…':'Move…','이미지 확인':'Check image',
+  '일반 참고문헌':'Standard bibliography','읽기 전용':'Read only','저장될 MD 원문을 일반 Markdown 기준으로 표시합니다. 실제 모양은 파일을 여는 앱의 Markdown·HTML 지원 범위에 따라 달라질 수 있습니다.':'Shows the MD source that will be saved using standard Markdown. Its appearance may vary depending on the app’s Markdown and HTML support.','저장하고 닫기':'Save and close','질문과 답':'Questions and answers','참고문헌만':'Bibliography only','초기 크기':'Initial size','출처 정보':'Source details','출처 키':'Citation key','표 붙여넣기':'Paste table','표시 범위':'Display range','표시 위치':'Display position','한 번 작성한 내용을 원문, 요약, 관련 항목으로 전환해 볼 수 있습니다.':'Switch the same content between source, summary, and related-item views.','항목 비교':'Compare items','핵심 요약':'Key summary','행·열 머리글':'Row and column headers','형식':'Format','호환성 확인':'Compatibility check'
 };
 const i18nOriginalText=new WeakMap(),i18nOriginalAttrs=new WeakMap();
 function uiTranslationExcluded(node){
@@ -15993,19 +16004,38 @@ function translatedUiText(value){
     const copiedDocument=core.match(/^(.+) 복사본(?: \((\d+)\))?(\.(?:md|markdown))$/i);if(copiedDocument)translated=`${copiedDocument[1]} copy${copiedDocument[2]?` (${copiedDocument[2]})`:''}${copiedDocument[3]}`;
     const recovery=core.match(/^(.+)에 자동 저장된 문서 (\d+)개가 있습니다\.$/);if(recovery)translated=`${recovery[1]}: ${recovery[2]} auto-saved document${recovery[2]==='1'?'':'s'} available.`;
     const documentCount=core.match(/^(\d+)개 문서$/);if(documentCount)translated=`${documentCount[1]} document${documentCount[1]==='1'?'':'s'}`;
+    const documentCountSuffix=core.match(/^문서 (\d+)개$/);if(documentCountSuffix)translated=`${documentCountSuffix[1]} document${documentCountSuffix[1]==='1'?'':'s'}`;
     const tableSize=core.match(/^(\d+)행 × (\d+)열$/);if(tableSize)translated=`${tableSize[1]} rows × ${tableSize[2]} columns`;
     const tableInsert=core.match(/^(\d+)행 (\d+)열 표 삽입$/);if(tableInsert)translated=`Insert a ${tableInsert[1]} × ${tableInsert[2]} table`;
+    const pageCountLabel=core.match(/^(\d+)쪽$/);if(pageCountLabel)translated=`${pageCountLabel[1]} page${pageCountLabel[1]==='1'?'':'s'}`;
     const formatSaveDocuments=core.match(/^([A-Z0-9]+) 형식으로 저장할 문서를 선택하세요\.$/);if(formatSaveDocuments)translated=`Choose the documents to save as ${formatSaveDocuments[1]}.`;
     const exportProgress=core.match(/^(\d+)\/(\d+) · (.+) 변환 중…$/);if(exportProgress)translated=`${exportProgress[1]}/${exportProgress[2]} · Converting ${exportProgress[3]}…`;
     const exportStart=core.match(/^([A-Z0-9]+) 문서를 만드는 중…$/);if(exportStart)translated=`Creating ${exportStart[1]} document…`;
     const exportComplete=core.match(/^(\d+)개 문서를 ([A-Z0-9]+) 형식으로 저장했습니다\.$/);if(exportComplete)translated=`Saved ${exportComplete[1]} document${exportComplete[1]==='1'?'':'s'} as ${exportComplete[2]}.`;
     const exportFailure=core.match(/^(.+)을\(를\) 변환하지 못했습니다\.$/);if(exportFailure)translated=`Could not convert ${exportFailure[1]}.`;
+    const duplicatedDocuments=core.match(/^(\d+)개 문서를 복제했습니다\.$/);if(duplicatedDocuments)translated=`Duplicated ${duplicatedDocuments[1]} document${duplicatedDocuments[1]==='1'?'':'s'}.`;
+    const duplicatedDocument=core.match(/^(.+) 문서를 복제했습니다\.$/);if(duplicatedDocument)translated=`Duplicated ${duplicatedDocument[1]}.`;
+    const renamedFile=core.match(/^파일 이름을 (.+)\(으\)로 변경했습니다\.$/);if(renamedFile)translated=`Renamed the file to ${renamedFile[1]}.`;
+    const savedFile=core.match(/^(.+) 파일을 저장했습니다\.$/);if(savedFile)translated=`Saved ${savedFile[1]}.`;
+    const downloadedFile=core.match(/^(.+) 파일을 다운로드했습니다\.$/);if(downloadedFile)translated=`Downloaded ${downloadedFile[1]}.`;
+    const savedDocuments=core.match(/^(\d+)개 문서를 저장했습니다\.$/);if(savedDocuments)translated=`Saved ${savedDocuments[1]} document${savedDocuments[1]==='1'?'':'s'}.`;
+    const savedZip=core.match(/^(\d+)개 문서를 ZIP으로 저장했습니다\.$/);if(savedZip)translated=`Saved ${savedZip[1]} document${savedZip[1]==='1'?'':'s'} as ZIP.`;
+    const closedDocuments=core.match(/^(\d+)개 문서를 닫았습니다\.$/);if(closedDocuments)translated=`Closed ${closedDocuments[1]} document${closedDocuments[1]==='1'?'':'s'}.`;
+    const linkedDocumentMissing=core.match(/^"(.+)" 문서를 파일 목록에서 찾지 못했습니다\.$/);if(linkedDocumentMissing)translated=`Could not find "${linkedDocumentMissing[1]}" in the file list.`;
+    const fileReadFailure=core.match(/^파일을 읽지 못했습니다\. (.+)$/);if(fileReadFailure)translated=`Could not read the file. ${translatedUiText(fileReadFailure[1])}`;
+    const pdfSummary=core.match(/^(\d+)쪽 변환 · 표 (\d+)개 복원 · 원본 영역 이미지 (\d+)개(?: · 이미지로 보존한 페이지 (\d+)쪽)?\. 글씨는 본문 16px 기준으로 크기 비율을 유지했습니다\. 이미지로 보존한 부분은 글자처럼 편집할 수 없습니다\.$/);if(pdfSummary)translated=`Converted ${pdfSummary[1]} page${pdfSummary[1]==='1'?'':'s'} · restored ${pdfSummary[2]} table${pdfSummary[2]==='1'?'':'s'} · preserved ${pdfSummary[3]} source image region${pdfSummary[3]==='1'?'':'s'}${pdfSummary[4]?` · ${pdfSummary[4]} page${pdfSummary[4]==='1'?'':'s'} preserved as images`:''}. Text sizes retain their proportions relative to 16 px body text. Image-preserved content cannot be edited as text.`;
+    const languageTitle=core.match(/^언어: (.+)$/);if(languageTitle)translated=`Language: ${languageTitle[1]}`;
+    const savedColorAction=core.match(/^(.+) · 우클릭으로 (삭제|저장)$/);if(savedColorAction)translated=`${savedColorAction[1]} · Right-click to ${savedColorAction[2]==='삭제'?'delete':'save'}`;
+    const missingImageLabel=core.match(/^누락된 이미지: (.+)$/);if(missingImageLabel)translated=`Missing image: ${missingImageLabel[1]}`;
+    const customFormatShortcut=core.match(/^사용자 지정 서식 \((.+)\)$/);if(customFormatShortcut)translated=`Custom format (${customFormatShortcut[1]})`;
+    const nestedStyleAction=core.match(/^하위 서식 (펼치기|접기)$/);if(nestedStyleAction)translated=`${nestedStyleAction[1]==='펼치기'?'Expand':'Collapse'} nested styles`;
     const documentLine=core.match(/^(\d+)\. 문서 내용$/);if(documentLine)translated=`${documentLine[1]}. Document content`;
     const splitDocumentLine=core.match(/^(\d+)\. (왼쪽|오른쪽) 문서 내용$/);if(splitDocumentLine)translated=`${splitDocumentLine[1]}. ${splitDocumentLine[2]==='왼쪽'?'Left':'Right'} document content`;
     const foundCount=core.match(/^(\d+)개 찾음$/);if(foundCount)translated=`${foundCount[1]} found`;
     const changedCount=core.match(/^(\d+)개 변경$/);if(changedCount)translated=`${changedCount[1]} replaced`;
     const extraHeadings=core.match(/^외 (\d+)개 제목$/);if(extraHeadings)translated=`${extraHeadings[1]} more heading${extraHeadings[1]==='1'?'':'s'}`;
-    const unsavedRemoval=core.match(/^(.+)의 변경사항이 저장되지 않았습니다\. 제거하면 변경사항을 복구할 수 없습니다\.$/);if(unsavedRemoval)translated=`Changes to ${unsavedRemoval[1]} have not been saved. Removing it will permanently discard those changes.`;
+    const unsavedRemoval=core.match(/^(.+)의 변경사항이 저장되지 않았습니다\. 닫으면 변경사항을 복구할 수 없습니다\.$/);if(unsavedRemoval)translated=`Changes to ${unsavedRemoval[1]} have not been saved. Closing it will permanently discard those changes.`;
+    const closeFilePrompt=core.match(/^(.+)을\(를\) 닫을까요\?$/);if(closeFilePrompt)translated=`Close ${closeFilePrompt[1]}?`;
     const recoveryVersion=core.match(/^자동 복구본 · 문서 (\d+)개$/);if(recoveryVersion)translated=`Auto-recovery · ${recoveryVersion[1]} document${recoveryVersion[1]==='1'?'':'s'}`;
     const characterCount=core.match(/^([\d,]+)자$/);if(characterCount)translated=`${characterCount[1]} characters`;
     const versionDetail=core.match(/^(.+) · ([\d,]+)자$/);if(versionDetail)translated=`${translatedUiText(versionDetail[1])} · ${versionDetail[2]} characters`;
@@ -16073,13 +16103,16 @@ function queueUiTranslation(node){
     roots.forEach(translateUi);
   });
 }
-new MutationObserver(records=>records.forEach(record=>{
-  if(uiTranslationExcluded(record.target))return;
-  if(record.type==='characterData'||record.type==='attributes')queueUiTranslation(record.target);
-  else record.addedNodes.forEach(node=>{
-    if(node.nodeType===Node.ELEMENT_NODE||(node.nodeType===Node.TEXT_NODE&&node.nodeValue.trim()))queueUiTranslation(node);
+new MutationObserver(records=>{
+  if(uiLanguage!=='en')return;
+  records.forEach(record=>{
+    if(uiTranslationExcluded(record.target))return;
+    if(record.type==='characterData'||record.type==='attributes')queueUiTranslation(record.target);
+    else record.addedNodes.forEach(node=>{
+      if(node.nodeType===Node.ELEMENT_NODE||(node.nodeType===Node.TEXT_NODE&&node.nodeValue.trim()))queueUiTranslation(node);
+    });
   });
-})).observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['title','aria-label','placeholder','data-tooltip']});
+}).observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['title','aria-label','placeholder','data-tooltip']});
 let editGuideWelcomeTimer=0;
 function modeGuideKey(mode){return mode==='home'?HOME_GUIDE_WELCOME_KEY:mode==='convert'?CONVERT_GUIDE_WELCOME_KEY:mode==='merge'?MERGE_GUIDE_WELCOME_KEY:EDIT_GUIDE_WELCOME_KEY}
 function scheduleModeGuideWelcome(mode=state.mode,force=false){
