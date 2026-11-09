@@ -8059,22 +8059,32 @@ function markZipFilesSaved(files){
   const active=state.files[state.active];
   if(active&&files.includes(active)){state.savedText=active.text;state.dirty=false}
 }
+let zipExportInProgress=false;
 async function exportMarkdownZip(files,name,includeFolderAssets=false){
   if(state.active>=0)state.files[state.active].text=els.editor.value;
   if(!files.length){showInfoNotice('저장할 문서 없음','조건에 맞는 마크다운 문서가 없습니다.');return}
-  if(!window.JSZip){showInfoNotice('ZIP 저장 준비 실패','ZIP 기능을 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.');return}
-  const zip=new JSZip(),used=new Set();
-  if(includeFolderAssets){
-    const markdownPaths=new Set(files.map(file=>safeZipPath(file.path||file.name,'document.md')));
-    state.assets.forEach((asset,path)=>{const safe=safeZipPath(path,asset.name||'file');if(!markdownPaths.has(safe))zip.file(safe,asset)});
+  if(zipExportInProgress){showInfoNotice('ZIP 저장 중','현재 ZIP 파일을 만든 뒤 다시 시도해 주세요.');return}
+  zipExportInProgress=true;
+  try{
+    setStatus('ZIP 파일을 만드는 중…');
+    const {default:JSZip}=await import('jszip');
+    const zip=new JSZip(),used=new Set();
+    if(includeFolderAssets){
+      const markdownPaths=new Set(files.map(file=>safeZipPath(file.path||file.name,'document.md')));
+      state.assets.forEach((asset,path)=>{const safe=safeZipPath(path,asset.name||'file');if(!markdownPaths.has(safe))zip.file(safe,asset)});
+    }
+    files.forEach(file=>zip.file(zipEntryPath(file,used),file.text||''));
+    const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});
+    if(!blob.size)throw new Error('Generated ZIP is empty.');
+    downloadBlob(name,blob);
+    markZipFilesSaved(files);
+    setStatus(`${files.length}개 문서를 ZIP으로 저장했습니다.`);
+  }catch(error){
+    console.error('ZIP export failed',error);
+    showInfoNotice('ZIP 저장 실패','ZIP 파일을 만들지 못했습니다. 잠시 후 다시 시도해 주세요.');
+  }finally{
+    zipExportInProgress=false;
   }
-  files.forEach(file=>zip.file(zipEntryPath(file,used),file.text||''));
-  const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});
-  const anchor=document.createElement('a'),url=URL.createObjectURL(blob);
-  anchor.href=url;anchor.download=name;document.body.appendChild(anchor);anchor.click();anchor.remove();
-  setTimeout(()=>URL.revokeObjectURL(url),1200);
-  markZipFilesSaved(files);
-  setStatus(`${files.length}개 문서를 ZIP으로 저장했습니다.`);
 }
 function selectZipFiles(){
   if(!state.files.length){showInfoNotice('저장할 문서 없음','먼저 마크다운 문서를 열어 주세요.');return Promise.resolve([])}
@@ -15964,7 +15974,8 @@ const EN_TEXT={
   '루트':'Root','단일문서':'Single document','폴더 이름을 입력해 주세요.':'Enter a folder name.','같은 이름의 폴더가 있습니다.':'A folder with that name already exists.','폴더 복제':'Duplicate folder','폴더 이름 변경':'Rename folder','이동할 수 없음':'Cannot move','대상 위치에 같은 이름의 파일 또는 폴더가 있습니다.':'A file or folder with the same name exists at the destination.',
   '업로드된 MD에서 참조를 찾지 못했습니다.':'No references were found in the uploaded Markdown.','문서를 열면 제목과 문단 탐색이 표시됩니다.':'Open a document to browse its headings and paragraphs.','펼치기':'Expand','접기':'Collapse','제목 서식이 없습니다.':'No heading styles.','해시태그':'Hashtags','사용된 해시태그가 없습니다.':'No hashtags used.','해시태그 제거':'Remove hashtag',
   '파일 이름을 입력해 주세요.':'Enter a file name.','같은 위치에 동일한 이름의 파일이 있습니다.':'A file with the same name exists in this location.','PDF → MD 자동 선택':'PDF → MD selected automatically','MD → PDF 자동 선택':'MD → PDF selected automatically','목차':'Table of contents','PDF 변환':'PDF conversion','PDF 변환 완료':'PDF conversion complete','암호가 설정된 PDF입니다. 암호를 해제한 파일을 열어 주세요.':'This PDF is password-protected. Open an unlocked copy.','PDF 파일이 손상되었거나 올바른 PDF 형식이 아닙니다.':'The PDF is damaged or invalid.','파일과 네트워크 연결을 확인해 주세요.':'Check the file and network connection.','PDF 변환 실패':'PDF conversion failed','미니 프리뷰 닫기':'Close mini preview',
-  '사용자 지정 글꼴':'Custom font','현재 지역 글꼴 확인':'Check local fonts','저장할 문서 없음':'No documents to save','조건에 맞는 마크다운 문서가 없습니다.':'No Markdown documents match the criteria.','ZIP 저장 준비 실패':'Could not prepare ZIP','ZIP 기능을 불러오지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.':'Could not load ZIP support. Check your internet connection and try again.','먼저 마크다운 문서를 열어 주세요.':'Open a Markdown document first.','선택한 문서 없음':'No documents selected','ZIP에 담을 문서를 하나 이상 선택해 주세요.':'Select at least one document for the ZIP.','ZIP에 담을 문서 선택':'Select documents for ZIP','선택한 마크다운 문서의 폴더 경로를 유지해서 저장합니다.':'Saves the selected Markdown documents while preserving their folder paths.','선택 문서 ZIP 저장':'Save selected documents as ZIP',
+  '사용자 지정 글꼴':'Custom font','현재 지역 글꼴 확인':'Check local fonts','저장할 문서 없음':'No documents to save','조건에 맞는 마크다운 문서가 없습니다.':'No Markdown documents match the criteria.','ZIP 저장 중':'Saving ZIP','현재 ZIP 파일을 만든 뒤 다시 시도해 주세요.':'Wait for the current ZIP file to finish, then try again.','ZIP 파일을 만드는 중…':'Creating ZIP file…','ZIP 저장 실패':'ZIP export failed','ZIP 파일을 만들지 못했습니다. 잠시 후 다시 시도해 주세요.':'Could not create the ZIP file. Try again shortly.','먼저 마크다운 문서를 열어 주세요.':'Open a Markdown document first.','선택한 문서 없음':'No documents selected','ZIP에 담을 문서를 하나 이상 선택해 주세요.':'Select at least one document for the ZIP.','ZIP에 담을 문서 선택':'Select documents for ZIP','선택한 마크다운 문서의 폴더 경로를 유지해서 저장합니다.':'Saves the selected Markdown documents while preserving their folder paths.','선택 문서 ZIP 저장':'Save selected documents as ZIP',
+  '스프레드시트':'Spreadsheet','접기 또는 펼치기':'Collapse or expand','콜아웃 제목':'Callout title','PDF 배율 조절':'Adjust PDF scale','미리보기 배율 (PDF 파일에는 적용되지 않음)':'Preview zoom (does not affect PDF files)','폴더 이름':'Folder name','폴더 삭제':'Delete folder','서식 수정':'Edit style','예: 시험 전 핵심 정리':'e.g. Key review before the exam','정리할 내용을 입력하세요.':'Enter the content to summarize.','저자, 제목, 발행처, 연도':'Author, title, publisher, year','참고문헌 추가':'Add bibliography','축소':'Zoom out','확대':'Zoom in','> 텍스트':'> text','>> 텍스트':'>> text','화면 테마는 PDF에 적용됩니다. MD 파일에는 테마 정보가 저장되지 않습니다.':'The screen theme is applied to PDF files. Theme information is not saved in MD files.','문서 목록 접기':'Collapse document list',
   '페이지 분할 기능을 초기화하지 못했습니다.':'Could not initialize pagination.','페이지 분할 모듈을 불러오지 못했습니다.':'Could not load the pagination module.','페이지를 나누는 중...':'Paginating…','PDF 준비 실패':'Could not prepare PDF','인쇄 페이지를 준비하지 못했습니다.':'Could not prepare pages for printing.','MD → PDF는 한 번에 문서 하나를 선택해 주세요.':'Select one document at a time for MD → PDF.','파일 목록 펼치기':'Expand file list','파일 목록 접기':'Collapse file list','드래그 업로드 실패':'Drag upload failed','파일이 이 컴퓨터에 다운로드되어 있는지 확인해 주세요.':'Check that the file is downloaded to this computer.',
   '혼합':'Mixed','선택한 글씨 크기가 서로 다릅니다.':'The selected text uses different font sizes.','클립보드의 텍스트를 읽을 수 없습니다. 브라우저의 클립보드 권한을 확인해 주세요.':'Could not read clipboard text. Check the browser clipboard permission.','선택 영역 전체에 적용됨':'Applied to the entire selection','적용되지 않음':'Not applied','전체에 배경색이 없음':'No background color across the selection','전체에 굵게가 적용되지 않음':'Bold is not applied across the selection','전체에 기울임이 적용되지 않음':'Italic is not applied across the selection','전체에 밑줄이 적용되지 않음':'Underline is not applied across the selection','선택 영역 전체에 동일하지 않음':'Not consistent across the selection',
   '텍스트를 선택해 주세요':'Select text','프리뷰에서 저장하거나 서식을 적용할 텍스트를 먼저 드래그해 주세요.':'Select text in Preview before saving or applying formatting.','사용자 지정 서식 수정':'Edit custom style','선택한 텍스트에 실제로 적용된 속성만 저장 항목으로 선택했습니다.':'Only properties applied to the selected text are selected for saving.','저장할 항목을 선택해 주세요':'Select properties to save','최소 하나 이상의 서식 항목을 선택해야 합니다.':'Select at least one formatting property.','프리뷰에서 서식을 적용할 텍스트를 먼저 드래그해 주세요.':'Select text in Preview before applying formatting.','새 서식 폴더':'New style folder','폴더명':'Folder name','서식 이름 수정':'Rename style','폴더 이름 수정':'Rename folder',
@@ -16032,6 +16043,7 @@ function translatedUiText(value){
     const missingImageLabel=core.match(/^누락된 이미지: (.+)$/);if(missingImageLabel)translated=`Missing image: ${missingImageLabel[1]}`;
     const customFormatShortcut=core.match(/^사용자 지정 서식 \((.+)\)$/);if(customFormatShortcut)translated=`Custom format (${customFormatShortcut[1]})`;
     const nestedStyleAction=core.match(/^하위 서식 (펼치기|접기)$/);if(nestedStyleAction)translated=`${nestedStyleAction[1]==='펼치기'?'Expand':'Collapse'} nested styles`;
+    const miniDocumentLabel=core.match(/^(.+) 미니 문서$/);if(miniDocumentLabel)translated=`${miniDocumentLabel[1]} mini document`;
     const documentLine=core.match(/^(\d+)\. 문서 내용$/);if(documentLine)translated=`${documentLine[1]}. Document content`;
     const splitDocumentLine=core.match(/^(\d+)\. (왼쪽|오른쪽) 문서 내용$/);if(splitDocumentLine)translated=`${splitDocumentLine[1]}. ${splitDocumentLine[2]==='왼쪽'?'Left':'Right'} document content`;
     const foundCount=core.match(/^(\d+)개 찾음$/);if(foundCount)translated=`${foundCount[1]} found`;
@@ -16044,6 +16056,8 @@ function translatedUiText(value){
     const versionDetail=core.match(/^(.+) · ([\d,]+)자$/);if(versionDetail)translated=`${translatedUiText(versionDetail[1])} · ${versionDetail[2]} characters`;
     const conversionMeta=core.match(/^(PDF → MD 자동 선택|MD → PDF 자동 선택) · (.+)$/);if(conversionMeta)translated=`${translatedUiText(conversionMeta[1])} · ${conversionMeta[2]}`;
     const codeConversionMeta=core.match(/^(.+) 코드블록 → MD 준비됨 · (.+)$/);if(codeConversionMeta)translated=`${codeConversionMeta[1]} code block → MD ready · ${codeConversionMeta[2]}`;
+    if(core.startsWith('마크다운 기호 안 불필요한 공백을 자동으로 제거합니다.'))translated='Automatically removes unnecessary spaces inside Markdown syntax.\n\nExamples:\n  **Gimbap **  →  **Gimbap**\n  * text *  →  *text*\n  _ content _  →  _content_\n  ` code `  →  `code`\n  [ link ](url)  →  [link](url)\n  ##  Heading  →  ## Heading\n\nRuns only when entering * or _.';
+    if(core.startsWith('라이트 모드에서 흰색/밝은 글씨를 검은색 계열로,'))translated='Converts white or light text to dark text in Light mode,\nand black or dark text to light text in Dark mode\nto improve readability.\n\n(Applies only to Preview; the source is unchanged.)';
     if(/[가-힣]/.test(core)&&/자동 저장된 문서/.test(core))translated=core.replace('오전','AM').replace('오후','PM').replace(/(.+)에 자동 저장된 문서 (\d+)개가 있습니다\./,(_,date,count)=>`${date}: ${count} auto-saved document${count==='1'?'':'s'} available.`);
   }
   return translated?`${match[1]}${translated}${match[3]}`:value;

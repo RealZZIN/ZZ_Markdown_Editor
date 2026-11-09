@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "qa": "node scripts/qa.mjs"
   },
   "devDependencies": {
     "vite": "^7.1.0"
@@ -14,6 +15,7 @@
   "dependencies": {
     "html-docx-js-typescript": "^0.1.5",
     "html-to-image": "^1.11.13",
-    "hwp-convert": "^1.13.0"
+    "hwp-convert": "^1.13.0",
+    "jszip": "^3.10.2"
   }
 }
