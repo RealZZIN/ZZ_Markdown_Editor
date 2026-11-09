@@ -2347,15 +2347,28 @@ body.dark .tab.active { background: var(--s3); color: var(--t1); }
 }
 .editor-box > .box-head,
 .preview-box > .box-head { font-size: 13px; }
-.document-split.has-secondary :is(.editor-box,.preview-box,.secondary-editor-box,.secondary-preview-box) > .box-head {
+.document-split :is(.editor-box,.preview-box,.secondary-editor-box,.secondary-preview-box) > .box-head {
   min-height:24px;
   padding-inline:10px;
   font-size:10.5px;
   letter-spacing:.025em;
 }
+.document-split #edit-split:not(.edit-md-only):not(.edit-preview-only) > :is(.editor-box,.preview-box),
 .document-split.has-secondary .split:not(.edit-md-only):not(.edit-preview-only) > :is(.editor-box,.preview-box),
 .document-split.has-secondary .secondary-edit-split:not(.view-md):not(.view-preview) > :is(.secondary-editor-box,.secondary-preview-box) {
   grid-template-rows:24px minmax(0,1fr);
+}
+/* 한 문서 내부 분할도 두 문서 분할과 같은 소형 라벨을 사용한다. */
+.document-split:not(.has-secondary) #edit-split:not(.edit-md-only):not(.edit-preview-only) > :is(.editor-box,.preview-box) {
+  grid-template-rows:24px minmax(0,1fr)!important;
+}
+.document-split:not(.has-secondary) #edit-split:not(.edit-md-only):not(.edit-preview-only) > :is(.editor-box,.preview-box) > .box-head {
+  height:24px!important;
+  min-height:24px!important;
+  padding:0 10px!important;
+  font-size:10.5px!important;
+  line-height:1!important;
+  letter-spacing:.025em!important;
 }
 .box-body { min-height: 0; padding: 14px; overflow: auto; }
 .editor-box .box-body { overflow: hidden; padding: 0; display: flex; min-height: 0; }
@@ -5840,7 +5853,7 @@ body.dark .cp-swatch { border-color: rgba(255,255,255,.18); }
 .feature-guide-file-embed { display:grid;min-height:72px;place-content:center;gap:5px;border:1px solid var(--b2);background:linear-gradient(135deg,var(--s1),var(--s2));text-align:center; }
 .feature-guide-file-embed span { color:var(--t3);font-size:9px; }
 .feature-guide-file-embed b { font-size:11px; }
-.feature-guide-sync-source { position:relative;display:grid;gap:5px;padding:10px 11px;border:1px solid var(--b2);border-left:3px solid var(--accent);border-radius:4px;background:var(--s1); }
+.feature-guide-sync-source { position:relative;display:grid;gap:5px;padding:10px 11px;border:1px solid var(--b2);border-radius:4px;background:var(--s1); }
 .feature-guide-sync-source small { color:var(--t3);font-size:10.5px; }
 .feature-guide-sync-source span { width:max-content;max-width:100%;color:var(--t1);font-size:12.5px; }
 .feature-guide-sync-source em { font-style:normal;animation:feature-guide-sync-word 4.8s steps(2,end) infinite; }

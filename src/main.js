@@ -1,3 +1,5 @@
+import {prepareDocumentHtml,createDocxBlob,createHwpxBlob} from './document-export.js';
+
 const $=id=>document.getElementById(id);
 const state={files:[],images:{},assets:new Map(),active:-1,mode:'convert',theme:localStorage.getItem('md-theme')||'light',lastInput:null,history:[],future:[],restoring:false,editingPreview:false,insertingImage:false,savedSelection:null,lastEditorSelection:{start:0,end:0},lastInsertionSurface:'editor',savedPreviewRange:null,pendingInsertionContext:null,historyTimer:null,dirty:false,savedText:'',collapsedSidebarGroups:{},collapsedMergeGroups:{},stayHomeAfterConvert:false,homeMergeNotice:'',printScale:100,sidebarView:'files'};
 let customTheme={
@@ -1119,8 +1121,17 @@ function renderSecondaryPreview({defer=false}={}){
   const render=()=>{
     documentSplitState.secondaryRenderFrame=0;
     if(documentSplitState.secondaryFile!==file||documentSplitState.secondaryView==='md'||els.secondaryEditor.value!==text)return;
-    els.secondaryPreview.innerHTML=markdownHtml(text);
-    fixSpanColors(els.secondaryPreview);
+    if(els.secondaryPreview._zzRenderFile===file&&els.secondaryPreview._zzRenderText===text)return;
+    try{
+      els.secondaryPreview.innerHTML=markdownHtml(text);
+      if(colorCorrectEnabled&&/color\s*:/i.test(text))fixSpanColors(els.secondaryPreview);
+      els.secondaryPreview._zzRenderFile=file;
+      els.secondaryPreview._zzRenderText=text;
+    }catch(error){
+      console.error('Secondary preview render failed',error);
+      els.secondaryPreview.replaceChildren();
+      els.secondaryPreview._zzRenderFile=null;els.secondaryPreview._zzRenderText=null;
+    }
   };
   if(defer)documentSplitState.secondaryRenderFrame=requestAnimationFrame(render);else render();
 }
@@ -6325,7 +6336,7 @@ function syncActive(){
   scheduleLineNumbers();
   if(typeof scheduleWorkspaceSave==='function')scheduleWorkspaceSave();
 }
-function cleanPreviewHtml(root){
+function cleanPreviewHtml(root,{preserveMath=false}={}){
   resetTableFilterView(root);
   root.querySelectorAll('[data-readable-color]').forEach(el=>{el.removeAttribute('data-readable-color');el.style.removeProperty('--readable-color')});
   root.querySelectorAll('[data-quote-format-pending],[data-quote-format-allowed],[data-quote-format-dismissed],[data-list-format-pending],[data-list-format-allowed],[data-list-format-dismissed]').forEach(node=>{
@@ -6414,7 +6425,7 @@ function cleanPreviewHtml(root){
     raw.dataset.previewRawSource=encodeURIComponent(definitions.length?definitions.join('\n'):decodeURIComponent(section.dataset.referenceSource||''));
     section.replaceWith(raw);
   });
-  root.querySelectorAll('.zz-math[data-latex]').forEach(math=>{
+  if(!preserveMath)root.querySelectorAll('.zz-math[data-latex]').forEach(math=>{
     const marker=math.dataset.display==='block'?'$$':'$';
     math.replaceWith(document.createTextNode(`${marker}${math.dataset.latex}${marker}`));
   });
@@ -6722,6 +6733,7 @@ function redoEdit(){
   if(!state.future.length)return;const v=state.future.pop();state.history.push(v);trimHistoryBudget();restoreHistoryEntry(v);storePrimaryHistoryState(state.files[state.active]);
 }
 function download(name,text,type='text/markdown;charset=utf-8'){const a=document.createElement('a'),url=URL.createObjectURL(new Blob([text],{type}));a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),800)}
+function downloadBlob(name,blob){const a=document.createElement('a'),url=URL.createObjectURL(blob);a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500)}
 // PDF layout reconstruction. Coordinates are normalized to the rendered page.
 function pdfMedian(values){
   const sorted=values.filter(Number.isFinite).sort((a,b)=>a-b);
@@ -7313,9 +7325,11 @@ function chooseOpenDocuments(action,{format=''}={}){
   });
 }
 async function saveOpenDocuments(format='md'){
+  if(format==='docx'||format==='hwpx')flushOfficeExportEdits();
   syncOpenDocumentSources();
   const files=await chooseOpenDocuments('save',{format});
   if(!files.length)return false;
+  if(format==='docx'||format==='hwpx')return saveOfficeDocuments(files,format);
   if(format==='pdf'){
     if(files.length!==1){showInfoNotice('PDF 저장','PDF는 한 번에 문서 하나를 선택해 주세요.');return false}
     const file=files[0],primary=file===state.files[state.active];
@@ -7326,6 +7340,64 @@ async function saveOpenDocuments(format='md'){
     return false;
   }
   return saveMarkdownFiles(files);
+}
+function officeExportName(file,format){
+  const base=(file?.name||'document.md').replace(/\.(?:md|markdown)$/i,'');
+  return `${base}.${format}`;
+}
+async function officeExportPreview(file){
+  const host=document.createElement('div');
+  host.innerHTML=markdownHtml(file?.text||'');
+  cleanPreviewHtml(host,{preserveMath:true});return host;
+}
+let officeExportInProgress=false;
+function officeExportFontName(){
+  const font=customFontEnabled?activeCustomFont():null;
+  return String(font?.name||'').replace(/\.(?:ttf|otf|woff2?)$/i,'').trim()||'Malgun Gothic';
+}
+async function saveOfficeDocuments(files,format){
+  if(officeExportInProgress){showInfoNotice('문서 저장 중','현재 문서 변환이 끝난 뒤 다시 시도해 주세요.');return false}
+  const targets=[...new Set((files||[]).filter(Boolean))];
+  if(!targets.length)return false;
+  officeExportInProgress=true;
+  let saved=0;
+  try{
+    for(const [index,file] of targets.entries()){
+      setStatus(`${index+1}/${targets.length} · ${file?.name||'문서'} 변환 중…`);
+      try{
+        const preview=await officeExportPreview(file);
+        const title=(file?.name||'document').replace(/\.(?:md|markdown)$/i,'');
+        const html=await prepareDocumentHtml(preview,title,{format,fontFamily:officeExportFontName()});
+        if(!/<body>[\s\S]*<\/body>/i.test(html))throw new Error('Invalid export document');
+        const blob=format==='docx'?await createDocxBlob(html):await createHwpxBlob(html,{title});
+        if(!(blob instanceof Blob)||!blob.size)throw new Error('Empty export document');
+        downloadBlob(officeExportName(file,format),blob);saved++;
+      }catch(error){
+        console.error(`${format} export failed`,error);
+        showInfoNotice(`${format.toUpperCase()} 저장 실패`,`${file?.name||'문서'}을(를) 변환하지 못했습니다.`);
+      }
+      await new Promise(resolve=>requestAnimationFrame(resolve));
+    }
+  }finally{officeExportInProgress=false}
+  if(saved)setStatus(`${saved}개 문서를 ${format.toUpperCase()} 형식으로 저장했습니다.`);
+  return saved>0;
+}
+function flushOfficeExportEdits(){
+  const active=activeEditDocument();
+  if(active.pane==='primary'&&(previewSyncTimer||previewSyncIdle))syncFromPreview();
+  else if(active.pane==='secondary'&&documentSplitState.secondaryView!=='md'&&documentSplitState.secondaryTimer){
+    clearTimeout(documentSplitState.secondaryTimer);documentSplitState.secondaryTimer=0;
+    const clone=els.secondaryPreview.cloneNode(true);cleanPreviewHtml(clone);
+    const source=previewHasMeaningfulContent(clone)?serializePreviewHtml(clone):'';
+    active.file.text=source;active.editor.value=source;commitSecondaryHistory(active.file);
+  }
+}
+async function saveOfficeCurrent(format){
+  const active=activeEditDocument();
+  if(!active.file)return false;
+  flushOfficeExportEdits();
+  syncOpenDocumentSources();
+  return saveOfficeDocuments([active.file],format);
 }
 async function saveMarkdownFiles(files){
   let savedCount=0;
@@ -10467,11 +10539,11 @@ function onPreviewScroll(){
   rememberSyncedScroll(editor);
   requestAnimationFrame(()=>{syncScrollLock=false});
 }
-els.editor.addEventListener('scroll',onEditorScroll);
-els.editor.addEventListener('scroll',()=>renderSourceLineNumberWindow());
-els.editor.addEventListener('scroll',syncMarkdownHighlightScroll);
-els.preview.addEventListener('scroll',onPreviewScroll);
-els.preview.addEventListener('scroll',()=>{if(els.previewLineGutter)els.previewLineGutter.scrollTop=els.preview.scrollTop});
+els.editor.addEventListener('scroll',onEditorScroll,{passive:true});
+els.editor.addEventListener('scroll',()=>renderSourceLineNumberWindow(),{passive:true});
+els.editor.addEventListener('scroll',syncMarkdownHighlightScroll,{passive:true});
+els.preview.addEventListener('scroll',onPreviewScroll,{passive:true});
+els.preview.addEventListener('scroll',()=>{if(els.previewLineGutter)els.previewLineGutter.scrollTop=els.preview.scrollTop},{passive:true});
 let secondaryInnerScrollLock=false,secondaryExpectedEditorScroll=null,secondaryExpectedPreviewScroll=null;
 function syncSecondaryInnerScroll(source,target,sourceIsEditor){
   const expected=sourceIsEditor?secondaryExpectedEditorScroll:secondaryExpectedPreviewScroll;
@@ -15621,12 +15693,12 @@ function positionFeatureGuide(target){
   popover.style.left=`${Math.round(left)}px`;
   popover.style.top=`${Math.round(top)}px`;
 }
-function showFeatureGuide(target,key){
-  if(!featureGuideEnabled||!target?.isConnected)return;
+function showFeatureGuide(target,key,{force=false}={}){
+  if((!featureGuideEnabled&&!force)||!target?.isConnected)return;
   const guide=FEATURE_GUIDES[key];if(!guide)return;
   clearTimeout(featureGuideCloseTimer);
   const popover=ensureFeatureGuidePopover();
-  popover.innerHTML=`<div class="feature-guide-popover-head"><strong>${htmlEsc(guide.title)}</strong><span>기능 가이드</span><button class="feature-guide-popover-close" type="button" aria-label="가이드 닫기">×</button></div><p>${htmlEsc(guide.description)}</p>${guide.render()}`;
+  popover.innerHTML=`<div class="feature-guide-popover-head"><strong>${htmlEsc(guide.title)}</strong><button class="feature-guide-popover-close" type="button" aria-label="가이드 닫기">×</button></div><p>${htmlEsc(guide.description)}</p>${guide.render()}`;
   popover.querySelector('.feature-guide-popover-close').onclick=()=>hideFeatureGuide(true);
   popover.hidden=false;
   popover.dataset.guideKey=key;
@@ -15639,10 +15711,10 @@ function hideFeatureGuide(immediate=false){
   else featureGuideCloseTimer=setTimeout(()=>{if(featureGuidePopover)featureGuidePopover.hidden=true},150);
 }
 function scheduleFeatureGuideClose(){hideFeatureGuide(false)}
-function bindFeatureGuide(target,key){
+function bindFeatureGuide(target,key,{always=false}={}){
   if(!target)return;
   target.dataset.featureGuide=key;
-  const open=()=>{if(!featureGuideEnabled)return;clearTimeout(featureGuideCloseTimer);clearTimeout(featureGuideOpenTimer);featureGuideOpenTimer=setTimeout(()=>showFeatureGuide(target,key),400)};
+  const open=()=>{if(!featureGuideEnabled&&!always)return;clearTimeout(featureGuideCloseTimer);clearTimeout(featureGuideOpenTimer);featureGuideOpenTimer=setTimeout(()=>showFeatureGuide(target,key,{force:always}),400)};
   const close=()=>scheduleFeatureGuideClose();
   let touchTimer=0,touchResetTimer=0,touchX=0,touchY=0,touchOpened=false;
   const cancelTouch=()=>{clearTimeout(touchTimer);touchTimer=0};
@@ -15651,9 +15723,9 @@ function bindFeatureGuide(target,key){
   target.addEventListener('focus',open);
   target.addEventListener('blur',close);
   target.addEventListener('pointerdown',event=>{
-    if(event.pointerType!=='touch'||!featureGuideEnabled)return;
+    if(event.pointerType!=='touch'||(!featureGuideEnabled&&!always))return;
     cancelTouch();clearTimeout(featureGuideOpenTimer);touchX=event.clientX;touchY=event.clientY;
-    touchTimer=setTimeout(()=>{touchTimer=0;touchOpened=true;clearTimeout(touchResetTimer);touchResetTimer=setTimeout(()=>{touchOpened=false},900);showFeatureGuide(target,key);navigator.vibrate?.(20)},550);
+    touchTimer=setTimeout(()=>{touchTimer=0;touchOpened=true;clearTimeout(touchResetTimer);touchResetTimer=setTimeout(()=>{touchOpened=false},900);showFeatureGuide(target,key,{force:always});navigator.vibrate?.(20)},550);
   },{passive:true});
   target.addEventListener('pointermove',event=>{if(touchTimer&&Math.hypot(event.clientX-touchX,event.clientY-touchY)>10)cancelTouch()},{passive:true});
   ['pointerup','pointercancel','pointerleave'].forEach(type=>target.addEventListener(type,cancelTouch,{passive:true}));
@@ -15856,7 +15928,14 @@ const EN_TEXT={
   '이미지나 첨부 파일을 문서 본문에 바로 표시합니다.':'Displays an image or attachment directly in the document.','![[화면 구성.png]]':'![[Layout.png]]','이미지 미리보기':'Image preview','화면 구성.png':'Layout.png',
   '문장 중 강조할 부분에 형광펜처럼 배경색을 표시합니다.':'Highlights part of a sentence with a marker-like background.','회의는 ==오후 3시==에 시작합니다.':'The meeting starts at ==3 PM==.','회의는':'The meeting starts at','오후 3시':'3 PM','에 시작합니다.':'.',
   '찾을 내용':'Find','바꿀 내용':'Replace with','비워두면 찾은 내용을 삭제합니다':'Leave blank to delete matches','대소문자 구분':'Match case','단어 전체':'Whole words','다음 찾기':'Find next','바꾸기':'Replace','모두 바꾸기':'Replace all','일치 항목 없음':'No matches','원문에서 바꿀 위치를 찾지 못했습니다':'Could not locate the match in the source'
-  ,'파일 열기':'Open file','폴더 열기':'Open folder','PDF 저장':'Save PDF','MD 저장':'Save MD','ZIP 저장':'Save ZIP','변경된 문서만':'Changed documents only','문서 선택…':'Select documents…','폴더 전체':'Entire folder',
+  ,'파일 열기':'Open file','폴더 열기':'Open folder','문서로 저장':'Save as document','PDF 저장':'Save PDF','MD 저장':'Save MD','Word 저장 (.docx)':'Save as Word (.docx)','한글 저장 (.hwpx)':'Save as Hangul (.hwpx)','ZIP 저장':'Save ZIP','변경된 문서만':'Changed documents only','문서 선택…':'Select documents…','폴더 전체':'Entire folder',
+  '문서 저장 중':'Saving document','현재 문서 변환이 끝난 뒤 다시 시도해 주세요.':'Wait for the current conversion to finish, then try again.',
+  'PDF는 한 번에 문서 하나를 선택해 주세요.':'Select one document at a time when saving as PDF.','목차 수정 실패':'Could not update table of contents','원문에서 선택한 목차를 찾지 못했습니다. 미리보기를 새로 고친 뒤 다시 시도해 주세요.':'Could not find the selected table of contents in the source. Refresh Preview and try again.',
+  '미리보기 축소':'Zoom Preview out','미리보기 확대':'Zoom Preview in','배율 낮추기':'Zoom out','배율 높이기':'Zoom in','배율 5% 낮추기':'Decrease zoom by 5%','배율 5% 높이기':'Increase zoom by 5%','PDF 파일에는 적용되지 않는 보기 배율':'Preview zoom does not affect PDF files',
+  '문서를 복원하는 중…':'Restoring documents…','작업을 복원하는 중…':'Restoring workspace…','파일을 불러오는 중…':'Loading files…','분할 보기를 닫았습니다. 변경 내용은 작업공간에 자동 보관됩니다.':'Split view closed. Changes remain saved in the workspace.','미리보기를 원문에 반영하지 못했습니다. 기존 원문은 보존되었습니다.':'Could not apply Preview changes to the source. The existing source was preserved.',
+  'TTF, OTF, WOFF 또는 WOFF2 폰트 파일을 선택해 주세요.':'Select a TTF, OTF, WOFF, or WOFF2 font file.','사용자 폰트':'User font','저장된 글자색':'Saved text colors','저장된 배경색':'Saved background colors','색상 코드':'Color code','투명도':'Opacity','드래그해서 이미지 크기 조절':'Drag to resize image','이미지 크기 조절':'Resize image',
+  '모두 선택':'Select all','모두 해제':'Clear all','이미 사용 중':'Already in use','기존 서식이 있습니다':'Formatting already exists','현재 색상과 굵기를 유지할지 선택하세요.':'Choose whether to preserve the current color and bold formatting.','서식 유지하고 변경':'Preserve formatting and convert','목록 서식':'List formatting','인용문 서식':'Quote formatting','선택한 블록을 옮길 위치를 클릭하세요.':'Click where you want to move the selected block.','문서 목차 위치 이동':'Move table of contents','클릭: 이동 · Ctrl+드래그: 목차 순서 변경':'Click to navigate · Ctrl-drag to reorder',
+  'Word로 저장':'Save as Word','Word에서 편집 가능한 문서':'Editable Word document','한글로 저장':'Save as Hangul','한컴오피스에서 편집 가능한 문서':'Editable Hancom Office document','DOCX 저장 실패':'DOCX export failed','HWPX 저장 실패':'HWPX export failed','문서를 만드는 중…':'Creating document…',
   '추가':'Add','+ 옵션 추가':'+ Add option','전용 서식 출력은 PDF 저장만 지원합니다. MD 저장에는 문법 원문이 보존됩니다.':'Rich formatting is supported only when saving as PDF. The original syntax is preserved when saving as MD.',
   '전용 서식 출력은 PDF 저장만 지원합니다. MD 저장에는 Obsidian 문법 원문이 보존됩니다.':'Rich formatting is supported only when saving as PDF. The original Obsidian syntax is preserved when saving as MD.',
   '문서 추가':'Add document','새 문서를 만들거나 기존 파일을 불러올 수 있습니다.':'Create a new document or open an existing file.','빈 Markdown 문서를 새로 만듭니다.':'Create a blank Markdown document.','MD, 코드, 이미지 등의 파일을 불러옵니다.':'Open Markdown, code, image, and other files.',
@@ -15917,6 +15996,10 @@ function translatedUiText(value){
     const tableSize=core.match(/^(\d+)행 × (\d+)열$/);if(tableSize)translated=`${tableSize[1]} rows × ${tableSize[2]} columns`;
     const tableInsert=core.match(/^(\d+)행 (\d+)열 표 삽입$/);if(tableInsert)translated=`Insert a ${tableInsert[1]} × ${tableInsert[2]} table`;
     const formatSaveDocuments=core.match(/^([A-Z0-9]+) 형식으로 저장할 문서를 선택하세요\.$/);if(formatSaveDocuments)translated=`Choose the documents to save as ${formatSaveDocuments[1]}.`;
+    const exportProgress=core.match(/^(\d+)\/(\d+) · (.+) 변환 중…$/);if(exportProgress)translated=`${exportProgress[1]}/${exportProgress[2]} · Converting ${exportProgress[3]}…`;
+    const exportStart=core.match(/^([A-Z0-9]+) 문서를 만드는 중…$/);if(exportStart)translated=`Creating ${exportStart[1]} document…`;
+    const exportComplete=core.match(/^(\d+)개 문서를 ([A-Z0-9]+) 형식으로 저장했습니다\.$/);if(exportComplete)translated=`Saved ${exportComplete[1]} document${exportComplete[1]==='1'?'':'s'} as ${exportComplete[2]}.`;
+    const exportFailure=core.match(/^(.+)을\(를\) 변환하지 못했습니다\.$/);if(exportFailure)translated=`Could not convert ${exportFailure[1]}.`;
     const documentLine=core.match(/^(\d+)\. 문서 내용$/);if(documentLine)translated=`${documentLine[1]}. Document content`;
     const splitDocumentLine=core.match(/^(\d+)\. (왼쪽|오른쪽) 문서 내용$/);if(splitDocumentLine)translated=`${splitDocumentLine[1]}. ${splitDocumentLine[2]==='왼쪽'?'Left':'Right'} document content`;
     const foundCount=core.match(/^(\d+)개 찾음$/);if(foundCount)translated=`${foundCount[1]} found`;
@@ -16372,9 +16455,9 @@ function showShortcutSettings(){
   document.body.appendChild(wrap);
   wrap.querySelector('[data-shortcut-done]').focus();
 }
-bindFeatureGuide($('ins-zz-toc'),'toc');
-bindFeatureGuide($('ins-zz-sync'),'sync');
-bindFeatureGuide($('ins-doc-embed'),'docEmbed');
+bindFeatureGuide($('ins-zz-toc'),'toc',{always:true});
+bindFeatureGuide($('ins-zz-sync'),'sync',{always:true});
+bindFeatureGuide($('ins-doc-embed'),'docEmbed',{always:true});
 bindFeatureGuide($('ins-obsidian-callout'),'callout');
 bindFeatureGuide($('ins-obsidian-wikilink'),'wikilink');
 bindFeatureGuide($('ins-obsidian-embed'),'fileEmbed');
@@ -18062,8 +18145,12 @@ $('edit-close-doc').onclick=closeDocument;
     {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4.5h11v6a1 1 0 01-1 1H2a1 1 0 01-1-1v-6z"/><path d="M1 4.5l1.5-3h3.3l1.3 1.4H12"/><path d="M5 8h3.8M7.4 6.6L8.8 8 7.4 9.4"/></svg> 폴더 열기',action:()=>els.folderInput.click()},
   ]);
   const saveMenu=makeMenu([
-    {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1" width="11" height="11" rx="1.5"/><rect x="3.5" y="1" width="6" height="3.5" rx=".5"/><rect x="2.5" y="7" width="8" height="3.5" rx=".5"/></svg> PDF 저장',action:()=>openDocumentFiles().length>1?saveOpenDocuments('pdf'):printDocument()},
     {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 10l4-7 4 7"/><line x1="3.5" y1="7.5" x2="8.5" y2="7.5"/></svg> MD 저장',action:()=>openDocumentFiles().length>1?saveOpenDocuments('md'):saveCurrent()},
+    {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M2 1.5h6l3 3v8H2z"/><path d="M8 1.5v3h3M4 7h5M4 9h5"/></svg> 문서로 저장',children:[
+      {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="1" width="11" height="11" rx="1.5"/><rect x="3.5" y="1" width="6" height="3.5" rx=".5"/><rect x="2.5" y="7" width="8" height="3.5" rx=".5"/></svg> PDF 저장',action:()=>openDocumentFiles().length>1?saveOpenDocuments('pdf'):printDocument()},
+      {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 1.5h6l3 3v7H2z"/><path d="M8 1.5v3h3M4 6l1 3 1-2 1 2 1-3"/></svg> Word 저장 (.docx)',action:()=>openDocumentFiles().length>1?saveOpenDocuments('docx'):saveOfficeCurrent('docx')},
+      {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M2 1.5h6l3 3v7H2z"/><path d="M8 1.5v3h3M4 6.3h4M4 8.5h4"/></svg> 한글 저장 (.hwpx)',action:()=>openDocumentFiles().length>1?saveOpenDocuments('hwpx'):saveOfficeCurrent('hwpx')},
+    ]},
     '-',
     {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M2 3h9v8H2zM3 1h7v2H3z"/><path d="M6.5 3v5M5.5 4h2M5.5 6h2"/></svg> ZIP 저장',children:[
       {label:'변경된 문서만',action:saveChangedZip},
@@ -18111,8 +18198,8 @@ const SHORTCUT_SAVE_FORMAT_KEY='md-shortcut-save-format';
 function showShortcutSaveFormatDialog(){
   return new Promise(resolve=>{
     const wrap=document.createElement('div');wrap.className='modal-backdrop';
-    wrap.innerHTML=`<div class="modal-card save-format-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcut-save-format-title"><div class="save-format-heading"><h3 id="shortcut-save-format-title">저장 형식 선택</h3><p class="save-format-copy">현재 문서를 어떤 형식으로 저장할까요?</p></div><div class="save-format-choices"><button type="button" data-save-format="md"><span class="save-format-extension" aria-hidden="true">.md</span><span class="save-format-choice-copy"><b>MD로 저장</b><small>편집 가능한 마크다운 문서</small></span></button><button type="button" data-save-format="pdf"><span class="save-format-extension" aria-hidden="true">.pdf</span><span class="save-format-choice-copy"><b>PDF로 저장</b><small>인쇄 및 공유용 문서</small></span></button></div><div class="save-format-footer"><label class="save-format-remember"><input type="checkbox" data-save-format-remember><span>다시는 보지 않기</span></label><button class="tool save-format-cancel" type="button" data-save-format="cancel">취소</button></div></div>`;
-    const finish=format=>{document.removeEventListener('keydown',onKey);wrap.remove();if((format==='md'||format==='pdf')&&wrap.querySelector('[data-save-format-remember]').checked)localStorage.setItem(SHORTCUT_SAVE_FORMAT_KEY,format);resolve(format)};
+    wrap.innerHTML=`<div class="modal-card save-format-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcut-save-format-title"><div class="save-format-heading"><h3 id="shortcut-save-format-title">저장 형식 선택</h3><p class="save-format-copy">현재 문서를 어떤 형식으로 저장할까요?</p></div><div class="save-format-choices"><button type="button" data-save-format="md"><span class="save-format-extension" aria-hidden="true">.md</span><span class="save-format-choice-copy"><b>MD로 저장</b><small>편집 가능한 마크다운 문서</small></span></button><button type="button" data-save-format="pdf"><span class="save-format-extension" aria-hidden="true">.pdf</span><span class="save-format-choice-copy"><b>PDF로 저장</b><small>인쇄 및 공유용 문서</small></span></button><button type="button" data-save-format="docx"><span class="save-format-extension" aria-hidden="true">.docx</span><span class="save-format-choice-copy"><b>Word로 저장</b><small>Word에서 편집 가능한 문서</small></span></button><button type="button" data-save-format="hwpx"><span class="save-format-extension" aria-hidden="true">.hwpx</span><span class="save-format-choice-copy"><b>한글로 저장</b><small>한컴오피스에서 편집 가능한 문서</small></span></button></div><div class="save-format-footer"><label class="save-format-remember"><input type="checkbox" data-save-format-remember><span>다시는 보지 않기</span></label><button class="tool save-format-cancel" type="button" data-save-format="cancel">취소</button></div></div>`;
+    const finish=format=>{document.removeEventListener('keydown',onKey);wrap.remove();if(['md','pdf','docx','hwpx'].includes(format)&&wrap.querySelector('[data-save-format-remember]').checked)localStorage.setItem(SHORTCUT_SAVE_FORMAT_KEY,format);resolve(format)};
     const onKey=e=>{if(e.key==='Escape')finish(null)};
     wrap.onclick=e=>{const format=e.target.closest('[data-save-format]')?.dataset.saveFormat;if(format)finish(format==='cancel'?null:format)};
     document.addEventListener('keydown',onKey);document.body.appendChild(wrap);wrap.querySelector('[data-save-format="md"]').focus();
@@ -18120,6 +18207,7 @@ function showShortcutSaveFormatDialog(){
 }
 async function saveShortcutAsFormat(format){
   if(format==='md')return saveCurrent();
+  if(format==='docx'||format==='hwpx')return saveOfficeCurrent(format);
   if(format==='pdf'){
     const active=activeEditDocument(),title=(active.file?.name||'document.md').replace(/\.(md|markdown)$/i,'.pdf');
     return printDocument(title,active.preview);
@@ -18136,7 +18224,7 @@ async function shortcutSaveResult(){
       active.file.text=source;active.editor.value=source;commitSecondaryHistory(active.file);
     }
     let format=localStorage.getItem(SHORTCUT_SAVE_FORMAT_KEY);
-    if(format!=='md'&&format!=='pdf')format=await showShortcutSaveFormatDialog();
+    if(!['md','pdf','docx','hwpx'].includes(format))format=await showShortcutSaveFormatDialog();
     if(format)return saveShortcutAsFormat(format);
     return;
   }
