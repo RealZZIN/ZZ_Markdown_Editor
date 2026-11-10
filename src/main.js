@@ -17,6 +17,7 @@ let documentSplitEnabled=savedOption('md-option-document-split',false);
 let documentSyncScrollEnabled=savedOption('md-option-document-sync-scroll',false);
 let splitPreviewWrapEnabled=savedOption('md-option-split-preview-wrap',true);
 let splitPanePreviewFirstEnabled=savedOption('md-option-split-preview-first',true);
+let splitSelectionLinkEnabled=savedOption('md-option-split-selection-link',true);
 const collapsedOutlineSections={structure:false,tags:false};
 const collapsedOutlineHeadings=new Set();
 const imageExt=/\.(png|jpe?g|gif|webp|svg|bmp)$/i,mdExt=/\.(md|markdown)$/i;
@@ -5157,6 +5158,119 @@ function rangeFromTextOffsets(root,start,end){
   range.setEnd(endNode,endOffset);
   return range;
 }
+function previewRangeForText(text){
+  const needle=String(text||'').replace(/\u200b/g,'').trim();
+  if(!needle)return null;
+  const walker=document.createTreeWalker(els.preview,NodeFilter.SHOW_TEXT,{acceptNode(node){
+    const parent=node.parentElement;
+    return parent?.closest('[contenteditable="false"],.block-move-handle,.unique-block-move-handle,.katex-html,[aria-hidden="true"]')
+      ?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;
+  }});
+  const nodes=[];let combined='',node;
+  while((node=walker.nextNode())){nodes.push({node,start:combined.length});combined+=node.nodeValue.replace(/\u200b/g,'')}
+  const start=combined.indexOf(needle);if(start<0)return null;
+  const end=start+needle.length;
+  const first=[...nodes].reverse().find(item=>item.start<=start);
+  const last=[...nodes].reverse().find(item=>item.start<end);
+  if(!first||!last)return null;
+  const range=document.createRange();
+  range.setStart(first.node,Math.min(first.node.length,start-first.start));
+  range.setEnd(last.node,Math.min(last.node.length,end-last.start));
+  return range;
+}
+function plainMarkdownSelection(source){
+  const holder=document.createElement('div');
+  try{holder.innerHTML=markdownHtml(String(source||''))}catch{holder.textContent=String(source||'')}
+  return(holder.textContent||'').replace(/\u200b/g,'').trim()||String(source||'').trim();
+}
+function revealRangeInScrollSurface(range,surface,{centerY=false}={}){
+  if(!range||!surface)return;
+  const rect=range.getBoundingClientRect(),box=surface.getBoundingClientRect(),padding=28;
+  let left=surface.scrollLeft,top=surface.scrollTop;
+  if(rect.left<box.left+padding)left-=box.left+padding-rect.left;
+  else if(rect.right>box.right-padding)left+=rect.right-(box.right-padding);
+  if(centerY)top+=rect.top-box.top-(surface.clientHeight-rect.height)/2;
+  else if(rect.top<box.top+padding)top-=box.top+padding-rect.top;
+  else if(rect.bottom>box.bottom-padding)top+=rect.bottom-(box.bottom-padding);
+  surface.scrollLeft=Math.max(0,left);
+  surface.scrollTop=Math.max(0,top);
+}
+function revealMarkdownSourceOffset(sourceOffset,endOffset=sourceOffset){
+  if(!Number.isFinite(sourceOffset)||sourceOffset<0)return;
+  const source=els.editor.value,lineStart=source.lastIndexOf('\n',Math.max(0,sourceOffset-1))+1;
+  const prefix=source.slice(lineStart,Math.max(sourceOffset,endOffset)).replace(/\t/g,'        ');
+  const style=getComputedStyle(els.editor);
+  const mirror=revealMarkdownSourceOffset.mirror||(revealMarkdownSourceOffset.mirror=Object.assign(document.createElement('span'),{ariaHidden:'true'}));
+  if(!mirror.isConnected){mirror.style.cssText='position:fixed;left:-100000px;top:-100000px;visibility:hidden;white-space:pre;pointer-events:none;';document.body.appendChild(mirror)}
+  mirror.style.font=style.font;
+  mirror.style.letterSpacing=style.letterSpacing;
+  mirror.style.tabSize=style.tabSize;
+  mirror.textContent=prefix||' ';
+  const textWidth=mirror.getBoundingClientRect().width;
+  const paddingLeft=parseFloat(style.paddingLeft)||0;
+  const maximum=Math.max(0,els.editor.scrollWidth-els.editor.clientWidth);
+  const target=Math.max(0,Math.min(maximum,paddingLeft+textWidth-els.editor.clientWidth*.5));
+  els.editor.scrollLeft=target;
+  syncMarkdownHighlightScroll();
+}
+function settleSplitLinkedScroll(callback){
+  callback();
+  requestAnimationFrame(()=>{callback();requestAnimationFrame(callback)});
+}
+function revealSplitSelectionLink(){
+  if(!splitSelectionLinkEnabled||documentSplitState.secondaryFile||currentEditView()!=='both')return false;
+  const selection=getSelection(),live=selection?.rangeCount?selection.getRangeAt(0):null;
+  const previewSelected=live&&!live.collapsed&&els.preview.contains(live.commonAncestorContainer);
+  const editorSelected=document.activeElement===els.editor&&els.editor.selectionEnd>els.editor.selectionStart;
+  if(!previewSelected&&!editorSelected)return false;
+  clearPreviewArrival();
+  let previewRange,markdownRange,sourceOffset=-1;
+  if(previewSelected){
+    const text=live.toString().replace(/\u200b/g,'').trim();if(!text)return false;
+    sourceOffset=els.editor.value.indexOf(text);
+    if(sourceOffset<0){
+      const firstWord=text.match(/[\p{L}\p{N}_-]{2,}/u)?.[0]||'';
+      sourceOffset=firstWord?els.editor.value.indexOf(firstWord):-1;
+    }
+    const info=markdownArrivalInfo(text,sourceOffset);if(!info)return false;
+    markdownRange=info.range;sourceOffset=info.start;
+    const sourceEnd=els.editor.value.slice(sourceOffset,sourceOffset+text.length)===text
+      ?sourceOffset+text.length
+      :Math.max(sourceOffset+1,els.editor.value.indexOf('\n',sourceOffset)<0?els.editor.value.length:els.editor.value.indexOf('\n',sourceOffset));
+    const line=(els.editor.value.slice(0,sourceOffset).match(/\n/g)||[]).length;
+    const lineHeight=parseFloat(getComputedStyle(els.editor).lineHeight)||24;
+    els.editor.scrollTop=Math.max(0,line*lineHeight-(els.editor.clientHeight-lineHeight)/2);
+    els.editor.focus({preventScroll:true});
+    els.editor.setSelectionRange(sourceOffset,sourceEnd);
+    state.lastEditorSelection={start:sourceOffset,end:sourceEnd};
+    state.savedSelection={start:sourceOffset,end:sourceEnd};
+    state.lastInsertionSurface='editor';
+    syncMarkdownHighlightScroll();
+    settleSplitLinkedScroll(()=>{
+      revealMarkdownSourceOffset(sourceOffset,sourceEnd);
+      syncMarkdownHighlightScroll();
+    });
+  }else{
+    const start=els.editor.selectionStart,end=els.editor.selectionEnd;
+    const text=plainMarkdownSelection(els.editor.value.slice(start,end));
+    previewRange=previewRangeForText(text);if(!previewRange)return false;
+    els.preview.focus({preventScroll:true});
+    const targetSelection=getSelection();targetSelection.removeAllRanges();targetSelection.addRange(previewRange);
+    state.savedPreviewRange=previewRange.cloneRange();state.lastInsertionSurface='preview';
+    settleSplitLinkedScroll(()=>revealRangeInScrollSurface(previewRange,els.preview,{centerY:true}));
+    renderMarkdownHighlight(els.editor.value);
+    markdownRange=rangeFromTextOffsets(els.markdownHighlight,start,end);
+  }
+  if(window.Highlight&&CSS.highlights){
+    if(previewRange)CSS.highlights.set('preview-arrival',new Highlight(previewRange));
+    if(markdownRange)CSS.highlights.set('markdown-arrival',new Highlight(markdownRange));
+  }else{
+    if(previewRange)addArrivalMarkers([previewRange]);
+    if(markdownRange)addArrivalMarkers([markdownRange],'markdown-arrival-marker');
+  }
+  previewArrivalTimer=setTimeout(clearPreviewArrival,2400);
+  return true;
+}
 function markdownArrivalInfo(matchText='',sourceOffset=-1){
   const source=els.editor.value;
   const needle=String(matchText||'').trim();
@@ -9823,6 +9937,12 @@ function internalPreviewPasteHtml(html){
   const payload=holder.querySelector(`[${INTERNAL_PREVIEW_CLIPBOARD_ATTRIBUTE}]`);
   if(!payload)return'';
   payload.querySelectorAll('script,style,meta,link,object,embed').forEach(node=>node.remove());
+  const markerWalker=document.createTreeWalker(payload,NodeFilter.SHOW_TEXT);
+  const markerNodes=[];while(markerWalker.nextNode())markerNodes.push(markerWalker.currentNode);
+  markerNodes.forEach(node=>{node.data=node.data.replace(/\b(?:StartFragment|EndFragment)\b/gi,'')});
+  const commentWalker=document.createTreeWalker(payload,NodeFilter.SHOW_COMMENT);
+  const comments=[];while(commentWalker.nextNode())comments.push(commentWalker.currentNode);
+  comments.forEach(node=>node.remove());
   payload.querySelectorAll('*').forEach(node=>{
     [...node.attributes].forEach(attribute=>{if(/^on/i.test(attribute.name))node.removeAttribute(attribute.name)});
   });
@@ -10007,6 +10127,12 @@ els.preview.addEventListener('paste',e=>{
 function pastedHtmlWithoutForeignFormatting(html,{preserveSourceChips=false}={}){
   const holder=document.createElement('div');holder.innerHTML=String(html||'');
   holder.querySelectorAll('script,style,meta,link,object,embed').forEach(node=>node.remove());
+  const markerWalker=document.createTreeWalker(holder,NodeFilter.SHOW_TEXT);
+  const markerNodes=[];while(markerWalker.nextNode())markerNodes.push(markerWalker.currentNode);
+  markerNodes.forEach(node=>{node.data=node.data.replace(/\b(?:StartFragment|EndFragment)\b/gi,'')});
+  const commentWalker=document.createTreeWalker(holder,NodeFilter.SHOW_COMMENT);
+  const comments=[];while(commentWalker.nextNode())comments.push(commentWalker.currentNode);
+  comments.forEach(node=>node.remove());
   holder.querySelectorAll('*').forEach(node=>{
     const keepSourceChip=preserveSourceChips&&node.matches('.zz-source-chip,.zz-source-chip-label');
     ['style','face','font-family','data-mce-style','color','bgcolor','align','valign','border','cellpadding','cellspacing','height','width'].forEach(attribute=>node.removeAttribute(attribute));
@@ -10074,6 +10200,10 @@ els.preview.addEventListener('input',e=>{
   // paragraph immediately so a tiny quote rail is not left beside the caret.
   if(replaceEmptyPreviewQuoteAtSelection()){
     scheduleSyncFromPreview();
+    return;
+  }
+  if(/^delete/i.test(e.inputType||'')){
+    syncFromPreview();
     return;
   }
   const closingSyntax=typeof e.data==='string'&&['*','_','`',')'].includes(e.data.slice(-1));
@@ -10527,6 +10657,11 @@ function syncEditorToPreviewAnchor(){
   els.editor.scrollTop=Math.max(0,line*lineHeight-els.editor.clientHeight/2);return true;
 }
 let expectedEditorScrollTop=null,expectedPreviewScrollTop=null;
+function clearDocumentScrollIntent(surface){
+  if(!surface)return;
+  documentScrollIntent?.delete(surface);
+  documentScrollIntentTop?.delete(surface);
+}
 function consumeExpectedScroll(pane){
   const editorPane=pane===els.editor,expected=editorPane?expectedEditorScrollTop:expectedPreviewScrollTop;
   if(expected===null)return false;
@@ -10540,6 +10675,7 @@ function onEditorScroll(){
   if(consumeExpectedScroll(els.editor)||!syncScrollEnabled||syncScrollLock||currentEditView()!=='both')return;
   const editor=els.editor,preview=els.preview;
   syncScrollLock=true;
+  clearDocumentScrollIntent(preview);
   if(!syncPreviewToEditorAnchor()){
     const ratio=editor.scrollTop/(editor.scrollHeight-editor.clientHeight||1);
     preview.scrollTop=ratio*(preview.scrollHeight-preview.clientHeight);
@@ -10551,6 +10687,7 @@ function onPreviewScroll(){
   if(consumeExpectedScroll(els.preview)||!syncScrollEnabled||syncScrollLock||currentEditView()!=='both')return;
   const editor=els.editor,preview=els.preview;
   syncScrollLock=true;
+  clearDocumentScrollIntent(editor);
   if(!syncEditorToPreviewAnchor()){
     const ratio=preview.scrollTop/(preview.scrollHeight-preview.clientHeight||1);
     editor.scrollTop=ratio*(editor.scrollHeight-editor.clientHeight);
@@ -10572,6 +10709,7 @@ function syncSecondaryInnerScroll(source,target,sourceIsEditor){
   }
   if(!syncScrollEnabled||secondaryInnerScrollLock||documentSplitState.secondaryView!=='both'||!documentSplitState.secondaryFile)return;
   secondaryInnerScrollLock=true;
+  clearDocumentScrollIntent(target);
   const sourceRange=Math.max(1,source.scrollHeight-source.clientHeight),targetRange=Math.max(0,target.scrollHeight-target.clientHeight);
   target.scrollTop=Math.max(0,Math.min(targetRange,source.scrollTop/sourceRange*targetRange));
   if(sourceIsEditor)secondaryExpectedPreviewScroll=target.scrollTop;else secondaryExpectedEditorScroll=target.scrollTop;
@@ -10645,6 +10783,22 @@ function documentPaneScrollTarget(pane,preferred){
   if(preferred==='preview')return pane==='secondary'?els.secondaryPreview:els.preview;
   return pane==='secondary'?els.secondaryEditor:els.editor;
 }
+function documentPaneScrollSurfaces(target){
+  const secondary=target===els.secondaryEditor||target===els.secondaryPreview;
+  const view=secondary?documentSplitState.secondaryView:currentEditView();
+  if(view!=='both')return[target];
+  return secondary?[els.secondaryEditor,els.secondaryPreview]:[els.editor,els.preview];
+}
+function rememberDocumentSyncedScroll(target,top){
+  documentExpectedScroll.set(target,top);
+  // Cross-document movement owns both visible surfaces in an internally split
+  // pane. Mark the matching inner-sync expectation as well so its ratio/anchor
+  // mapper cannot shrink or enlarge the exact pixel delta on the next event.
+  if(target===els.editor)expectedEditorScrollTop=top;
+  else if(target===els.preview)expectedPreviewScrollTop=top;
+  else if(target===els.secondaryEditor)secondaryExpectedEditorScroll=top;
+  else if(target===els.secondaryPreview)secondaryExpectedPreviewScroll=top;
+}
 function alignSplitDocumentScrollFromActivePane(){
   if(!documentSyncScrollEnabled||!documentSplitState.secondaryFile)return;
   const sourcePane=documentSplitState.activePane==='secondary'?'secondary':'primary';
@@ -10681,19 +10835,38 @@ function syncDocumentPaneScroll(source,target){
     const updates=[...pendingDocumentScrolls.values()];pendingDocumentScrolls.clear();
     if(!documentSyncScrollEnabled||!documentSplitState.secondaryFile)return;
     updates.forEach(({source,target,delta})=>{
-      documentScrollIntent.delete(source);
-      documentScrollIntentTop.delete(source);
-      const targetRange=Math.max(0,target.scrollHeight-target.clientHeight);
-      const next=Math.max(0,Math.min(targetRange,target.scrollTop+delta));
-      if(Math.abs(target.scrollTop-next)<=.5)return;
-      documentExpectedScroll.set(target,next);target.scrollTop=next;
+      // Keep the latest user-owned position as the next delta baseline. Wheel
+      // and touchpad inertia emit scroll events after the first paint, so
+      // clearing intent here used to mirror only the first (usually tiny)
+      // movement. Updating the baseline even when the target is already at an
+      // edge also prevents a large accumulated jump when direction changes.
+      documentScrollIntentTop.set(source,source.scrollTop);
+      documentPaneScrollSurfaces(target).forEach(surface=>{
+        const targetRange=Math.max(0,surface.scrollHeight-surface.clientHeight);
+        const next=Math.max(0,Math.min(targetRange,surface.scrollTop+delta));
+        if(Math.abs(surface.scrollTop-next)<=.5)return;
+        clearDocumentScrollIntent(surface);
+        rememberDocumentSyncedScroll(surface,next);
+        surface.scrollTop=next;
+      });
     });
   });
 }
-els.editor.addEventListener('scroll',()=>syncDocumentPaneScroll(els.editor,documentPaneScrollTarget('secondary','editor')),{passive:true});
-els.preview.addEventListener('scroll',()=>syncDocumentPaneScroll(els.preview,documentPaneScrollTarget('secondary','preview')),{passive:true});
-els.secondaryEditor.addEventListener('scroll',()=>syncDocumentPaneScroll(els.secondaryEditor,documentPaneScrollTarget('primary','editor')),{passive:true});
-els.secondaryPreview.addEventListener('scroll',()=>syncDocumentPaneScroll(els.secondaryPreview,documentPaneScrollTarget('primary','preview')),{passive:true});
+// Observe document-to-document scrolling in the capture phase. In `both`
+// view the Preview/Markdown inner-sync handlers live on the same surfaces.
+// Running cross-document sync first preserves the user's real delta before an
+// inner handler changes the companion surface, and programmatic target events
+// can be consumed before they have a chance to echo back to the other pane.
+const documentScrollRoutes=new Map([
+  [els.editor,()=>documentPaneScrollTarget('secondary','editor')],
+  [els.preview,()=>documentPaneScrollTarget('secondary','preview')],
+  [els.secondaryEditor,()=>documentPaneScrollTarget('primary','editor')],
+  [els.secondaryPreview,()=>documentPaneScrollTarget('primary','preview')]
+]);
+document.addEventListener('scroll',event=>{
+  const route=documentScrollRoutes.get(event.target);
+  if(route)syncDocumentPaneScroll(event.target,route());
+}, {capture:true,passive:true});
 els.preview.addEventListener('load',()=>{scrollAnchorCache=null;schedulePreviewLineNumbers()},true);
 if(window.ResizeObserver)new ResizeObserver(()=>{scrollAnchorCache=null;schedulePreviewLineNumbers()}).observe(els.preview);
 window.addEventListener('resize',schedulePreviewLineNumbers);
@@ -11669,7 +11842,8 @@ function previewSelectionClipboardData(range){
   const payload=document.createElement('div');
   payload.setAttribute(INTERNAL_PREVIEW_CLIPBOARD_ATTRIBUTE,'1');
   payload.innerHTML=serializePreviewHtml(host);
-  return{html:payload.outerHTML,text:range.toString()};
+  const text=range.toString().replace(/\b(?:StartFragment|EndFragment)\b/gi,'');
+  return{html:payload.outerHTML,text};
 }
 async function writePreviewSelectionClipboard(range){
   const data=previewSelectionClipboardData(range);
@@ -15316,6 +15490,10 @@ const acPanelHtml=`
       <input type="checkbox" id="enable-sync-scroll">
       <span><b>분할 보기 스크롤 동기화</b><div class="ac-desc">편집·보기를 함께 스크롤</div></span>
     </label>
+    <label title="분할 보기에서 글자를 선택하고 지정 키를 누르면 반대쪽 영역의 해당 위치를 표시합니다.">
+      <input type="checkbox" id="enable-split-selection-link">
+      <span><b>분할 선택 위치 표시</b><div class="ac-desc">선택한 내용의 반대쪽 위치를 강조</div></span>
+    </label>
     <label><input type="checkbox" id="enable-table-filter"><span><b>표 필터·정렬</b><div class="ac-desc">표 머리글에서 행을 필터링하거나 정렬하며 원문은 유지</div></span></label>
     <label title="마크다운 편집창 왼쪽에 행 번호를 표시합니다.">
       <input type="checkbox" id="enable-line-numbers">
@@ -15423,6 +15601,7 @@ $('enable-color-correct').checked=colorCorrectEnabled;
 $('enable-paragraph-break').checked=paragraphBreakEnabled;
 $('enable-list-format-confirm').checked=listFormatConfirmEnabled;
 $('enable-sync-scroll').checked=syncScrollEnabled;
+$('enable-split-selection-link').checked=splitSelectionLinkEnabled;
 $('enable-line-numbers').checked=savedOption('md-option-line-numbers',false);
 $('enable-table-filter').checked=savedOption('md-option-table-filter',false);
 $('enable-table-filter').onchange=e=>{localStorage.setItem('md-option-table-filter',e.target.checked?'1':'0');document.querySelector('.table-filter-popup')?.remove();resetTableFilterView(els.preview);if(e.target.checked)installTableFilters()};
@@ -15436,6 +15615,11 @@ $('enable-sync-scroll').onchange=e=>{
   syncScrollLock=false;secondaryInnerScrollLock=false;
   expectedEditorScrollTop=expectedPreviewScrollTop=secondaryExpectedEditorScroll=secondaryExpectedPreviewScroll=null;
   localStorage.setItem('md-option-sync-scroll',syncScrollEnabled?'1':'0');
+};
+$('enable-split-selection-link').onchange=e=>{
+  splitSelectionLinkEnabled=e.target.checked;
+  if(!splitSelectionLinkEnabled)clearPreviewArrival();
+  localStorage.setItem('md-option-split-selection-link',splitSelectionLinkEnabled?'1':'0');
 };
 $('enable-line-numbers').onchange=e=>{setLineNumbers(e.target.checked);localStorage.setItem('md-option-line-numbers',e.target.checked?'1':'0')};
 $('enable-swap-panes').onchange=e=>{setSwapPanes(e.target.checked);localStorage.setItem('md-option-swap-panes',e.target.checked?'1':'0')};
@@ -15588,17 +15772,18 @@ const SHORTCUT_DEFINITIONS=[
   {id:'link',name:'링크',description:'선택한 글자에 링크 추가',defaultKey:'Ctrl+K'},
   {id:'customFormat',name:'사용자 지정 서식',description:'저장한 사용자 서식 열기',defaultKey:'Ctrl+Alt+S'},
   {id:'previewPin',name:'미니 프리뷰 고정',description:'변환·병합 화면의 미니 프리뷰를 고정',defaultKey:'Ctrl'},
-  {id:'quickEditPin',name:'빠른 편집창 고정',description:'문법 빠른 편집창을 열린 위치에 고정',defaultKey:'Ctrl'}
+  {id:'quickEditPin',name:'빠른 편집창 고정',description:'문법 빠른 편집창을 열린 위치에 고정',defaultKey:'Ctrl'},
+  {id:'splitSelectionLink',name:'분할 선택 위치 표시',description:'반대쪽 편집·보기 영역에서 선택한 내용의 위치 표시',defaultKey:'Shift'}
 ];
 const SHORTCUT_GROUPS=[
   {id:'navigation',name:'화면 이동',description:'변환·편집·병합 화면 전환',items:['modeConvert','modeEdit','modeMerge']},
   {id:'file',name:'파일·실행',description:'열기, 저장, 인쇄와 작업 실행',items:['save','saveAs','open','runSelection','print']},
   {id:'editing',name:'찾기·편집 기록',description:'찾기와 실행 취소·다시 실행',items:['find','replace','undo','redo']},
   {id:'format',name:'글자 서식',description:'선택한 글자의 모양과 링크 변경',items:['bold','italic','underline','link','customFormat']},
-  {id:'preview',name:'팝업·미리보기',description:'빠른 편집창과 미니 프리뷰 고정',items:['previewPin','quickEditPin']}
+  {id:'preview',name:'팝업·미리보기',description:'빠른 편집창과 미니 프리뷰 고정',items:['previewPin','quickEditPin','splitSelectionLink']}
 ];
 function shortcutConflict(id,value){
-  const contextual=new Set(['previewPin','quickEditPin']);
+  const contextual=new Set(['previewPin','quickEditPin','splitSelectionLink']);
   return SHORTCUT_DEFINITIONS.find(item=>item.id!==id&&shortcutSettings[item.id]===value&&!(contextual.has(id)&&contextual.has(item.id)));
 }
 function loadShortcutSettings(){
@@ -15632,6 +15817,13 @@ function refreshShortcutHints(){
   const custom=$('custom-format-toggle');
   if(custom)custom.setAttribute('aria-label',`사용자 지정 서식 (${shortcutSettings.customFormat})`);
 }
+document.addEventListener('keydown',event=>{
+  if(!shortcutMatches(event,'splitSelectionLink'))return;
+  if(revealSplitSelectionLink()){
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+},true);
 let featureGuideEnabled=localStorage.getItem(FEATURE_GUIDE_ENABLED_KEY)!=='0';
 let featureGuidePopover=null,featureGuideOpenTimer=0,featureGuideCloseTimer=0;
 const FEATURE_GUIDES={
@@ -15809,6 +16001,7 @@ const EN_TEXT={
   '켜면 영역 너비에 맞춰 줄바꿈하고, 끄면 한 줄을 유지한 채 가로로 스크롤합니다.':'When enabled, long lines wrap to the pane width. When disabled, they stay on one line and scroll horizontally.','자동 줄바꿈':'Wrap lines','가로 스크롤':'Horizontal scroll','확대해도 긴 문장을 미리보기 너비에 맞춰 자연스럽게 표시합니다.':'Long lines wrap naturally to the preview width even when zoomed in.','확대해도 긴 문장을 한 줄로 유지하여 가로 스크롤로 확인합니다.':'Long lines remain on one line when zoomed in and can be viewed by scrolling horizontally.',
   'Markdown·Preview 스크롤 동기화':'Sync Markdown and Preview scrolling','한 문서의 편집창과 미리보기를 함께 스크롤':'Scroll a document’s editor and preview together',
   '분할 보기 스크롤 동기화':'Sync split-view scrolling','편집·보기를 함께 스크롤':'Scroll Edit and View together','분할 보기에서 편집창과 보기창의 세로 스크롤 위치를 서로 맞춥니다.':'Keeps Edit and View at matching vertical positions in Split view.',
+  '분할 선택 위치 표시':'Show split selection location','선택한 내용의 반대쪽 위치를 강조':'Highlight the matching location in the other pane','분할 보기에서 글자를 선택하고 지정 키를 누르면 반대쪽 영역의 해당 위치를 표시합니다.':'Select text in Split view and press the assigned key to show its matching location in the other pane.',
   '한 문서를 내린 거리만큼 나란히 열린 다른 문서도 이동합니다.':'The side-by-side document moves by the same distance you scroll one document.','문서 A':'Document A','문서 B':'Document B','왼쪽 문서 내용':'Left document content','오른쪽 문서 내용':'Right document content',
   '새 분할에서 열기':'Open in split view','함께 편집할 문서를 선택하세요.':'Choose a document to edit side by side.','왼쪽 분할에 열기':'Open in left pane','오른쪽 분할에 열기':'Open in right pane',
   '이 문서 닫기':'Close this document','왼쪽 문서 닫기':'Close left document','오른쪽 문서 닫기':'Close right document','크게 보기':'Maximize','분할 보기로 복귀':'Return to split view','왼쪽 문서 크게 보기':'Maximize left document','오른쪽 문서 크게 보기':'Maximize right document',
@@ -15981,7 +16174,7 @@ const EN_TEXT={
   '텍스트를 선택해 주세요':'Select text','프리뷰에서 저장하거나 서식을 적용할 텍스트를 먼저 드래그해 주세요.':'Select text in Preview before saving or applying formatting.','사용자 지정 서식 수정':'Edit custom style','선택한 텍스트에 실제로 적용된 속성만 저장 항목으로 선택했습니다.':'Only properties applied to the selected text are selected for saving.','저장할 항목을 선택해 주세요':'Select properties to save','최소 하나 이상의 서식 항목을 선택해야 합니다.':'Select at least one formatting property.','프리뷰에서 서식을 적용할 텍스트를 먼저 드래그해 주세요.':'Select text in Preview before applying formatting.','새 서식 폴더':'New style folder','폴더명':'Folder name','서식 이름 수정':'Rename style','폴더 이름 수정':'Rename folder',
   '링크 이동':'Open link','열 수 있는 링크 주소가 아닙니다.':'This link cannot be opened.','세미콜론':'Semicolon','변환 미리보기':'Conversion preview','구분자를 확인하면 표 모양을 미리 볼 수 있습니다.':'Check the delimiter to preview the table.','표 만들기':'Create table','구분할 텍스트와 올바른 구분자를 입력해 주세요.':'Enter delimited text and a valid delimiter.',
   '변환 화면':'Convert workspace','변환 화면으로 이동':'Go to Convert','편집 화면':'Editor workspace','편집 화면으로 이동':'Go to Editor','병합 화면':'Merge workspace','문서 병합 화면으로 이동':'Go to Merge','현재 작업 결과 저장':'Save current result','다른 이름으로 저장':'Save as','편집 문서를 새 이름으로 저장':'Save the document with a new name','파일 또는 폴더 불러오기':'Open a file or folder','선택 작업 실행':'Run selected action','변환·병합 화면의 선택 작업 실행':'Run the selected Convert or Merge action','현재 화면에서 내용 찾기':'Find content on this screen','편집 화면에서 내용 바꾸기':'Replace content in the editor','인쇄·PDF 저장':'Print / Save PDF','현재 결과의 인쇄 창 열기':'Open the print dialog for the current result','실행 취소':'Undo','마지막 편집 되돌리기':'Undo the last edit','다시 실행':'Redo','되돌린 편집 다시 적용':'Redo the reverted edit','선택한 글자를 굵게 표시':'Make selected text bold','선택한 글자를 기울임꼴로 표시':'Italicize selected text','선택한 글자에 밑줄 적용':'Underline selected text','링크':'Link','선택한 글자에 링크 추가':'Add a link to selected text','저장한 사용자 서식 열기':'Open saved custom styles','미니 프리뷰 고정':'Pin mini preview','변환·병합 화면의 미니 프리뷰를 고정':'Pin the mini preview in Convert and Merge',
-  '화면 이동':'Navigation','변환·편집·병합 화면 전환':'Switch between Convert, Edit, and Merge','파일·실행':'Files and actions','열기, 저장, 인쇄와 작업 실행':'Open, save, print, and run actions','찾기·편집 기록':'Find and edit history','찾기와 실행 취소·다시 실행':'Find, undo, and redo','글자 서식':'Text formatting','선택한 글자의 모양과 링크 변경':'Change selected text formatting and links','미니 프리뷰':'Mini preview','문서 미리보기 표시와 고정':'Preview display and pinning','팝업·미리보기':'Popups and previews','빠른 편집창과 미니 프리뷰 고정':'Pin quick editing and mini previews','빠른 편집창 고정':'Pin quick editor','문법 빠른 편집창을 열린 위치에 고정':'Pin the quick syntax editor in place','변경됨':'Changed','키 조합을 누르세요':'Press a key combination','Ctrl·Alt와 함께 입력':'Use with Ctrl or Alt',
+  '화면 이동':'Navigation','변환·편집·병합 화면 전환':'Switch between Convert, Edit, and Merge','파일·실행':'Files and actions','열기, 저장, 인쇄와 작업 실행':'Open, save, print, and run actions','찾기·편집 기록':'Find and edit history','찾기와 실행 취소·다시 실행':'Find, undo, and redo','글자 서식':'Text formatting','선택한 글자의 모양과 링크 변경':'Change selected text formatting and links','미니 프리뷰':'Mini preview','문서 미리보기 표시와 고정':'Preview display and pinning','팝업·미리보기':'Popups and previews','빠른 편집창과 미니 프리뷰 고정':'Pin quick editing and mini previews','빠른 편집창 고정':'Pin quick editor','문법 빠른 편집창을 열린 위치에 고정':'Pin the quick syntax editor in place','분할 선택 위치 표시':'Show split selection location','반대쪽 편집·보기 영역에서 선택한 내용의 위치 표시':'Show the selected content location in the other Edit or View pane','변경됨':'Changed','키 조합을 누르세요':'Press a key combination','Ctrl·Alt와 함께 입력':'Use with Ctrl or Alt',
   '삽입할 위치를 다시 선택한 뒤 시도해 주세요.':'Select the insertion point again and retry.','먼저 문서를 업로드하거나 만들어 주세요.':'Upload or create a document first.','미니 문서 삽입':'Insert embedded document','빈 줄':'Blank line','시작 지점을 선택하세요':'Select a starting point','자동 기록':'Automatic history','저장된 버전이 없습니다.':'No saved versions.','#ZZ 전용 블록':'#ZZ-specific blocks','MD에는 원문이 보존되지만 전용 카드·시트·미니 문서 모양은 #ZZ와 PDF에서만 표시됩니다.':'The source is preserved in MD, but custom cards, sheets, and embedded-document layouts appear only in #ZZ and PDF.','Obsidian 확장 문법':'Obsidian extended syntax','지원하지 않는 Markdown 앱에서는 일반 인용문이나 원문으로 보일 수 있습니다.':'Unsupported Markdown apps may display a regular quote or the source text.','MD에는 HTML로 저장됩니다. HTML을 제한하는 앱에서는 입력 개체가 숨겨질 수 있습니다.':'Saved as HTML in MD. Apps that restrict HTML may hide form controls.','문자 서식':'Text formatting','색상·배경색·크기는 HTML 허용 여부에 따라 다르게 보입니다.':'Color, background, and size may vary depending on HTML support.',
   '스프레드시트 삽입':'Insert spreadsheet','스프레드시트 모듈을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.':'Could not load spreadsheet support. Check your internet connection.','범위 없음':'No range','범위 오류':'Invalid range','A1:F20처럼 올바른 셀 범위를 입력해 주세요.':'Enter a valid cell range such as A1:F20.','편집할 문서를 먼저 열어 주세요.':'Open a document to edit first.','파일명':'File name','저장할 결과 없음':'No result to save','먼저 파일을 병합해 주세요.':'Merge files first.','MD → PDF는 Ctrl+Enter로 변환한 뒤 인쇄 창에서 PDF로 저장해 주세요.':'For MD → PDF, convert with Ctrl+Enter and save as PDF from the print dialog.','사이드바 펼치기':'Expand sidebar','테마 열기':'Open theme','테마 닫기':'Close theme'
   ,'변경할 단축키를 선택한 뒤 새 키 조합을 누르세요.':'Select a shortcut, then press a new key combination.','기본값':'Default','전체 초기화':'Reset all','브라우저 기본 글꼴이 운영체제 기본값과 다르게 설정되어 있습니다.':'The browser default font differs from the operating system default.'
@@ -16470,7 +16663,7 @@ function showShortcutSettings(){
     const held=[];if(event.ctrlKey||event.metaKey)held.push('Ctrl');if(event.altKey)held.push('Alt');if(event.shiftKey)held.push('Shift');
     const modifierOnly=['Control','Meta','Alt','Shift'].includes(event.key);
     if(modifierOnly){
-      if(recordingId==='previewPin'||recordingId==='quickEditPin'){
+      if(recordingId==='previewPin'||recordingId==='quickEditPin'||recordingId==='splitSelectionLink'){
         const value=shortcutFromEvent(event),conflict=shortcutConflict(recordingId,value);
         if(conflict){recordingButton.textContent=`${conflict.name}와 중복`;recordingButton.classList.add('is-error');return}
         shortcutSettings[recordingId]=value;saveShortcutSettings();stopRecording();paint();return;
@@ -16479,7 +16672,7 @@ function showShortcutSettings(){
     }
     const value=shortcutFromEvent(event);if(!value)return;
     recordingButton.textContent=value.replaceAll('+',' + ');
-    if(!['previewPin','quickEditPin'].includes(recordingId)&&!event.ctrlKey&&!event.metaKey&&!event.altKey){recordingButton.textContent='Ctrl·Alt와 함께 입력';return}
+    if(!['previewPin','quickEditPin','splitSelectionLink'].includes(recordingId)&&!event.ctrlKey&&!event.metaKey&&!event.altKey){recordingButton.textContent='Ctrl·Alt와 함께 입력';return}
     const conflict=shortcutConflict(recordingId,value);
     if(conflict){recordingButton.textContent=`${conflict.name}와 중복`;recordingButton.classList.add('is-error');return}
     shortcutSettings[recordingId]=value;saveShortcutSettings();stopRecording();paint();
