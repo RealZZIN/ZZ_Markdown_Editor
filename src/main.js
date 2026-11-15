@@ -4553,6 +4553,7 @@ function schedulePostRenderEnhancements(text){
     hasMermaid?()=>runMermaid(els.preview):null,
     hasCode?()=>runHighlight(els.preview):null,
     hasTables?()=>{
+      normalizeTableCellInlineBlocks(els.preview);
       const previewTables=els.preview.querySelectorAll('table');
       const previewCells=els.preview.querySelectorAll('th,td').length;
       if(previewTables.length>120||previewCells>2000)installLazyTableResize();
@@ -11648,8 +11649,14 @@ function styleTableTextSelection(styleName,value,selection=tableFormatTextParts(
   syncFromPreview();scheduleFormatScrollRestore(scrollSnapshot);return true;
 }
 function applyPreviewCommand(command,value=null){
-  const tableSelection=tableFormatTextParts();
   const align={justifyLeft:'left',justifyCenter:'center',justifyRight:'right',justifyFull:'justify'}[command];
+  let tableSelection=tableFormatTextParts();
+  if(!tableSelection&&align){
+    const caret=previewRange();
+    const origin=caret&&(caret.startContainer.nodeType===Node.ELEMENT_NODE?caret.startContainer:caret.startContainer.parentElement);
+    const caretCell=caret?.collapsed&&origin?.closest?.('td,th');
+    if(caretCell&&els.preview.contains(caretCell))tableSelection={parts:[],cells:[caretCell]};
+  }
   if(tableSelection&&(align||command==='formatBlock')){
     const cells=tableSelection.cells.length?tableSelection.cells:[...new Set(tableSelection.parts.map(part=>part.node.parentElement.closest('td,th')).filter(Boolean))];
     const scrollSnapshot=captureTableFormatScroll(cells[0]?.closest('table'));
