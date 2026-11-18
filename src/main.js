@@ -1410,7 +1410,11 @@ function fixSpanColors(container){
 function runMermaid(container){
   if(!window.mermaid)return;
   const els2=container.querySelectorAll('.mermaid:not([data-processed])');
-  if(els2.length)mermaid.run({nodes:els2});
+  if(!els2.length)return;
+  try{
+    const task=mermaid.run({nodes:els2});
+    task?.catch?.(error=>console.warn('Mermaid render failed',error));
+  }catch(error){console.warn('Mermaid render failed',error)}
 }
 function runHighlight(container){
   if(!window.hljs)return;
@@ -4767,7 +4771,6 @@ function schedulePostRenderEnhancements(text){
     hasMermaid?()=>runMermaid(els.preview):null,
     hasCode?()=>runHighlight(els.preview):null,
     hasTables?()=>{
-      normalizeTableCellInlineBlocks(els.preview);
       const previewTables=els.preview.querySelectorAll('table');
       const previewCells=els.preview.querySelectorAll('th,td').length;
       if(previewTables.length>120||previewCells>2000)installLazyTableResize();
@@ -4794,7 +4797,9 @@ function schedulePostRenderEnhancements(text){
       },240);
       return;
     }
-    stages[stage++]?.();
+    const currentStage=stage++;
+    try{stages[currentStage]?.()}
+    catch(error){console.error(`Preview enhancement stage ${currentStage+1} failed`,error)}
     if(stage<stages.length)scheduleNext();
     else els.preview.removeAttribute('aria-busy');
   };
@@ -18575,7 +18580,8 @@ $('clear-text-color').onclick=e=>{
   e.preventDefault();e.stopPropagation();
   if(quoteColorTarget?.quote?.isConnected&&$('text-color-panel')?.classList.contains('quote-color-mode')){
     const property=quoteColorProperty(quoteColorTarget.kind,true);
-    pushPreviewFormatHistory();quoteColorTarget.quote.style.removeProperty(property);syncFromPreview();
+    const quote=quoteColorTarget.quote;
+    mutateQuoteDesign(quote,()=>quote.style.removeProperty(property));
   }else applyPickedColor('text',currentThemeTextColor());
   closeAllPanels();
 };
@@ -18998,8 +19004,18 @@ async function insertFilesIntoDocument(fileList){
 $('insert-file-toggle').onclick=()=>$('insert-file-input').click();
 $('insert-file-input').onchange=e=>{insertFilesIntoDocument(e.target.files);e.target.value=''};
 window.addEventListener('pagehide',()=>{
+  flushWorkspaceForLifecycle();
+});
+function flushWorkspaceForLifecycle(){
+  clearTimeout(autosaveTimer);autosaveTimer=0;
+  if(autosaveIdle&&'cancelIdleCallback' in window)cancelIdleCallback(autosaveIdle);
+  autosaveIdle=0;
   if(previewMarkdownTimer||previewSyncTimer||previewSyncIdle)syncFromPreview();
-  captureActiveFileViewState();saveWorkspaceSession();
+  captureActiveFileViewState();
+  return saveWorkspaceSession();
+}
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='hidden')flushWorkspaceForLifecycle();
 });
 syncColorButtons();
 ['fmt-left','fmt-center','fmt-right'].forEach(id=>$(id).onmousedown=e=>e.preventDefault());

@@ -98,6 +98,17 @@ function auditPerformanceGuards(mainSource){
   assert(mainSource.includes("import('./document-export.js')"),'Office exporters must remain lazy-loaded.');
   assert(mainSource.includes('function scheduleEditorVisualScroll()'),'Editor visual scroll work is not frame-coalesced.');
   assert(mainSource.includes('function schedulePreviewVisualScroll()'),'Preview visual scroll work is not frame-coalesced.');
+  const enhancementStart=mainSource.indexOf('function schedulePostRenderEnhancements(');
+  const enhancementEnd=mainSource.indexOf('function assignPreviewHeadingAnchors(',enhancementStart);
+  const enhancement=mainSource.slice(enhancementStart,enhancementEnd);
+  assert(!enhancement.includes('normalizeTableCellInlineBlocks(els.preview)'),'Table cells are normalized twice during a full preview render.');
+}
+
+function auditLifecycleStability(mainSource){
+  assert(mainSource.includes("task?.catch?.(error=>console.warn('Mermaid render failed'"),'Async Mermaid failures are not contained.');
+  assert(mainSource.includes('Preview enhancement stage ${currentStage+1} failed'),'Preview enhancement stages are not isolated.');
+  assert(mainSource.includes("document.visibilityState==='hidden')flushWorkspaceForLifecycle()"),'Hidden tabs do not flush pending workspace recovery data.');
+  assert(mainSource.includes('mutateQuoteDesign(quote,()=>quote.style.removeProperty(property))'),'Resetting quote colors bypasses the scroll-safe mutation path.');
 }
 
 async function packageText(zip,pattern){
@@ -145,5 +156,6 @@ auditSaveMenu(mainSource,indexSource);
 auditFormattingStability(mainSource,indexSource,styleSource);
 auditDomContracts(mainSource,indexSource);
 auditPerformanceGuards(mainSource);
+auditLifecycleStability(mainSource);
 const sizes=await auditOfficeExports();
-console.log(`QA passed · translations/menu/DOM/formatting/performance · DOCX ${sizes.docxBytes.toLocaleString()} bytes · HWPX ${sizes.hwpxBytes.toLocaleString()} bytes`);
+console.log(`QA passed · translations/menu/DOM/formatting/performance/lifecycle · DOCX ${sizes.docxBytes.toLocaleString()} bytes · HWPX ${sizes.hwpxBytes.toLocaleString()} bytes`);
