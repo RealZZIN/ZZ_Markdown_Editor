@@ -1,4 +1,10 @@
-import {prepareDocumentHtml,createDocxBlob,createHwpxBlob} from './document-export.js';
+let documentExportModulePromise=null;
+function loadDocumentExportTools(){
+  return documentExportModulePromise||(documentExportModulePromise=import('./document-export.js').catch(error=>{
+    documentExportModulePromise=null;
+    throw error;
+  }));
+}
 
 const $=id=>document.getElementById(id);
 const state={files:[],images:{},assets:new Map(),active:-1,mode:'convert',theme:localStorage.getItem('md-theme')||'light',lastInput:null,history:[],future:[],restoring:false,editingPreview:false,insertingImage:false,savedSelection:null,lastEditorSelection:{start:0,end:0},lastInsertionSurface:'editor',savedPreviewRange:null,pendingInsertionContext:null,historyTimer:null,dirty:false,savedText:'',collapsedSidebarGroups:{},collapsedMergeGroups:{},stayHomeAfterConvert:false,homeMergeNotice:'',printScale:100,sidebarView:'files'};
@@ -7768,6 +7774,7 @@ async function saveOfficeDocuments(files,format){
       try{
         const preview=await officeExportPreview(file);
         const title=(file?.name||'document').replace(/\.(?:md|markdown)$/i,'');
+        const {prepareDocumentHtml,createDocxBlob,createHwpxBlob}=await loadDocumentExportTools();
         const html=await prepareDocumentHtml(preview,title,{format,fontFamily:officeExportFontName()});
         if(!/<body>[\s\S]*<\/body>/i.test(html))throw new Error('Invalid export document');
         const blob=format==='docx'?await createDocxBlob(html):await createHwpxBlob(html,{title});
@@ -11085,11 +11092,25 @@ function onPreviewScroll(){
   if(!syncScrollEnabled||documentFormatScrollLock||currentEditView()!=='both'||!hasRecentDocumentScrollIntent(els.preview))return;
   scheduleInnerScrollSync(els.preview);
 }
-els.editor.addEventListener('scroll',onEditorScroll,{passive:true});
-els.editor.addEventListener('scroll',()=>renderSourceLineNumberWindow(),{passive:true});
-els.editor.addEventListener('scroll',syncMarkdownHighlightScroll,{passive:true});
+let editorVisualScrollFrame=0,previewVisualScrollFrame=0;
+function scheduleEditorVisualScroll(){
+  if(editorVisualScrollFrame)return;
+  editorVisualScrollFrame=requestAnimationFrame(()=>{
+    editorVisualScrollFrame=0;
+    renderSourceLineNumberWindow();
+    syncMarkdownHighlightScroll();
+  });
+}
+function schedulePreviewVisualScroll(){
+  if(previewVisualScrollFrame||!els.previewLineGutter)return;
+  previewVisualScrollFrame=requestAnimationFrame(()=>{
+    previewVisualScrollFrame=0;
+    els.previewLineGutter.scrollTop=els.preview.scrollTop;
+  });
+}
+els.editor.addEventListener('scroll',event=>{onEditorScroll(event);scheduleEditorVisualScroll()},{passive:true});
 els.preview.addEventListener('scroll',onPreviewScroll,{passive:true});
-els.preview.addEventListener('scroll',()=>{if(els.previewLineGutter)els.previewLineGutter.scrollTop=els.preview.scrollTop},{passive:true});
+els.preview.addEventListener('scroll',schedulePreviewVisualScroll,{passive:true});
 let secondaryInnerScrollLock=false,secondaryExpectedEditorScroll=null,secondaryExpectedPreviewScroll=null;
 function syncSecondaryInnerScroll(source,target,sourceIsEditor){
   const expected=sourceIsEditor?secondaryExpectedEditorScroll:secondaryExpectedPreviewScroll;

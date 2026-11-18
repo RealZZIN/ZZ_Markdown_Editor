@@ -117,11 +117,11 @@ Open the local address shown in the terminal.
 ### Production build
 
 ```bash
-npm run build
+npm run qa
 npm run preview
 ```
 
-The production files are generated in `dist/`.
+`npm run qa` validates translations, menus, DOM contracts, formatting and performance guards, Office exports, and the production build. Use `npm run check` to include a production dependency security audit. Production files are generated in `dist/`.
 
 ## Technology
 

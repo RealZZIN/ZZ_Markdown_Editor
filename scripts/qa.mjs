@@ -80,6 +80,26 @@ function auditFormattingStability(mainSource,indexSource,styleSource){
   assert(mainSource.includes("root.addEventListener('contextmenu',event=>"),'Preview background context-menu suppression is missing.');
 }
 
+function auditDomContracts(mainSource,indexSource){
+  const staticIds=[...indexSource.matchAll(/\bid=["']([^"']+)["']/g)].map(match=>match[1]);
+  const duplicates=[...new Set(staticIds.filter((id,index)=>staticIds.indexOf(id)!==index))];
+  assert(!duplicates.length,`Duplicate static DOM ids: ${duplicates.join(', ')}`);
+
+  const declared=new Set([
+    ...staticIds,
+    ...[...mainSource.matchAll(/\bid=["']([^"']+)["']/g)].map(match=>match[1])
+  ]);
+  const referenced=[...new Set([...mainSource.matchAll(/\$\(\s*["']([^"']+)["']\s*\)/g)].map(match=>match[1]))];
+  const missing=referenced.filter(id=>!declared.has(id));
+  assert(!missing.length,`DOM ids referenced by $() but never declared: ${missing.join(', ')}`);
+}
+
+function auditPerformanceGuards(mainSource){
+  assert(mainSource.includes("import('./document-export.js')"),'Office exporters must remain lazy-loaded.');
+  assert(mainSource.includes('function scheduleEditorVisualScroll()'),'Editor visual scroll work is not frame-coalesced.');
+  assert(mainSource.includes('function schedulePreviewVisualScroll()'),'Preview visual scroll work is not frame-coalesced.');
+}
+
 async function packageText(zip,pattern){
   const entries=Object.keys(zip.files).filter(name=>pattern.test(name));
   const contents=await Promise.all(entries.map(name=>zip.file(name).async('string')));
@@ -123,5 +143,7 @@ const [mainSource,indexSource,styleSource]=await Promise.all([
 await auditTranslations(mainSource,indexSource);
 auditSaveMenu(mainSource,indexSource);
 auditFormattingStability(mainSource,indexSource,styleSource);
+auditDomContracts(mainSource,indexSource);
+auditPerformanceGuards(mainSource);
 const sizes=await auditOfficeExports();
-console.log(`QA passed · translations/menu/formatting · DOCX ${sizes.docxBytes.toLocaleString()} bytes · HWPX ${sizes.hwpxBytes.toLocaleString()} bytes`);
+console.log(`QA passed · translations/menu/DOM/formatting/performance · DOCX ${sizes.docxBytes.toLocaleString()} bytes · HWPX ${sizes.hwpxBytes.toLocaleString()} bytes`);
