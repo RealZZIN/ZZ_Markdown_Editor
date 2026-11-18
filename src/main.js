@@ -747,7 +747,11 @@ function renderMathHtml(latex,displayMode=false){
   }catch{
     rendered=`<code class="zz-math-fallback">${htmlEsc(clean)}</code>`;
   }
-  return `<span class="zz-math${displayMode?' zz-math-block':''}" data-latex="${htmlEsc(clean)}" data-display="${displayMode?'block':'inline'}">${rendered}</span>`;
+  // KaTeX renders many nested text nodes.  Leaving those nodes editable lets
+  // the browser place the caret inside the rendered formula when the user
+  // clicks the ordinary text immediately after it.  Math is edited through
+  // the math dialog, so expose the rendered formula as one atomic object.
+  return `<span class="zz-math${displayMode?' zz-math-block':''}" data-latex="${htmlEsc(clean)}" data-display="${displayMode?'block':'inline'}" contenteditable="false">${rendered}</span>`;
 }
 function zzLensSummary(content){
   return String(content||'').split(/\r?\n/)
@@ -2832,9 +2836,11 @@ function deleteSelectedPreviewElement(){
   if(!clickMoveElement||!els.preview.contains(clickMoveElement)||clickMoveElement.matches('table,img'))return false;
   pushHistory(true);
   const target=clickMoveElement;
-  clickMoveElement=null;
+  // Clear both the selected outline and any insertion guide before detaching
+  // the object.  Clearing only the reference leaves a move marker behind when
+  // a selected formula is removed with Backspace/Delete.
+  clearClickMove();
   target.remove();
-  clearMoveMarker();
   syncFromPreview();
   pushHistory(true);
   return true;
@@ -3001,15 +3007,42 @@ els.preview.addEventListener('change',e=>{
   scheduleSyncFromPreview();
 });
 let pressedFormRadio=null;
+function previewRangeOutsideMath(range,clientX){
+  if(!range)return null;
+  const node=range.startContainer;
+  const element=node?.nodeType===Node.ELEMENT_NODE?node:node?.parentElement;
+  const math=element?.closest?.('.zz-math');
+  if(!math||!els.preview.contains(math))return range;
+  const rect=math.getBoundingClientRect();
+  const normalized=document.createRange();
+  if(clientX>=rect.left+rect.width/2)normalized.setStartAfter(math);
+  else normalized.setStartBefore(math);
+  normalized.collapse(true);
+  return normalized;
+}
+function normalizeClickedPreviewCaret(event){
+  if(event.button!==0||event.target.closest?.('.zz-math'))return;
+  const selection=window.getSelection();
+  const range=selection?.rangeCount?selection.getRangeAt(0):null;
+  if(!range||!els.preview.contains(range.commonAncestorContainer))return;
+  const normalized=previewRangeOutsideMath(range,event.clientX);
+  if(normalized===range)return;
+  selection.removeAllRanges();
+  selection.addRange(normalized);
+  state.lastInsertionSurface='preview';
+  state.savedPreviewRange=normalized.cloneRange();
+  state.savedSelection=null;
+}
 els.preview.addEventListener('pointerdown',e=>{
   if(e.button!==0||e.target.closest('.block-move-handle,.form-move-handle,.zz-form-control input,.zz-form-control select,.zz-form-control button'))return;
-  const range=document.caretRangeFromPoint?.(e.clientX,e.clientY);
+  const range=previewRangeOutsideMath(document.caretRangeFromPoint?.(e.clientX,e.clientY),e.clientX);
   if(range&&els.preview.contains(range.commonAncestorContainer)){
     state.lastInsertionSurface='preview';
     state.savedPreviewRange=range.cloneRange();
     state.savedSelection=null;
   }
 },true);
+els.preview.addEventListener('mouseup',normalizeClickedPreviewCaret,true);
 els.preview.addEventListener('pointerdown',e=>{
   const radio=e.target.closest?.('.zz-form-control input[type="radio"]');
   pressedFormRadio=radio?{radio,wasChecked:radio.checked}:null;
@@ -3143,6 +3176,15 @@ document.addEventListener('mousedown',e=>{
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){clearClickMove();selectPreviewImage(null);return}
   if((e.key==='Delete'||e.key==='Backspace')&&clickMoveElement&&els.preview.contains(clickMoveElement)&&!clickMoveElement.matches('table,img')){
+    if(clickMoveElement.matches('.zz-math')){
+      // A rendered formula is contenteditable=false. Native deletion may
+      // remove only its KaTeX children and leave the selected empty wrapper
+      // (and its blue move guide) on screen, so always delete it atomically.
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      deleteSelectedPreviewElement();
+      return;
+    }
     const selection=window.getSelection();
     const range=selection?.rangeCount?selection.getRangeAt(0):null;
     const selectedObject=clickMoveElement.matches('.zz-doc-embed[data-embed-source]');
@@ -3159,6 +3201,12 @@ document.addEventListener('keydown',e=>{
     deleteSelectedPreviewImage();
   }
 });
+els.preview.addEventListener('beforeinput',e=>{
+  if(!/^delete/i.test(e.inputType||'')||!clickMoveElement?.matches?.('.zz-math')||!els.preview.contains(clickMoveElement))return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  deleteSelectedPreviewElement();
+},true);
 document.addEventListener('copy',e=>{
   if(!clickMoveElement||!els.preview.contains(clickMoveElement)||clickMoveElement.matches('table,img'))return;
   const copied=selectedPreviewElementHtml(clickMoveElement);
@@ -3464,7 +3512,14 @@ function addTableResize(container){
       return{heights,minHeights,tableHeight};
     }
     const cells=Array.from(table.querySelectorAll('th,td'));
-    cells.forEach(cell=>{ if(cell.style.width&&parseFloat(cell.style.width)<80)cell.style.width=''; });
+    // Percentage widths are the persisted representation used by "equal
+    // width".  Treating 33.3333% as the number 33 and clearing it on every
+    // re-render/undo destroyed the equalized layout. Only reject tiny legacy
+    // pixel widths here.
+    cells.forEach(cell=>{
+      const width=cell.style.width.trim();
+      if(width.endsWith('px')&&parseFloat(width)<80)cell.style.width='';
+    });
     const firstRowCells=Array.from(table.querySelector('tr')?.children||[]).filter(cell=>cell.matches&&cell.matches('th,td'));
     const columnCount=firstRowCells.reduce((count,cell)=>count+Math.max(1,cell.colSpan||1),0);
     const cellColumnIndexes=new Map();
@@ -3529,8 +3584,41 @@ function addTableResize(container){
     const cornerHost=lastCells[lastCells.length-1];
     if(cornerHost)cornerHost.appendChild(corner);
     updateOuterHandles();
-    requestAnimationFrame(()=>updateTableCellOverflow(table));
+    requestAnimationFrame(()=>{maintainEqualTableRows(table);updateTableCellOverflow(table)});
   });
+}
+function tableEqualRowIndexes(table){
+  const count=table?.rows?.length||0;
+  return String(table?.dataset?.equalRows||'').split(',')
+    .map(value=>Number(value)).filter(index=>Number.isInteger(index)&&index>=0&&index<count);
+}
+function clearTableEqualization(table,axis='both'){
+  if(!table)return;
+  if(axis==='both'||axis==='width')delete table.dataset.equalColumns;
+  if(axis==='both'||axis==='height'){
+    delete table.dataset.equalRows;
+    delete table.dataset.equalRowHeight;
+  }
+}
+function maintainEqualTableRows(table){
+  const indexes=tableEqualRowIndexes(table);
+  if(indexes.length<2)return false;
+  const rows=indexes.map(index=>table.rows[index]).filter(Boolean);
+  if(rows.length<2)return false;
+  const savedTableHeight=table.style.height;
+  const savedHeights=rows.map(row=>row.style.height);
+  table.style.height='auto';
+  rows.forEach(row=>{row.style.height='auto'});
+  const natural=Math.max(...rows.map(row=>Math.ceil(row.getBoundingClientRect().height||28)),28);
+  const stored=Math.max(0,Number(table.dataset.equalRowHeight)||0);
+  const equal=Math.max(stored,natural);
+  rows.forEach(row=>{row.style.height=`${equal}px`});
+  table.dataset.equalRowHeight=String(equal);
+  table.style.height=savedTableHeight;
+  // Avoid retaining an empty style attribute when the table never had a
+  // manually fixed outer height.
+  if(!table.getAttribute('style'))table.removeAttribute('style');
+  return savedHeights.some(height=>height!==`${equal}px`);
 }
 function preserveTableGeometry(table){
   if(!table||!els.preview.contains(table)||table.style.tableLayout==='fixed')return false;
@@ -3571,6 +3659,7 @@ document.addEventListener('pointermove',e=>{
     if(!tblResizeDrag.started){
       if(Math.abs(dx)<3)return;
       pushHistory(true);
+      clearTableEqualization(tblResizeDrag.table,'width');
       const widths=tblResizeDrag.lockTableColumns();
       tblResizeDrag.startW=widths[tblResizeDrag.colIdx]||tblResizeDrag.startW;
       tblResizeDrag.startNextW=widths[tblResizeDrag.colIdx+1]||0;
@@ -3596,6 +3685,7 @@ document.addEventListener('pointermove',e=>{
     if(!tblResizeDrag.started){
       if(Math.abs(dy)<3)return;
       pushHistory(true);
+      clearTableEqualization(tblResizeDrag.table,'height');
       const{heights,minHeights,tableHeight}=tblResizeDrag.lockTableRows();
       tblResizeDrag.startH=heights[tblResizeDrag.rowIdx]||tblResizeDrag.startH;
       tblResizeDrag.minH=minHeights[tblResizeDrag.rowIdx]||28;
@@ -3612,6 +3702,7 @@ document.addEventListener('pointermove',e=>{
     if(!tblResizeDrag.started){
       if(Math.max(Math.abs(dx),Math.abs(dy))<3)return;
       pushHistory(true);
+      clearTableEqualization(tblResizeDrag.table);
       tblResizeDrag.table.style.width=tblResizeDrag.startW+'px';
       tblResizeDrag.table.style.tableLayout='fixed';
       tblResizeDrag.started=true;
@@ -3899,7 +3990,11 @@ let resetTableInteractionState=()=>{};
       const heights=Array.from({length:layout.rowCount},(_,row)=>table.rows[row]?.getBoundingClientRect().height||28);
       const equal=[...indexes].reduce((sum,index)=>sum+heights[index],0)/indexes.size;
       pushHistory(true);
-      indexes.forEach(index=>{const row=table.rows[index];if(row)row.style.height=`${equal}px`});
+      const ordered=[...indexes].sort((a,b)=>a-b);
+      table.dataset.equalRows=ordered.join(',');
+      table.dataset.equalRowHeight=String(equal);
+      ordered.forEach(index=>{const row=table.rows[index];if(row)row.style.height=`${equal}px`});
+      maintainEqualTableRows(table);
     }else{
       let indexes=new Set();
       scope.forEach(cell=>{const item=layout.placements.get(cell);if(item)for(let c=item.c;c<item.c+item.colSpan;c++)indexes.add(c)});
@@ -3915,6 +4010,7 @@ let resetTableInteractionState=()=>{};
       indexes.forEach(index=>{columnWidths[index]=equal});
       const total=columnWidths.reduce((sum,width)=>sum+width,0)||1;
       pushHistory(true);
+      table.dataset.equalColumns=[...indexes].sort((a,b)=>a-b).join(',');
       preserveTableGeometry(table);table.style.tableLayout='fixed';
       layout.placements.forEach((item,cell)=>{
         const width=columnWidths.slice(item.c,item.c+item.colSpan).reduce((sum,value)=>sum+value,0);
@@ -4118,6 +4214,7 @@ let resetTableInteractionState=()=>{};
     }
     if(op==='reset-shape'){
       pushHistory(true);
+      clearTableEqualization(table);
       // Restore the same baseline used when a table first enters Preview.
       // Clearing only cell sizes leaves the bottom-right whole-table resize
       // width/height behind (or falls back to content width), so reset both
@@ -10419,7 +10516,9 @@ els.preview.addEventListener('input',e=>{
   trackPreviewEnterSplitInput();
   const liveSelection=window.getSelection(),liveRange=liveSelection?.rangeCount?liveSelection.getRangeAt(0):null;
   const liveOrigin=liveRange&&(liveRange.startContainer.nodeType===Node.ELEMENT_NODE?liveRange.startContainer:liveRange.startContainer.parentElement);
-  normalizeLiveTableCellFlow(liveOrigin?.closest?.('td,th'));
+  const liveCell=liveOrigin?.closest?.('td,th');
+  normalizeLiveTableCellFlow(liveCell);
+  if(liveCell)maintainEqualTableRows(liveCell.closest('table'));
   const uniqueTitle=e.target.closest?.('[data-unique-title]');
   if(uniqueTitle){
     rememberPreviewRange();
@@ -11625,13 +11724,26 @@ function tableFormatTextParts(rangeOverride=null,cellsOverride=null){
   }
   return {parts,cells};
 }
+function clearReadableColorState(root){
+  if(!root)return;
+  const clear=element=>{
+    if(element?.nodeType!==Node.ELEMENT_NODE)return;
+    element.removeAttribute('data-readable-color');
+    element.style?.removeProperty('--readable-color');
+    if(!element.getAttribute?.('style'))element.removeAttribute?.('style');
+  };
+  clear(root);
+  root.querySelectorAll?.('[data-readable-color],[style*="--readable-color"]').forEach(clear);
+}
 function removeInlineStyleProperty(element,styleName){
   element.style.removeProperty(styleName);
+  if(styleName==='color')clearReadableColorState(element);
   if(styleName==='background-color')element.style.removeProperty('background');
   if(!element.getAttribute('style'))element.removeAttribute('style');
 }
 function removeNestedInlineStyle(root,styleName){
   root.querySelectorAll?.('[style]').forEach(node=>removeInlineStyleProperty(node,styleName));
+  if(styleName==='color')clearReadableColorState(root);
   if(styleName==='color')root.querySelectorAll?.('font[color]').forEach(font=>{font.removeAttribute('color');if(!font.attributes.length)font.replaceWith(...font.childNodes)});
   if(styleName==='background-color')root.querySelectorAll?.('mark').forEach(mark=>mark.replaceWith(...mark.childNodes));
   return root;
@@ -11651,6 +11763,7 @@ function defaultPreviewStyleValue(node,styleName){
   return'inherit';
 }
 function applyStyleToWholeCell(cell,styleName,value){
+  if(styleName==='color')clearReadableColorState(cell);
   cell.style.setProperty(styleName,value);
   cell.querySelectorAll('[style]').forEach(node=>removeInlineStyleProperty(node,styleName));
   if(styleName==='color')cell.querySelectorAll('font[color]').forEach(font=>{font.removeAttribute('color');if(!font.attributes.length)font.replaceWith(...font.childNodes)});
@@ -11666,7 +11779,15 @@ function wrapTextPartStyle(part,styleName,value){
   if(!part?.node?.isConnected||part.end<=part.start)return null;
   const range=document.createRange();range.setStart(part.node,part.start);range.setEnd(part.node,part.end);
   const span=document.createElement('span');span.style.setProperty(styleName,value);
-  span.appendChild(range.extractContents());range.insertNode(span);return span;
+  span.appendChild(range.extractContents());range.insertNode(span);
+  if(styleName==='color'){
+    clearReadableColorState(span);
+    for(let ancestor=span.parentElement;ancestor&&ancestor!==els.preview;ancestor=ancestor.parentElement){
+      if(ancestor.hasAttribute('data-readable-color')||ancestor.style.getPropertyValue('--readable-color'))clearReadableColorState(ancestor);
+      if(ancestor.matches('td,th'))break;
+    }
+  }
+  return span;
 }
 function previewRangeTextParts(range){
   if(!range||range.collapsed||!els.preview.contains(range.commonAncestorContainer))return[];
@@ -14082,15 +14203,28 @@ function exitEmptyPreviewListItem(item){
   pushHistory(true);
   return true;
 }
+function firstVisiblePreviewTextNode(root){
+  if(!root)return null;
+  const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(node){
+    if(node.parentElement?.closest('.block-move-handle,.form-move-handle,.code-head,.zz-math,[contenteditable="false"]'))return NodeFilter.FILTER_REJECT;
+    return node.data.replace(/[\u200b\u00a0]/g,'').trim()?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;
+  }});
+  return walker.nextNode();
+}
 function preserveListExitTextStyle(source,target){
   if(!source||!target)return;
-  const computed=getComputedStyle(source);
+  const textNode=firstVisiblePreviewTextNode(source);
+  const textComputed=textNode?getComputedStyle(textNode.parentElement):null;
+  const blockComputed=getComputedStyle(source);
   [
     'font-size','font-family','font-weight','font-style','line-height',
     'letter-spacing','word-spacing','text-decoration','text-transform','color',
     'text-align','background-color'
   ].forEach(property=>{
-    const value=computed.getPropertyValue(property);
+    // Text formatting can live on the list, the item, or an inline child.
+    // Snapshot the value that was actually painted, not just the <li> value.
+    const value=(property==='text-align'||property==='background-color'
+      ?blockComputed:textComputed||blockComputed).getPropertyValue(property);
     if(value)target.style.setProperty(property,value);
   });
 }
@@ -14098,8 +14232,11 @@ function exitPopulatedPreviewListItem(item){
   const list=item?.parentElement;
   if(!list?.matches?.('ul,ol')||previewListItemIsEmpty(item))return false;
   pushHistory(true);
-  if(list.parentElement!==els.preview){
-    const parentItem=list.parentElement?.closest?.('li');
+  const parentItem=list.parentElement?.closest?.('li');
+  // A list may be inside an alignment/font wrapper while still being a
+  // top-level list. Only a list nested under another <li> should be outdented;
+  // wrappers must use the normal list-to-paragraph path below.
+  if(parentItem){
     const parentList=parentItem?.parentElement;
     if(!parentItem||!parentList?.matches?.('ul,ol'))return false;
     item.remove();
