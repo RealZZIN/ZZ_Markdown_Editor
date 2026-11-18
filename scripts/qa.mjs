@@ -71,6 +71,15 @@ function auditSaveMenu(mainSource,indexSource){
   assert(!/jszip[^\n]+(?:cdnjs|cdn\.jsdelivr)/i.test(indexSource),'A blocking JSZip CDN script is still present.');
 }
 
+function auditFormattingStability(mainSource,indexSource,styleSource){
+  assert(indexSource.includes('id="fmt-bg-opacity"'),'Background opacity control is missing.');
+  assert(styleSource.includes('.font-bg-opacity'),'Background opacity control styles are missing.');
+  assert(mainSource.includes('function refreshColorTargetSnapshot()'),'Color target refresh guard is missing.');
+  assert(mainSource.includes('function mutateQuoteDesign('),'Quote formatting scroll guard is missing.');
+  assert(mainSource.includes("type==='bg'&&pickedValue?quoteColorWithOpacity"),'Background opacity is not applied to picked colors.');
+  assert(mainSource.includes("root.addEventListener('contextmenu',event=>"),'Preview background context-menu suppression is missing.');
+}
+
 async function packageText(zip,pattern){
   const entries=Object.keys(zip.files).filter(name=>pattern.test(name));
   const contents=await Promise.all(entries.map(name=>zip.file(name).async('string')));
@@ -105,12 +114,14 @@ async function auditOfficeExports(){
   return {docxBytes:docx.size,hwpxBytes:hwpx.size};
 }
 
-const [mainSource,indexSource]=await Promise.all([
+const [mainSource,indexSource,styleSource]=await Promise.all([
   fs.readFile(new URL('../src/main.js',import.meta.url),'utf8'),
-  fs.readFile(new URL('../index.html',import.meta.url),'utf8')
+  fs.readFile(new URL('../index.html',import.meta.url),'utf8'),
+  fs.readFile(new URL('../src/styles/app.css',import.meta.url),'utf8')
 ]);
 
 await auditTranslations(mainSource,indexSource);
 auditSaveMenu(mainSource,indexSource);
+auditFormattingStability(mainSource,indexSource,styleSource);
 const sizes=await auditOfficeExports();
-console.log(`QA passed · translations/menu · DOCX ${sizes.docxBytes.toLocaleString()} bytes · HWPX ${sizes.hwpxBytes.toLocaleString()} bytes`);
+console.log(`QA passed · translations/menu/formatting · DOCX ${sizes.docxBytes.toLocaleString()} bytes · HWPX ${sizes.hwpxBytes.toLocaleString()} bytes`);

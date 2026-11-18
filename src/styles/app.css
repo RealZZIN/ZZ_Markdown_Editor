@@ -4336,6 +4336,9 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
 .quote-color-mode .quote-color-opacity { display:grid!important; }
 .quote-color-opacity input { width:100%;margin:0!important;accent-color:var(--accent); }
 .quote-color-opacity output { color:var(--t1);font-variant-numeric:tabular-nums;text-align:right; }
+.font-bg-opacity { display:grid;grid-template-columns:auto minmax(0,1fr) 42px;align-items:center;gap:8px;margin:0 12px 10px;padding:8px 9px;border:1px solid var(--b1);border-radius:var(--r3);background:var(--s1);color:var(--t2);font-size:12px;cursor:default; }
+.font-bg-opacity input { width:100%;margin:0;accent-color:var(--accent); }
+.font-bg-opacity output { color:var(--t1);font-variant-numeric:tabular-nums;text-align:right; }
 .custom-theme-head { justify-content:flex-start; }
 .cp-picker-top > .cp-current,
 .custom-theme-head > .cp-current { margin-left:auto; }

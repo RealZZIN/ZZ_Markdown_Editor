@@ -11639,7 +11639,22 @@ function previewRange(){
   return next&&els.preview.contains(next.commonAncestorContainer)?next.cloneRange():null;
 }
 function selectedPreviewMath(){
-  return clickMoveElement?.matches?.('.zz-math')&&els.preview.contains(clickMoveElement)?clickMoveElement:null;
+  if(clickMoveElement?.matches?.('.zz-math')&&els.preview.contains(clickMoveElement))return clickMoveElement;
+  const range=previewRange();
+  if(!range||range.collapsed||!els.preview.contains(range.commonAncestorContainer))return null;
+  if(range.startContainer===range.endContainer&&range.startContainer.nodeType===Node.ELEMENT_NODE&&range.endOffset===range.startOffset+1){
+    const selected=range.startContainer.childNodes[range.startOffset];
+    const exact=selected?.matches?.('.zz-math')?selected:selected?.querySelector?.('.zz-math');
+    if(exact&&els.preview.contains(exact))return exact;
+  }
+  const selectedText=range.toString().replace(/\s+/g,' ').trim();
+  return [...els.preview.querySelectorAll('.zz-math')].find(math=>{
+    try{
+      if(!range.intersectsNode(math))return false;
+      const mathText=(math.textContent||'').replace(/\s+/g,' ').trim();
+      return !selectedText||selectedText===mathText;
+    }catch{return false}
+  })||null;
 }
 function mathFormatRoot(math){
   let root=math;
@@ -12123,6 +12138,25 @@ function clearPreviewInlineStyle(range,styleName){
   const host=inlineStyleHost(range.startContainer,styleName,boundary);
   if(host&&host.contains(range.endContainer)){
     pushPreviewFormatHistory();
+    const meaningful=value=>String(value||'').replace(/[\u200b\u00a0\s]/g,'');
+    // Selecting visible text commonly excludes the styled wrapper's leading
+    // and trailing spaces. Treat that as a whole-wrapper clear so one click on
+    // "Default" cannot leave colored bars on both sides of the text.
+    if(meaningful(range.toString())===meaningful(host.textContent)){
+      const fallback=closestPreviewBlock(host)||els.preview;
+      const children=[...host.childNodes],first=children[0],last=children.at(-1);
+      removeInlineStyleProperty(host,styleName);
+      if(styleName==='color'&&host.matches?.('font[color]'))host.removeAttribute('color');
+      const cleared=host.getAttribute('style')||host.attributes.length?host:null;
+      if(!host.attributes.length)host.replaceWith(...children);
+      const target=cleared?.isConnected?cleared:fallback;
+      const next=document.createRange();
+      if(cleared?.isConnected)next.selectNodeContents(cleared);
+      else if(first?.isConnected&&last?.isConnected){next.setStartBefore(first);next.setEndAfter(last)}
+      else next.selectNodeContents(target);
+      const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);
+      state.savedPreviewRange=next.cloneRange();syncFromPreview();return true;
+    }
     const cleared=splitInlineStyleHost(host,range.startContainer,range.startOffset,range.endContainer,range.endOffset,styleName);
     if(!cleared)return false;
     const next=document.createRange();next.selectNodeContents(cleared);
@@ -15740,11 +15774,19 @@ function quoteColorWithOpacity(value,opacity){
   const alpha=Math.max(0,Math.min(100,Number(opacity)||0))/100;
   return alpha>=.999?value:`rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${Number(alpha.toFixed(2))})`;
 }
+function mutateQuoteDesign(quote,mutation,push=true){
+  if(!quote?.isConnected)return false;
+  const scrollSnapshot=captureFormatScrollSnapshot();
+  if(push)pushPreviewFormatHistory();
+  mutation();
+  syncFromPreview();
+  scheduleFormatScrollRestore(scrollSnapshot);
+  return true;
+}
 function applyQuoteColorValue(value,opacity,push=true){
   if(!quoteColorTarget?.quote?.isConnected)return;
-  if(push)pushPreviewFormatHistory();
-  quoteColorTarget.quote.style[quoteColorProperty(quoteColorTarget.kind)]=quoteColorWithOpacity(value,opacity);
-  syncFromPreview();
+  const {quote,kind}=quoteColorTarget;
+  mutateQuoteDesign(quote,()=>{quote.style[quoteColorProperty(kind)]=quoteColorWithOpacity(value,opacity)},push);
 }
 function setQuoteColorKind(kind){
   if(!quoteColorTarget?.quote?.isConnected)return;
@@ -15829,14 +15871,19 @@ function showQuoteColorContextMenu(event){
   copy.textContent=label('인용문 디자인 복사');paste.textContent=label('인용문 디자인 붙여넣기');paste.disabled=!quoteDesignClipboard;
   unify.textContent=label(kind==='border'?'모든 인용선에 이 색상 적용':'모든 인용문 배경에 이 색상 적용');reset.textContent=label('기본 색상으로 되돌리기');
   copy.onclick=()=>{const style=getComputedStyle(quote);quoteDesignClipboard={borderLeftColor:style.borderLeftColor,backgroundColor:style.backgroundColor};menu.remove()};
-  paste.onclick=()=>{if(!quoteDesignClipboard)return;pushPreviewFormatHistory();quote.style.borderLeftColor=quoteDesignClipboard.borderLeftColor;quote.style.backgroundColor=quoteDesignClipboard.backgroundColor;syncFromPreview();menu.remove()};
-  unify.onclick=()=>{pushPreviewFormatHistory();const property=quoteColorProperty(kind),value=getComputedStyle(quote)[property];root.querySelectorAll('blockquote').forEach(item=>item.style[property]=value);syncFromPreview();menu.remove()};
-  reset.onclick=()=>{pushPreviewFormatHistory();quote.style.removeProperty(quoteColorProperty(kind,true));syncFromPreview();menu.remove()};
+  paste.onclick=()=>{if(!quoteDesignClipboard)return;mutateQuoteDesign(quote,()=>{quote.style.borderLeftColor=quoteDesignClipboard.borderLeftColor;quote.style.backgroundColor=quoteDesignClipboard.backgroundColor});menu.remove()};
+  unify.onclick=()=>{const property=quoteColorProperty(kind),value=getComputedStyle(quote)[property];mutateQuoteDesign(quote,()=>root.querySelectorAll('blockquote').forEach(item=>item.style[property]=value));menu.remove()};
+  reset.onclick=()=>{mutateQuoteDesign(quote,()=>quote.style.removeProperty(quoteColorProperty(kind,true)));menu.remove()};
   menu.append(copy,paste,separator,unify,reset);document.body.appendChild(menu);menu.style.left=Math.min(event.clientX,innerWidth-menu.offsetWidth-8)+'px';menu.style.top=Math.min(event.clientY,innerHeight-menu.offsetHeight-8)+'px';
   setTimeout(()=>document.addEventListener('pointerdown',event=>{if(!menu.contains(event.target))menu.remove()},{once:true}),0);
 }
 els.preview.addEventListener('contextmenu',showQuoteColorContextMenu,true);
 els.secondaryPreview.addEventListener('contextmenu',showQuoteColorContextMenu,true);
+// Preview owns its context menu. Suppress the browser menu even when the
+// pointer is over otherwise-empty preview background.
+for(const root of [els.preview,els.secondaryPreview])root.addEventListener('contextmenu',event=>{
+  if(root.contains(event.target))event.preventDefault();
+},true);
 $('text-color-toggle').onclick=e=>{
   e.stopPropagation();
   const open=!$('text-color-panel').classList.contains('hidden');
@@ -18072,6 +18119,14 @@ function restoreColorPreviewRange(){
   state.savedPreviewRange=range.cloneRange();
   const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range.cloneRange());
 }
+function refreshColorTargetSnapshot(){
+  const range=state.savedPreviewRange;
+  if(range&&!range.collapsed&&els.preview.contains(range.commonAncestorContainer)){
+    colorTargetSnapshot={cells:[],range:range.cloneRange(),editorSelection:null,surface:'preview'};
+    return;
+  }
+  if(colorTargetSnapshot?.cells?.length)colorTargetSnapshot.cells=colorTargetSnapshot.cells.filter(cell=>cell?.isConnected);
+}
 function revealAppliedColor(){
   window.getSelection()?.removeAllRanges();
 }
@@ -18137,16 +18192,17 @@ function finalizeColor(type,value){
   return true;
 }
 function applyPickedColor(type,value){
-  value=normalizeColorValue(value);
-  if(!value&&value!=='')return;
+  const pickedValue=normalizeColorValue(value);
+  if(!pickedValue&&pickedValue!=='')return;
+  value=type==='bg'&&pickedValue?quoteColorWithOpacity(pickedValue,Number($('fmt-bg-opacity')?.value??100)):pickedValue;
   if(colorDragState?.preview){clearPreviewColorLive(true);colorDragState=null}
   const prop=type==='text'?'color':'background-color';
-  if(value)setHexInputValue(type==='text'?$('fmt-color'):$('fmt-bg'),value);
+  if(pickedValue)setHexInputValue(type==='text'?$('fmt-color'):$('fmt-bg'),pickedValue);
   syncColorButtons();
   if(type==='text'&&quoteColorTarget?.quote?.isConnected&&$('text-color-panel')?.classList.contains('quote-color-mode')){
     const opacity=Number($('text-color-panel').querySelector('[data-quote-opacity]')?.value??100);
     applyQuoteColorValue(value||'',opacity);
-    if(value)trackColor(type,value);
+    if(pickedValue)trackColor(type,pickedValue);
     return;
   }
   // A selected equation is an explicit formatting target. Handle it before
@@ -18154,14 +18210,15 @@ function applyPickedColor(type,value){
   const math=selectedPreviewMath();
   if(math){
     styleSelectedMath(math,prop,value);
-    if(value)trackColor(type,value);
+    refreshColorTargetSnapshot();
+    if(pickedValue)trackColor(type,pickedValue);
     return;
   }
   const snapTable=snapshotTableSelection();
-  if(snapTable&&styleTableTextSelection(prop,value,snapTable)){revealAppliedColor();if(value)trackColor(type,value);return}
+  if(snapTable&&styleTableTextSelection(prop,value,snapTable)){refreshColorTargetSnapshot();revealAppliedColor();if(pickedValue)trackColor(type,pickedValue);return}
   // Prefer a live table selection whenever it still exists. A snapshot from a
   // previous toolbar interaction must not redirect the command to old text.
-  if(styleTableTextSelection(prop,value)){revealAppliedColor();if(value)trackColor(type,value);return}
+  if(styleTableTextSelection(prop,value)){refreshColorTargetSnapshot();revealAppliedColor();if(pickedValue)trackColor(type,pickedValue);return}
   const liveSelection=window.getSelection();
   if(liveSelection?.rangeCount){
     const liveRange=liveSelection.getRangeAt(0);
@@ -18169,29 +18226,29 @@ function applyPickedColor(type,value){
       state.lastInsertionSurface='preview';
       state.savedPreviewRange=liveRange.cloneRange();
       const applied=stylePreviewSelection(prop,value);
-      if(applied)revealAppliedColor();
-      if(applied&&value)trackColor(type,value);
+      if(applied){refreshColorTargetSnapshot();revealAppliedColor()}
+      if(applied&&pickedValue)trackColor(type,pickedValue);
       if(applied)return;
     }
   }
-  if(finalizeColor(type,value)){if(value)trackColor(type,value);return}
+  if(finalizeColor(type,value)){if(pickedValue)trackColor(type,pickedValue);return}
   if(colorTargetSnapshot?.surface==='preview')restoreColorPreviewRange();
   if(colorTargetSnapshot?.surface==='preview'||state.lastInsertionSurface==='preview'){
     const applied=stylePreviewSelection(prop,value);
-    if(applied)revealAppliedColor();
-    if(applied&&value)trackColor(type,value);
+    if(applied){refreshColorTargetSnapshot();revealAppliedColor()}
+    if(applied&&pickedValue)trackColor(type,pickedValue);
     return;
   }
   if(colorTargetSnapshot?.surface==='editor'&&colorTargetSnapshot.editorSelection){
     state.savedSelection={...colorTargetSnapshot.editorSelection};
-    styleSpan(prop,value);if(value)trackColor(type,value);return;
+    styleSpan(prop,value);if(pickedValue)trackColor(type,pickedValue);return;
   }
   const saved=state.savedSelection;
   const hasEditorSelection=saved?saved.start!==saved.end:els.editor.selectionStart!==els.editor.selectionEnd;
-  if(hasEditorSelection){styleSpan(prop,value);if(value)trackColor(type,value);return}
-  if(document.activeElement===els.editor||!els.preview.contains(document.activeElement)){styleSpan(prop,value);if(value)trackColor(type,value);return}
-  if(stylePreviewSelection(prop,value)){if(value)trackColor(type,value);return}
-  if(value)trackColor(type,value);
+  if(hasEditorSelection){styleSpan(prop,value);if(pickedValue)trackColor(type,pickedValue);return}
+  if(document.activeElement===els.editor||!els.preview.contains(document.activeElement)){styleSpan(prop,value);if(pickedValue)trackColor(type,pickedValue);return}
+  if(stylePreviewSelection(prop,value)){refreshColorTargetSnapshot();if(pickedValue)trackColor(type,pickedValue);return}
+  if(pickedValue)trackColor(type,pickedValue);
 }
 function currentThemeTextColor(){
   const cssColor=getComputedStyle(document.body).getPropertyValue('--t1').trim();
@@ -18394,6 +18451,17 @@ $('fmt-color').addEventListener('input',e=>{const c=getHexInputValue(e.target);i
 $('fmt-color').addEventListener('change',e=>applyPickedColor('text',e.target.value));
 $('fmt-bg').addEventListener('input',e=>{const c=getHexInputValue(e.target);if(c){syncColorButtons();if(colorDragState)applyColorLive('bg',c)}});
 $('fmt-bg').addEventListener('change',e=>applyPickedColor('bg',e.target.value));
+const fontBackgroundOpacity=$('fmt-bg-opacity');
+if(fontBackgroundOpacity){
+  const output=fontBackgroundOpacity.nextElementSibling;
+  fontBackgroundOpacity.addEventListener('input',()=>{
+    if(output)output.textContent=`${fontBackgroundOpacity.value}%`;
+    if(!colorDragState)initColorDrag('bg');
+    const color=getHexInputValue($('fmt-bg'));
+    if(color)applyColorLive('bg',quoteColorWithOpacity(color,Number(fontBackgroundOpacity.value)));
+  });
+  fontBackgroundOpacity.addEventListener('change',()=>applyPickedColor('bg',getHexInputValue($('fmt-bg'))));
+}
 document.querySelectorAll('.cp-picker-main').forEach(picker=>{
   const type=picker.dataset.colorTarget;
   const input=$(type==='text'?'fmt-color':type==='bg'?'fmt-bg':'custom-theme-color');
