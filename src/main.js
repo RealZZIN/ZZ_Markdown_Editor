@@ -4638,6 +4638,37 @@ function removeTableInlineSemanticPrefix(root,count){
   };
   trim(root);
 }
+const TABLE_INLINE_FORMAT_PROPERTIES=[
+  'color','background-color','font-weight','font-style','font-size','font-family',
+  'text-decoration','text-decoration-line','text-decoration-color','text-transform',
+  'letter-spacing','line-height','vertical-align','white-space'
+];
+function tableBlockInlineStyle(block){
+  if(!block?.style)return'';
+  const probe=document.createElement('span');
+  TABLE_INLINE_FORMAT_PROPERTIES.forEach(property=>{
+    const value=block.style.getPropertyValue(property);
+    if(value&&!/url\s*\(|expression\s*\(/i.test(value))probe.style.setProperty(property,value);
+  });
+  // Heading size/weight is normally supplied by stylesheet rules rather than
+  // inline CSS. Once the heading block is flattened inside a table cell, keep
+  // that visible semantic formatting as an inline run.
+  const heading=block.tagName?.match?.(/^H([1-6])$/);
+  if(heading){
+    const defaults={1:['1.7em','800'],2:['1.3em','700'],3:['1.1em','700'],4:['1em','600'],5:['1em','600'],6:['1em','600']}[heading[1]];
+    if(!probe.style.fontSize)probe.style.fontSize=defaults[0];
+    if(!probe.style.fontWeight)probe.style.fontWeight=defaults[1];
+  }
+  return probe.getAttribute('style')||'';
+}
+function appendTableBlockContents(block,fragment){
+  const style=tableBlockInlineStyle(block);
+  if(!style){while(block.firstChild)fragment.appendChild(block.firstChild);return}
+  const span=document.createElement('span');
+  span.setAttribute('style',style);
+  while(block.firstChild)span.appendChild(block.firstChild);
+  if(span.childNodes.length)fragment.appendChild(span);
+}
 function normalizeTableCellInlineBlocks(root){
   const cells=scopedElements(root,'td,th');
   cells.forEach(cell=>{
@@ -4659,7 +4690,7 @@ function normalizeTableCellInlineBlocks(root){
       }
       const needsSpace=previous&&(previous.textContent||'').replace(/[\u200b\u00a0]/g,'').trim()&&(block.textContent||'').replace(/[\u200b\u00a0]/g,'').trim();
       if(needsSpace)fragment.append(' ');
-      while(block.firstChild)fragment.appendChild(block.firstChild);
+      appendTableBlockContents(block,fragment);
       block.replaceWith(fragment);
     });
     cell.normalize();
@@ -10364,7 +10395,10 @@ els.preview.addEventListener('paste',e=>{
   if(e.defaultPrevented||els.preview.querySelector('.table-cell-selected'))return;
   const cleaned=internalPreviewPasteHtml(e.clipboardData?.getData('text/html')||'');
   if(!cleaned)return;
-  e.preventDefault();e.stopImmediatePropagation();insertPreviewHtml(cleaned);
+  const range=previewRange();
+  const origin=range&&(range.startContainer.nodeType===Node.ELEMENT_NODE?range.startContainer:range.startContainer.parentElement);
+  const prepared=origin?.closest?.('td,th')?flattenPastedHtmlForTableCell(cleaned):cleaned;
+  e.preventDefault();e.stopImmediatePropagation();insertPreviewHtml(prepared);
 },true);
 function clipboardMathEntries(html,plain=''){
   const entries=[];
@@ -10439,8 +10473,7 @@ function pastedHtmlWithSafeFormatting(html,{preserveSourceChips=false}={}){
     node.removeAttribute('style');
     if(sourceStyle){
       const probe=document.createElement('span');probe.setAttribute('style',sourceStyle);
-      const safeProperties=['color','background-color','font-weight','font-style','font-size','font-family','text-decoration','text-decoration-line','text-decoration-color','text-transform','letter-spacing','line-height','vertical-align','white-space'];
-      safeProperties.forEach(property=>{
+      TABLE_INLINE_FORMAT_PROPERTIES.forEach(property=>{
         const value=probe.style.getPropertyValue(property);
         if(value&&!/url\s*\(|expression\s*\(/i.test(value))node.style.setProperty(property,value);
       });
@@ -10459,19 +10492,20 @@ function pastedHtmlWithSafeFormatting(html,{preserveSourceChips=false}={}){
 }
 function pastedHtmlWithoutForeignFormatting(html,options){return pastedHtmlWithSafeFormatting(html,options)}
 function pastedHtmlWithoutFontFamily(html){return pastedHtmlWithSafeFormatting(html)}
-function pastedHtmlForTableCell(html){
-  const holder=document.createElement('div');holder.innerHTML=pastedHtmlWithSafeFormatting(html);
+function flattenPastedHtmlForTableCell(html){
+  const holder=document.createElement('div');holder.innerHTML=String(html||'');
   // Clipboard fragments often wrap each styled run in a block. Inside a cell
   // those wrappers later become unrelated new lines, so retain formatting but
   // join the runs as ordinary sentence text.
   [...holder.querySelectorAll('p,div,h1,h2,h3,h4,h5,h6,li,ul,ol,blockquote')].reverse().forEach(block=>{
     const fragment=document.createDocumentFragment(),previous=block.previousSibling;
     if(previous&&(previous.textContent||'').trim()&&(block.textContent||'').trim())fragment.append(' ');
-    while(block.firstChild)fragment.appendChild(block.firstChild);
+    appendTableBlockContents(block,fragment);
     block.replaceWith(fragment);
   });
   return holder.innerHTML.replace(/(?:\s|&nbsp;)+/g,' ');
 }
+function pastedHtmlForTableCell(html){return flattenPastedHtmlForTableCell(pastedHtmlWithSafeFormatting(html))}
 els.preview.addEventListener('paste',e=>{
   if(e.defaultPrevented||els.preview.querySelector('.table-cell-selected'))return;
   const clipboardHtml=e.clipboardData?.getData('text/html')||'';
