@@ -15,7 +15,7 @@
 <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/mathlive/dist/mathlive.min.js"></script>
 <link rel="stylesheet" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css">
-<link rel="stylesheet" href="/src/styles/app.css?v=20261018-toolbar-groups1">
+<link rel="stylesheet" href="/src/styles/app.css?v=20261121-save-labels1">
 </head>
 <body>
 <div class="app" id="app">
@@ -182,19 +182,21 @@
           <button class="color-apply" id="apply-text-color" type="button" title="현재 글씨색 적용"><span class="color-chip" id="text-color-chip" style="background:#111110"></span></button>
           <button class="cp-toggle" id="text-color-toggle" title="색상 팔레트">▾</button>
           <div class="cp-panel hidden" id="text-color-panel">
+            <button class="cp-reset-primary" id="clear-text-color" type="button" title="선택한 글자의 색상 지정을 제거">글자색 기본</button>
             <div class="cp-picker-row"><div class="cp-picker-top"><span>색 조절</span><span class="cp-current" id="text-color-current" style="background:#111110"></span></div><div class="cp-picker-main" data-color-target="text"><div class="cp-sv"><span class="cp-sv-handle"></span></div><div class="cp-hue"><span class="cp-hue-handle"></span></div></div><label class="cp-hex-field"><span class="cp-hex-prefix">#</span><input class="cp-hex" id="fmt-color" value="111110" maxlength="6" spellcheck="false" title="글씨색" aria-label="글씨 색상 코드"></label><div class="cp-quick" data-color-target="text"><button type="button" data-color="#111111" style="background:#111111"></button><button type="button" data-color="#ffffff" style="background:#ffffff"></button><button type="button" data-color="#ff0000" style="background:#ff0000"></button><button type="button" data-color="#ff7a00" style="background:#ff7a00"></button><button type="button" data-color="#00c853" style="background:#00c853"></button><button type="button" data-color="#0057ff" style="background:#0057ff"></button><button type="button" data-color="#7a00ff" style="background:#7a00ff"></button><button type="button" data-color="#ff0080" style="background:#ff0080"></button></div></div>
             <details class="cp-section recent-colors" open><summary>최근 사용</summary><div class="cp-swatches" id="text-color-hist"></div></details>
-            <details class="cp-section" open><summary>저장됨 <small>우클릭으로 삭제</small></summary><div class="cp-swatches" id="text-color-saved"></div><div class="cp-save-row"><button class="cp-save-btn" id="clear-text-color" title="선택한 글자의 색상 지정을 제거">기본</button><button class="cp-save-btn primary" id="save-text-color">색 저장</button></div></details>
+            <details class="cp-section" open><summary>저장됨 <small>우클릭으로 삭제</small></summary><div class="cp-swatches" id="text-color-saved"></div><div class="cp-save-row"><button class="cp-save-btn primary" id="save-text-color">색 저장</button></div></details>
           </div>
         </div>
         <div class="cp-wrap">
           <button class="color-apply" id="apply-bg-color" type="button" title="현재 배경색 적용"><span class="color-chip" id="bg-color-chip" style="background:#f0efed"></span></button>
           <button class="cp-toggle" id="bg-color-toggle" title="색상 팔레트">▾</button>
           <div class="cp-panel hidden" id="bg-color-panel">
-            <div class="cp-picker-row"><div class="cp-picker-top"><span>색 조절</span><span class="cp-current" id="bg-color-current" style="background:#f0efed"></span></div><div class="cp-picker-main" data-color-target="bg"><div class="cp-sv"><span class="cp-sv-handle"></span></div><div class="cp-hue"><span class="cp-hue-handle"></span></div></div><label class="cp-hex-field"><span class="cp-hex-prefix">#</span><input class="cp-hex" id="fmt-bg" value="f0efed" maxlength="6" spellcheck="false" title="배경색" aria-label="배경 색상 코드"></label><div class="cp-quick" data-color-target="bg"><button type="button" data-color="#111111" style="background:#111111"></button><button type="button" data-color="#ffffff" style="background:#ffffff"></button><button type="button" data-color="#f3f4f6" style="background:#f3f4f6"></button><button type="button" data-color="#f8f4e6" style="background:#f8f4e6"></button><button type="button" data-color="#e3d5d5" style="background:#e3d5d5"></button><button type="button" data-color="#cae4e8" style="background:#cae4e8"></button><button type="button" data-color="#ddd6fe" style="background:#ddd6fe"></button><button type="button" data-color="#fce7f3" style="background:#fce7f3"></button></div></div>
+            <button class="cp-reset-primary" id="clear-bg-color" type="button">배경색 기본</button>
             <label class="font-bg-opacity"><span>투명도</span><input id="fmt-bg-opacity" type="range" min="0" max="100" value="100" step="1"><output>100%</output></label>
+            <div class="cp-picker-row"><div class="cp-picker-top"><span>색 조절</span><span class="cp-current" id="bg-color-current" style="background:#f0efed"></span></div><div class="cp-picker-main" data-color-target="bg"><div class="cp-sv"><span class="cp-sv-handle"></span></div><div class="cp-hue"><span class="cp-hue-handle"></span></div></div><label class="cp-hex-field"><span class="cp-hex-prefix">#</span><input class="cp-hex" id="fmt-bg" value="f0efed" maxlength="6" spellcheck="false" title="배경색" aria-label="배경 색상 코드"></label><div class="cp-quick" data-color-target="bg"><button type="button" data-color="#111111" style="background:#111111"></button><button type="button" data-color="#ffffff" style="background:#ffffff"></button><button type="button" data-color="#f3f4f6" style="background:#f3f4f6"></button><button type="button" data-color="#f8f4e6" style="background:#f8f4e6"></button><button type="button" data-color="#e3d5d5" style="background:#e3d5d5"></button><button type="button" data-color="#cae4e8" style="background:#cae4e8"></button><button type="button" data-color="#ddd6fe" style="background:#ddd6fe"></button><button type="button" data-color="#fce7f3" style="background:#fce7f3"></button></div></div>
             <details class="cp-section recent-colors" open><summary>최근 사용</summary><div class="cp-swatches" id="bg-color-hist"></div></details>
-            <details class="cp-section" open><summary>저장됨 <small>우클릭으로 삭제</small></summary><div class="cp-swatches" id="bg-color-saved"></div><div class="cp-save-row"><button class="cp-save-btn" id="clear-bg-color">투명</button><button class="cp-save-btn primary" id="save-bg-color">색 저장</button></div></details>
+            <details class="cp-section" open><summary>저장됨 <small>우클릭으로 삭제</small></summary><div class="cp-swatches" id="bg-color-saved"></div><div class="cp-save-row"><button class="cp-save-btn primary" id="save-bg-color">색 저장</button></div></details>
           </div>
         </div>
         <div class="format-sep"></div>
@@ -392,6 +394,6 @@
 <div class="print-root" id="print-root" aria-hidden="true"></div>
 <div class="hover-preview" id="hover-preview"></div>
 
-<script type="module" src="/src/main.js?v=20261018-theme-text-reset1"></script>
+<script type="module" src="/src/main.js?v=20261121-save-labels1"></script>
 </body>
 </html>

@@ -8,6 +8,8 @@ function loadDocumentExportTools(){
 
 const $=id=>document.getElementById(id);
 const state={files:[],images:{},assets:new Map(),active:-1,mode:'convert',theme:localStorage.getItem('md-theme')||'light',lastInput:null,history:[],future:[],restoring:false,editingPreview:false,insertingImage:false,savedSelection:null,lastEditorSelection:{start:0,end:0},lastInsertionSurface:'editor',savedPreviewRange:null,pendingInsertionContext:null,historyTimer:null,dirty:false,savedText:'',collapsedSidebarGroups:{},collapsedMergeGroups:{},stayHomeAfterConvert:false,homeMergeNotice:'',printScale:100,sidebarView:'files'};
+const LANGUAGE_KEY='zz-ui-language-v1';
+let uiLanguage=localStorage.getItem(LANGUAGE_KEY)==='en'?'en':'ko';
 let customTheme={
   background:localStorage.getItem('md-custom-theme-bg')||'#f7f7f5',
   text:localStorage.getItem('md-custom-theme-text')||'#111110'
@@ -434,6 +436,9 @@ function zzDecodePayload(value){
     return new TextDecoder().decode(bytes);
   }catch(_){return''}
 }
+function previewUiText(korean,english){
+  return uiLanguage==='en'?(english||translatedUiText(korean)):korean;
+}
 function extractReferenceSyntax(source,replacements){
   let text=String(source||'');
   const footnotes=new Map(),citations=new Map(),footnoteRaw=[],citationRaw=[];
@@ -454,7 +459,7 @@ function extractReferenceSyntax(source,replacements){
       body.push(lines[index].replace(/^(?: {2,}|\t)/,''));
     }
     const id=match[2].trim();
-    const content=body.join('\n').trim()||'내용을 입력하세요.';
+    const content=body.join('\n').trim()||previewUiText('내용을 입력하세요.','Enter content.');
     if(match[1]==='^'){
       footnotes.set(id,content);
       footnoteRaw.push(...sourceLines);
@@ -479,13 +484,13 @@ function extractReferenceSyntax(source,replacements){
   if(footnotes.size){
     const token=markdownToken('FOOTNOTES',true);
     const list=[...footnotes].map(([id,body])=>`<li id="zz-footnote-${htmlEsc(id)}">${parser.parseInline?parser.parseInline(body):htmlEsc(body)}</li>`).join('');
-    replacements.set(token,`<section class="reference-list" data-reference-source="${htmlEsc(encodeURIComponent(footnoteRaw.join('\n')))}"><h3>각주</h3><ol>${list}</ol></section>`);
+    replacements.set(token,`<section class="reference-list" data-reference-source="${htmlEsc(encodeURIComponent(footnoteRaw.join('\n')))}"><h3>${previewUiText('각주','Footnotes')}</h3><ol>${list}</ol></section>`);
     text=text.replace(footnotePosition,`\n\n${token}\n\n`);
   }
   if(citations.size){
     const token=markdownToken('CITATIONS',true);
     const list=[...citations].map(([id,body])=>`<li id="zz-citation-${htmlEsc(id)}"><strong>${htmlEsc(id)}</strong> ${parser.parseInline?parser.parseInline(body):htmlEsc(body)}</li>`).join('');
-    replacements.set(token,`<section class="reference-list" data-reference-source="${htmlEsc(encodeURIComponent(citationRaw.join('\n')))}"><h3>참고문헌</h3><ol>${list}</ol></section>`);
+    replacements.set(token,`<section class="reference-list" data-reference-source="${htmlEsc(encodeURIComponent(citationRaw.join('\n')))}"><h3>${previewUiText('참고문헌','Bibliography')}</h3><ol>${list}</ol></section>`);
     text=text.replace(citationPosition,`\n\n${token}\n\n`);
   }
   return text;
@@ -509,24 +514,25 @@ function renderEmbeddedSheet(attrsRaw,payload){
   if(headers)table+=`<thead><tr><th class="zz-row-head"></th>${Array.from({length:visibleCols},(_,i)=>`<th>${columnName(i)}</th>`).join('')}</tr></thead>`;
   table+='<tbody>'+visibleRows.map((row,rowIndex)=>`<tr>${headers?`<th class="zz-row-head">${rowIndex+1}</th>`:''}${Array.from({length:visibleCols},(_,col)=>`<td>${htmlEsc(row?.[col]??'')}</td>`).join('')}</tr>`).join('')+'</tbody></table>';
   const source=`<!-- zz:sheet${attrsRaw} -->\n${payload}\n<!-- /zz:sheet -->`;
-  const limit=truncated?`<div class="zz-sheet-limit">큰 시트라 화면에는 ${visibleRowCount}행 × ${visibleCols}열만 표시합니다. 저장 데이터는 유지됩니다.</div>`:'';
-  return `<div class="zz-sheet" tabindex="0" aria-label="스프레드시트" data-embed-source="${htmlEsc(encodeURIComponent(source))}" style="width:${width}px;height:${height}px;${scroll?'':'overflow:hidden;'}--sheet-zoom:${zoom}"><div class="zz-embed-head"><span>${htmlEsc(attrs.name||'스프레드시트')}</span><span>${htmlEsc(attrs.sheet||'Sheet1')} · ${htmlEsc(attrs.range||'전체')}</span></div>${table}${limit}</div>`;
+  const limit=truncated?`<div class="zz-sheet-limit">${uiLanguage==='en'?`This large sheet shows only ${visibleRowCount} rows × ${visibleCols} columns. Saved data is preserved.`:`큰 시트라 화면에는 ${visibleRowCount}행 × ${visibleCols}열만 표시합니다. 저장 데이터는 유지됩니다.`}</div>`:'';
+  return `<div class="zz-sheet" tabindex="0" aria-label="${previewUiText('스프레드시트','Spreadsheet')}" data-embed-source="${htmlEsc(encodeURIComponent(source))}" style="width:${width}px;height:${height}px;${scroll?'':'overflow:hidden;'}--sheet-zoom:${zoom}"><div class="zz-embed-head"><span>${htmlEsc(attrs.name||previewUiText('스프레드시트','Spreadsheet'))}</span><span>${htmlEsc(attrs.sheet||'Sheet1')} · ${htmlEsc(attrs.range||previewUiText('전체','All'))}</span></div>${table}${limit}</div>`;
 }
 function renderEmbeddedHtml(attrsRaw,payload){
   const attrs=parseZzAttributes(attrsRaw),source=`<!-- zz:html${attrsRaw} -->\n${payload}\n<!-- /zz:html -->`;
   const html=zzDecodePayload(payload).replace(/<\/script/gi,'<\\/script');
   const width=Math.max(280,Number(attrs.width)||720),height=Math.max(180,Number(attrs.height)||420);
-  return `<div class="zz-html-embed" data-embed-source="${htmlEsc(encodeURIComponent(source))}" style="width:${width}px;height:${height}px"><div class="zz-embed-head"><span>${htmlEsc(attrs.name||'HTML 미리보기')}</span><span>읽기 전용</span></div><iframe class="zz-html-frame" sandbox="allow-forms" srcdoc="${htmlEsc(html)}" title="${htmlEsc(attrs.name||'HTML 미리보기')}"></iframe></div>`;
+  const title=attrs.name||previewUiText('HTML 미리보기','HTML preview');
+  return `<div class="zz-html-embed" data-embed-source="${htmlEsc(encodeURIComponent(source))}" style="width:${width}px;height:${height}px"><div class="zz-embed-head"><span>${htmlEsc(title)}</span><span>${previewUiText('읽기 전용','Read only')}</span></div><iframe class="zz-html-frame" sandbox="allow-forms" srcdoc="${htmlEsc(html)}" title="${htmlEsc(title)}"></iframe></div>`;
 }
 function renderEmbeddedDocument(name,mode,start=1,end=20){
   const file=state.files.find(item=>item.name===name||item.path===name||item.name.replace(/\.md$/i,'')===name.replace(/\.md$/i,''));
   const syntax=`[[${name}!${mode}${mode==='MINI'?`:${start}-${end}`:''}]]`;
-  if(!file)return `<div class="zz-doc-embed" contenteditable="false" aria-readonly="true" tabindex="0" role="group" data-embed-source="${htmlEsc(encodeURIComponent(syntax))}"><div class="zz-embed-head"><span>${htmlEsc(name)}</span><span>문서를 찾을 수 없음</span></div></div>`;
+  if(!file)return `<div class="zz-doc-embed" contenteditable="false" aria-readonly="true" tabindex="0" role="group" data-embed-source="${htmlEsc(encodeURIComponent(syntax))}"><div class="zz-embed-head"><span>${htmlEsc(name)}</span><span>${previewUiText('문서를 찾을 수 없음','Document not found')}</span></div></div>`;
   const lines=String(file.text||'').split(/\r?\n/);
   const excerpt=mode==='MINI'?lines.slice(Math.max(0,start-1),Math.max(start,end)).join('\n'):lines.join('\n');
-  const safe=excerpt.replace(/\[\[([^\]\n!]+)!(?:ALL|MINI)(?::\d+-\d+)?\]\]/gi,'`[중첩 문서]`');
+  const safe=excerpt.replace(/\[\[([^\]\n!]+)!(?:ALL|MINI)(?::\d+-\d+)?\]\]/gi,previewUiText('`[중첩 문서]`','`[Nested document]`'));
   const content=String(parser.parse(safe)||'');
-  return `<div class="zz-doc-embed" contenteditable="false" aria-readonly="true" tabindex="0" role="group" aria-label="${htmlEsc(file.name)} 미니 문서" data-embed-source="${htmlEsc(encodeURIComponent(syntax))}"><div class="zz-embed-head"><span>${htmlEsc(file.name)}</span></div><div class="zz-doc-body">${content}</div></div>`;
+  return `<div class="zz-doc-embed" contenteditable="false" aria-readonly="true" tabindex="0" role="group" aria-label="${htmlEsc(file.name)} ${previewUiText('미니 문서','embedded document')}" data-embed-source="${htmlEsc(encodeURIComponent(syntax))}"><div class="zz-embed-head"><span>${htmlEsc(file.name)}</span></div><div class="zz-doc-body">${content}</div></div>`;
 }
 function parseZzAttributes(raw){
   const attrs={};
@@ -770,7 +776,7 @@ function zzLensModeView(type,content,summary){
     const pairs=[];
     const lines=String(content||'').split(/\r?\n/);
     let question='',answer=[];
-    const commit=()=>{if(question)pairs.push({question,answer:answer.join(' ').trim()||'내용을 다시 확인해 보세요.'});question='';answer=[]};
+    const commit=()=>{if(question)pairs.push({question,answer:answer.join(' ').trim()||previewUiText('내용을 다시 확인해 보세요.','Review the content again.')});question='';answer=[]};
     lines.forEach(line=>{
       const q=line.match(/^\s*(?:Q(?:uestion)?[:.]|#{1,6}\s+)(.+)$/i);
       const a=line.match(/^\s*A(?:nswer)?[:.]\s*(.+)$/i);
@@ -782,32 +788,34 @@ function zzLensModeView(type,content,summary){
     if(!pairs.length&&summary.length>1)pairs.push({question:summary[0],answer:summary.slice(1).join(' · ')});
     return pairs.length
       ?pairs.map(pair=>`<details class="obsidian-callout" data-callout="question"><summary class="obsidian-callout-title">${htmlEsc(pair.question)}</summary><div class="obsidian-callout-body">${htmlEsc(pair.answer)}</div></details>`).join('')
-      :'<span class="muted">Q: 질문 / A: 답 형식으로 내용을 작성해 주세요.</span>';
+      :`<span class="muted">${previewUiText('Q: 질문 / A: 답 형식으로 내용을 작성해 주세요.','Write content using Q: question / A: answer format.')}</span>`;
   }
   if(type==='timeline'){
-    return summary.length?`<div class="zz-lens-summary">${summary.map((line,index)=>`<span><b>${index+1}</b> ${htmlEsc(line)}</span>`).join('')}</div>`:'<span class="muted">시간 순서의 항목을 작성해 주세요.</span>';
+    return summary.length?`<div class="zz-lens-summary">${summary.map((line,index)=>`<span><b>${index+1}</b> ${htmlEsc(line)}</span>`).join('')}</div>`:`<span class="muted">${previewUiText('시간 순서의 항목을 작성해 주세요.','Enter timeline items.')}</span>`;
   }
   return summary.length
     ?`<div class="zz-lens-summary">${summary.map(line=>`<span>${htmlEsc(line)}</span>`).join('')}</div>`
-    :'<span class="muted">요약할 문장이 없습니다.</span>';
+    :`<span class="muted">${previewUiText('요약할 문장이 없습니다.','There are no sentences to summarize.')}</span>`;
 }
 function renderZzLens(attrsRaw,content){
   const attrs=parseZzAttributes(attrsRaw);
   const type=(attrs.type||'note').toLowerCase();
-  const title=attrs.title||'핵심 정리';
+  const title=attrs.title||previewUiText('핵심 정리','Key summary');
   const summary=zzLensSummary(content);
   const relations=[...new Set([
     ...[...String(content).matchAll(/(?<!!)\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g)].map(match=>match[1].trim()),
     ...[...String(content).matchAll(/(?:^|\s)#([A-Za-z가-힣][\w가-힣/-]*)/g)].map(match=>match[1])
   ])].slice(0,16);
   const note=markdownHtml(content);
-  const modeLabel=type==='quiz'?'문답':type==='timeline'?'시간순':type==='compare'?'비교':'핵심 요약';
+  const modeLabel=uiLanguage==='en'
+    ?type==='quiz'?'Q&A':type==='timeline'?'Timeline':type==='compare'?'Compare':'Key summary'
+    :type==='quiz'?'문답':type==='timeline'?'시간순':type==='compare'?'비교':'핵심 요약';
   const summaryHtml=zzLensModeView(type,content,summary);
   const relationHtml=relations.length
     ?`<div class="zz-lens-relations">${relations.map(item=>`<button type="button" data-zz-target="${htmlEsc(item)}">${htmlEsc(item)}</button>`).join('')}</div>`
-    :'<span class="muted">연결된 위키 링크나 해시태그가 없습니다.</span>';
+    :`<span class="muted">${previewUiText('연결된 위키 링크나 해시태그가 없습니다.','No linked wiki links or hashtags.')}</span>`;
   return `<section class="zz-lens" data-lens-type="${htmlEsc(type)}" data-lens-source="${htmlEsc(encodeURIComponent(`<!-- zz:lens${attrsRaw||''} -->\n${content}\n<!-- /zz:lens -->`))}">
-    <header class="zz-lens-head" contenteditable="false"><span class="zz-lens-badge">${htmlEsc(modeLabel)} 보기</span><span class="unique-block-title" data-unique-title contenteditable="true" tabindex="0" spellcheck="true">${htmlEsc(title)}</span><nav class="zz-lens-tabs"><button class="zz-lens-tab active" type="button" data-lens-panel="note">원문</button><button class="zz-lens-tab" type="button" data-lens-panel="summary">${modeLabel}</button><button class="zz-lens-tab" type="button" data-lens-panel="relations">관련 항목</button></nav></header>
+    <header class="zz-lens-head" contenteditable="false"><span class="zz-lens-badge">${htmlEsc(modeLabel)} ${previewUiText('보기','View')}</span><span class="unique-block-title" data-unique-title contenteditable="true" tabindex="0" spellcheck="true">${htmlEsc(title)}</span><nav class="zz-lens-tabs"><button class="zz-lens-tab active" type="button" data-lens-panel="note">${previewUiText('원문','Source')}</button><button class="zz-lens-tab" type="button" data-lens-panel="summary">${modeLabel}</button><button class="zz-lens-tab" type="button" data-lens-panel="relations">${previewUiText('관련 항목','Related items')}</button></nav></header>
     <div class="zz-lens-panel" data-panel="note">${note}</div>
     <div class="zz-lens-panel" data-panel="summary" hidden>${summaryHtml}</div>
     <div class="zz-lens-panel" data-panel="relations" hidden>${relationHtml}</div>
@@ -817,7 +825,7 @@ function renderZzSync(id,content){
   const cleanId=String(id||'sync').trim()||'sync';
   const source=`<!-- zz:sync id="${cleanId.replace(/"/g,'&quot;')}" -->\n${content}\n<!-- /zz:sync -->`;
   return `<section class="zz-sync-block" data-sync-id="${htmlEsc(cleanId)}" data-sync-source="${htmlEsc(encodeURIComponent(source))}">
-    <header class="zz-sync-head" contenteditable="false"><svg class="zz-sync-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h9a4 4 0 0 1 4 4v1M17 17H8a4 4 0 0 1-4-4v-1M17 4l3 3-3 3M7 20l-3-3 3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>동기화</span><span class="zz-sync-id">${htmlEsc(cleanId)}</span></header>
+    <header class="zz-sync-head" contenteditable="false"><svg class="zz-sync-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h9a4 4 0 0 1 4 4v1M17 17H8a4 4 0 0 1-4-4v-1M17 4l3 3-3 3M7 20l-3-3 3-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>${previewUiText('동기화','Sync')}</span><span class="zz-sync-id">${htmlEsc(cleanId)}</span></header>
     <div class="zz-sync-body">${markdownHtml(content)}</div>
   </section>`;
 }
@@ -830,12 +838,14 @@ function extractObsidianCallouts(source,replacements){
     const body=[];
     while(i+1<lines.length&&/^>/.test(lines[i+1]))body.push(lines[++i].replace(/^>\s?/,''));
     const type=first[1].toLowerCase();
-    const defaults={note:'노트',abstract:'요약',info:'정보',todo:'할 일',tip:'팁',success:'성공',question:'질문',warning:'주의',caution:'주의',failure:'실패',danger:'위험',bug:'버그',example:'예시',quote:'인용',important:'중요'};
+    const defaults=uiLanguage==='en'
+      ?{note:'Note',abstract:'Abstract',info:'Info',todo:'Todo',tip:'Tip',success:'Success',question:'Question',warning:'Warning',caution:'Caution',failure:'Failure',danger:'Danger',bug:'Bug',example:'Example',quote:'Quote',important:'Important'}
+      :{note:'노트',abstract:'요약',info:'정보',todo:'할 일',tip:'팁',success:'성공',question:'질문',warning:'주의',caution:'주의',failure:'실패',danger:'위험',bug:'버그',example:'예시',quote:'인용',important:'중요'};
     const title=first[3]||defaults[type]||first[1];
     const token=markdownToken('CALLOUT',true);
     const open=first[2]==='-'?'':' open';
     const sourceText=[firstLine,...body.map(line=>`> ${line}`)].join('\n');
-    replacements.set(token,`<details class="obsidian-callout" data-callout="${htmlEsc(type)}" data-callout-source="${htmlEsc(encodeURIComponent(sourceText))}"${open}><summary class="obsidian-callout-title" contenteditable="false"><button class="structured-collapse-toggle" type="button" contenteditable="false" aria-label="접기 또는 펼치기"></button><span class="unique-block-title" data-unique-title contenteditable="true" role="textbox" aria-label="콜아웃 제목" tabindex="0" spellcheck="true">${htmlEsc(title)}</span></summary><div class="obsidian-callout-body">${markdownHtml(body.join('\n'))}</div></details>`);
+    replacements.set(token,`<details class="obsidian-callout" data-callout="${htmlEsc(type)}" data-callout-source="${htmlEsc(encodeURIComponent(sourceText))}"${open}><summary class="obsidian-callout-title" contenteditable="false"><button class="structured-collapse-toggle" type="button" contenteditable="false" aria-label="${previewUiText('접기 또는 펼치기','Collapse or expand')}"></button><span class="unique-block-title" data-unique-title contenteditable="true" role="textbox" aria-label="${previewUiText('콜아웃 제목','Callout title')}" tabindex="0" spellcheck="true">${htmlEsc(title)}</span></summary><div class="obsidian-callout-body">${markdownHtml(body.join('\n'))}</div></details>`);
     output.push(token);
   }
   return output.join('\n');
@@ -854,22 +864,22 @@ function restoreEscapedFormControls(source){
     const control=template.content.firstElementChild;
     if(!control||template.content.children.length!==1||!control.classList.contains('zz-form-control'))return whole;
     if(control.tagName==='BUTTON'){
-      return `<button class="zz-form-control" type="button">${htmlEsc(control.textContent.trim()||'명령')}</button>`;
+      return `<button class="zz-form-control" type="button">${htmlEsc(control.textContent.trim()||previewUiText('명령','Command'))}</button>`;
     }
     if(control.tagName!=='LABEL')return whole;
     const input=control.querySelector(':scope > input');
     const select=control.querySelector(':scope > select');
     const labelCopy=control.cloneNode(true);
     labelCopy.querySelector(':scope > input,:scope > select')?.remove();
-    const label=htmlEsc(labelCopy.textContent.trim()||'항목');
+    const label=htmlEsc(labelCopy.textContent.trim()||previewUiText('항목','Item'));
     if(select){
       const options=[...select.options].map(option=>`<option value="${htmlEsc(option.value)}"${option.selected||option.hasAttribute('selected')?' selected':''}>${htmlEsc(option.textContent)}</option>`).join('');
-      return `<label class="zz-form-control">${label} <select>${options||'<option>선택 1</option>'}</select></label>`;
+      return `<label class="zz-form-control">${label} <select>${options||`<option>${previewUiText('선택 1','Option 1')}</option>`}</select></label>`;
     }
     if(!input)return whole;
     const type=(input.getAttribute('type')||'text').toLowerCase();
     if(type==='checkbox'||type==='radio')return `<label class="zz-form-control"><input type="${type}"${input.checked||input.hasAttribute('checked')?' checked':''}> ${label}</label>`;
-    return `<label class="zz-form-control">${label} <input type="text" value="${htmlEsc(input.value||input.getAttribute('value')||'')}" placeholder="${htmlEsc(input.getAttribute('placeholder')||'입력')}"></label>`;
+    return `<label class="zz-form-control">${label} <input type="text" value="${htmlEsc(input.value||input.getAttribute('value')||'')}" placeholder="${htmlEsc(input.getAttribute('placeholder')||previewUiText('입력','Enter text'))}"></label>`;
   });
 }
 function normalizeFormControlHtml(source){
@@ -879,14 +889,14 @@ function normalizeFormControlHtml(source){
   if(!control||template.content.children.length!==1||!control.classList.contains('zz-form-control'))return'';
   const labelText=control.querySelector(':scope > .zz-form-label')?.textContent
     ||[...control.childNodes].filter(node=>node.nodeType===Node.TEXT_NODE).map(node=>node.textContent).join(' ')
-    ||'항목';
-  const label=`<span class="zz-form-label">${htmlEsc(labelText.trim()||'항목')}</span>`;
+    ||previewUiText('항목','Item');
+  const label=`<span class="zz-form-label">${htmlEsc(labelText.trim()||previewUiText('항목','Item'))}</span>`;
   if(control.tagName==='BUTTON')return `<button class="zz-form-control" type="button">${label}</button>`;
   if(control.tagName!=='LABEL')return'';
   const select=control.querySelector(':scope > select');
   if(select){
     const options=[...select.options].map(option=>`<option value="${htmlEsc(option.value)}"${option.selected||option.hasAttribute('selected')?' selected':''}>${htmlEsc(option.textContent)}</option>`).join('');
-    return `<label class="zz-form-control">${label}<select>${options||'<option value="option-1">선택 1</option>'}</select></label>`;
+    return `<label class="zz-form-control">${label}<select>${options||`<option value="option-1">${previewUiText('선택 1','Option 1')}</option>`}</select></label>`;
   }
   const input=control.querySelector(':scope > input');
   if(!input)return'';
@@ -894,7 +904,7 @@ function normalizeFormControlHtml(source){
   if(type==='checkbox'||type==='radio'){
     return `<label class="zz-form-control"><input type="${type}"${input.checked||input.hasAttribute('checked')?' checked':''}>${label}</label>`;
   }
-  return `<label class="zz-form-control">${label}<input type="text" value="${htmlEsc(input.value||input.getAttribute('value')||'')}" placeholder="${htmlEsc(input.getAttribute('placeholder')||'입력')}"></label>`;
+  return `<label class="zz-form-control">${label}<input type="text" value="${htmlEsc(input.value||input.getAttribute('value')||'')}" placeholder="${htmlEsc(input.getAttribute('placeholder')||previewUiText('입력','Enter text'))}"></label>`;
 }
 function extractFormControls(source,replacements){
   return String(source||'').replace(/<label\b[^>]*class=(?:"[^"]*\bzz-form-control\b[^"]*"|'[^']*\bzz-form-control\b[^']*')[^>]*>[\s\S]*?<\/label>|<button\b[^>]*class=(?:"[^"]*\bzz-form-control\b[^"]*"|'[^']*\bzz-form-control\b[^']*')[^>]*>[\s\S]*?<\/button>/gi,match=>{
@@ -1009,11 +1019,11 @@ function markdownHtml(text){
 }
 function documentPaneFileName(file,fallback='문서 없음'){
   if(file)return file.displayName||file.name||file.path||fallback;
-  if(document.documentElement.lang==='en')return fallback==='분할 문서'?'Split document':'No document';
+  if(uiLanguage==='en')return fallback==='분할 문서'?'Split document':'No document';
   return fallback;
 }
 function documentLocationLabel(file){
-  const english=document.documentElement.lang==='en';
+  const english=uiLanguage==='en';
   const root=file?.source==='local'?(english?'Local':'로컬'):(english?'Uploaded files':'업로드된 파일');
   const path=String(file?.path||'').replace(/\\/g,'/').replace(/^\/+|\/+$/g,'');
   const parent=path.split('/').slice(0,-1).filter(Boolean).join(' / ');
@@ -1350,12 +1360,17 @@ function scheduleChipContrastRefresh(){
 }
 const chipContrastObserver=new MutationObserver(mutations=>{
   const contains=(node,selector)=>node.nodeType===Node.ELEMENT_NODE&&(node.matches(selector)||node.querySelector(selector));
+  const roots=new Set();
   for(const mutation of mutations){
-    for(const node of mutation.addedNodes){
+    // Replacing Preview can add thousands of top-level blocks in one
+    // mutation. Scan the Preview root once instead of every added block.
+    if(mutation.target===els.preview&&mutation.addedNodes.length){roots.add(els.preview);continue}
+    for(const node of mutation.addedNodes)if(node.nodeType===Node.ELEMENT_NODE)roots.add(node);
+  }
+  for(const node of roots){
       if(!chipContrastNeedsCode&&contains(node,'code,[data-inline-code-ink],[data-code-surface]'))chipContrastNeedsCode=true;
       if(!chipContrastNeedsTables&&contains(node,'table'))chipContrastNeedsTables=true;
       if(!chipContrastNeedsEyedroppers&&contains(node,'.cp-head'))chipContrastNeedsEyedroppers=true;
-    }
   }
   scheduleChipContrastRefresh();
 });
@@ -1549,7 +1564,7 @@ function makeMoveHandle(title='드래그해서 위치 이동'){
   const handle=document.createElement('span');
   handle.className='block-move-handle';
   handle.textContent='⋮⋮';
-  handle.title=title;
+  handle.title=translatedUiText(title);
   handle.draggable=false;
   handle.tabIndex=0;
   handle.setAttribute('role','button');
@@ -1569,14 +1584,14 @@ function decorateCodeBlocks(container){
     head.contentEditable='false';
     const language=codeLanguage(code);
     const main=document.createElement('span');main.className='code-head-main';
-    const collapse=document.createElement('button');collapse.type='button';collapse.className='code-collapse';collapse.title='코드블록 접기';collapse.setAttribute('aria-label','코드블록 접기');collapse.setAttribute('aria-expanded','true');collapse.innerHTML='<span class="code-collapse-icon" aria-hidden="true">▾</span>';
-    collapse.onclick=e=>{e.preventDefault();e.stopPropagation();const collapsed=wrap.classList.toggle('collapsed');collapse.setAttribute('aria-expanded',String(!collapsed));collapse.setAttribute('aria-label',collapsed?'코드블록 펼치기':'코드블록 접기');collapse.title=collapsed?'코드블록 펼치기':'코드블록 접기'};
+    const collapse=document.createElement('button');collapse.type='button';collapse.className='code-collapse';collapse.title=previewUiText('코드블록 접기','Collapse code block');collapse.setAttribute('aria-label',collapse.title);collapse.setAttribute('aria-expanded','true');collapse.innerHTML='<span class="code-collapse-icon" aria-hidden="true">▾</span>';
+    collapse.onclick=e=>{e.preventDefault();e.stopPropagation();const collapsed=wrap.classList.toggle('collapsed');const title=collapsed?previewUiText('코드블록 펼치기','Expand code block'):previewUiText('코드블록 접기','Collapse code block');collapse.setAttribute('aria-expanded',String(!collapsed));collapse.setAttribute('aria-label',title);collapse.title=title};
     if(container===els.preview||els.preview.contains(pre)){
       const langButton=document.createElement('button');
       langButton.type='button';
       langButton.className='code-lang';
       langButton.textContent=language?codeLanguageLabel(language):'\u00a0';
-      langButton.title=language?`언어: ${codeLanguageLabel(language)}`:'언어 없음';
+      langButton.title=language?`${previewUiText('언어','Language')}: ${codeLanguageLabel(language)}`:previewUiText('언어 없음','No language');
       langButton.onclick=e=>{e.preventDefault();e.stopPropagation();openCodeLanguageMenu(langButton,code)};
       main.append(collapse,langButton);head.append(main,makeMoveHandle('코드 블록 위치 이동'));
     }else{
@@ -1612,7 +1627,8 @@ function addMovableElements(root){
   scopedElements(root,'.zz-lens,.obsidian-callout,.zz-sync-block,.zz-toc,.zz-sheet,.zz-html-embed,.zz-doc-embed,.reference-list').forEach(block=>{
     if(block.querySelector(':scope > .unique-block-move-handle'))return;
     const label=block.matches('.zz-lens')?'다중 보기':block.matches('.zz-sync-block')?'동기화 블록':block.matches('.zz-toc')?'문서 목차':block.matches('.obsidian-callout')?'콜아웃':block.matches('.reference-list')?'각주·참고문헌':'임베드';
-    const handle=makeMoveHandle(block.matches('.zz-toc')&&uiLanguage==='en'?'Move table of contents':`${label} 위치 이동`);
+    const englishMoveTitle=block.matches('.zz-lens')?'Move multiple views':block.matches('.zz-sync-block')?'Move sync block':block.matches('.zz-toc')?'Move table of contents':block.matches('.obsidian-callout')?'Move callout':block.matches('.reference-list')?'Move footnotes and bibliography':'Move embed';
+    const handle=makeMoveHandle(uiLanguage==='en'?englishMoveTitle:`${label} 위치 이동`);
     handle.classList.add('unique-block-move-handle');
     block.appendChild(handle);
   });
@@ -1632,8 +1648,8 @@ function addMovableElements(root){
       edit.type='button';
       edit.className='zz-source-chip-edit';
       edit.textContent='✎';
-      edit.title='출처 문구 수정';
-      edit.setAttribute('aria-label','출처 문구 수정');
+      edit.title=previewUiText('출처 문구 수정','Edit source label');
+      edit.setAttribute('aria-label',edit.title);
       edit.contentEditable='false';
       el.appendChild(edit);
     }
@@ -1645,10 +1661,10 @@ function addMovableElements(root){
         const handle=document.createElement('span');
         handle.className='form-move-handle';
         handle.textContent='⠿';
-        handle.title='이 양식만 드래그해서 이동';
+        handle.title=previewUiText('이 양식만 드래그해서 이동','Drag to move this form control');
         handle.tabIndex=0;
         handle.setAttribute('role','button');
-        handle.setAttribute('aria-label','양식 위치 이동');
+        handle.setAttribute('aria-label',previewUiText('양식 위치 이동','Move form control'));
         handle.contentEditable='false';
         handle.onkeydown=event=>{
           if(event.key==='Enter'||event.key===' '){
@@ -1666,7 +1682,7 @@ function addMovableElements(root){
       });
     }
     if(el.matches('a.zz-source-chip'))el.removeAttribute('title');
-    else el.title=el.title||(el.matches('.zz-math')?'클릭해서 선택 · 드래그해서 위치 이동 · 우클릭해서 변경':el.matches('.zz-form-control')?'왼쪽 손잡이로 이 양식만 이동':'드래그해서 위치 이동');
+    else el.title=el.title||(el.matches('.zz-math')?previewUiText('클릭해서 선택 · 드래그해서 위치 이동 · 우클릭해서 변경','Click to select · drag to move · right-click to edit'):el.matches('.zz-form-control')?previewUiText('왼쪽 손잡이로 이 양식만 이동','Use the left handle to move this form control'):previewUiText('드래그해서 위치 이동','Drag to move'));
   });
 }
 function ensureEditableFormLabel(control){
@@ -1687,7 +1703,7 @@ function ensureEditableFormLabel(control){
   label.contentEditable='true';
   label.spellcheck=true;
   label.setAttribute('role','textbox');
-  label.setAttribute('aria-label','양식 표시 문구');
+  label.setAttribute('aria-label',previewUiText('양식 표시 문구','Form control label'));
   label.oninput=event=>{
     event.stopImmediatePropagation();
   };
@@ -5687,11 +5703,15 @@ function scrollPreviewToText(text){
 }
 function renderDocumentOutline(){
   if(!els.outline)return;
+  // The Files tab is the default view. Rebuilding a hidden heading tree after
+  // every keystroke wastes DOM work; opening the Document tab renders the
+  // latest outline on demand in setSidebarView().
+  if(state.sidebarView!=='outline')return;
+  const label=(korean,english)=>uiLanguage==='en'?english:korean;
   const headings=[...els.preview.querySelectorAll('h1,h2,h3,h4,h5,h6')];
   headings.forEach((heading,index)=>{if(!heading.id)heading.id=`zz-heading-${index}`});
   if(state.active<0&&!els.editor.value.trim()){
-    els.outline.innerHTML='<div class="empty">문서를 열면 제목과 문단 탐색이 표시됩니다.</div>';
-    translateUi(els.outline);
+    els.outline.innerHTML=`<div class="empty">${label('문서를 열면 제목과 문단 탐색이 표시됩니다.','Open a document to browse its headings and paragraphs.')}</div>`;
     return;
   }
   const headingTree=[],stack=[];
@@ -5706,10 +5726,10 @@ function renderDocumentOutline(){
     const hasChildren=node.children.length>0;
     const collapsed=hasChildren&&collapsedOutlineHeadings.has(node.index);
     const control=hasChildren
-      ?`<button class="outline-branch-toggle" type="button" data-outline-toggle="${node.index}" aria-label="하위 서식 ${collapsed?'펼치기':'접기'}" aria-expanded="${!collapsed}"></button>`
+      ?`<button class="outline-branch-toggle" type="button" data-outline-toggle="${node.index}" aria-label="${label(`하위 서식 ${collapsed?'펼치기':'접기'}`,`${collapsed?'Expand':'Collapse'} nested styles`)}" aria-expanded="${!collapsed}"></button>`
       :'<span class="outline-branch-spacer" aria-hidden="true"></span>';
     return `<div class="outline-node${collapsed?' collapsed':''}" data-outline-node="${node.index}">
-      <div class="outline-row" style="--outline-depth:${depth}">${control}<button class="outline-item" type="button" data-outline-index="${node.index}" data-level="${node.level}"><span class="outline-level">H${node.level}</span><span class="outline-text">${htmlEsc(node.heading.textContent.trim()||`제목 ${node.index+1}`)}</span></button></div>
+      <div class="outline-row" style="--outline-depth:${depth}">${control}<button class="outline-item" type="button" data-outline-index="${node.index}" data-level="${node.level}"><span class="outline-level">H${node.level}</span><span class="outline-text">${htmlEsc(node.heading.textContent.trim()||label(`제목 ${node.index+1}`,`Heading ${node.index+1}`))}</span></button></div>
       ${hasChildren?`<div class="outline-children">${node.children.map(child=>renderHeadingNode(child,depth+1)).join('')}</div>`:''}
     </div>`;
   };
@@ -5718,15 +5738,14 @@ function renderDocumentOutline(){
   const structureCollapsed=collapsedOutlineSections.structure;
   const tagsCollapsed=collapsedOutlineSections.tags;
   const structureSection=`<section class="outline-section${structureCollapsed?' collapsed':''}" data-outline-section-panel="structure">
-    <button class="outline-section-toggle" type="button" data-outline-section="structure" aria-expanded="${!structureCollapsed}"><span class="outline-section-chevron" aria-hidden="true"></span><span>서식</span><span class="outline-section-count">${headings.length}</span></button>
-    <div class="outline-section-body">${headingRows||'<div class="muted" style="padding:8px 10px">제목 서식이 없습니다.</div>'}</div>
+    <button class="outline-section-toggle" type="button" data-outline-section="structure" aria-expanded="${!structureCollapsed}"><span class="outline-section-chevron" aria-hidden="true"></span><span>${label('서식','Structure')}</span><span class="outline-section-count">${headings.length}</span></button>
+    <div class="outline-section-body">${headingRows||`<div class="muted" style="padding:8px 10px">${label('제목 서식이 없습니다.','No heading styles.')}</div>`}</div>
   </section>`;
   const tagSection=hashtagNavigatorEnabled?`<section class="outline-section${tagsCollapsed?' collapsed':''}" data-outline-section-panel="tags">
-    <button class="outline-section-toggle" type="button" data-outline-section="tags" aria-expanded="${!tagsCollapsed}"><span class="outline-section-chevron" aria-hidden="true"></span><span>해시태그</span><span class="outline-section-count">${tags.length}</span></button>
-    <div class="outline-section-body">${tags.length?tags.map(tag=>`<button class="tag-item" type="button" data-outline-tag="${htmlEsc(tag)}">${htmlEsc(tag)}</button>`).join(''):'<div class="muted" style="padding:8px 10px">사용된 해시태그가 없습니다.</div>'}</div>
+    <button class="outline-section-toggle" type="button" data-outline-section="tags" aria-expanded="${!tagsCollapsed}"><span class="outline-section-chevron" aria-hidden="true"></span><span>${label('해시태그','Hashtags')}</span><span class="outline-section-count">${tags.length}</span></button>
+    <div class="outline-section-body">${tags.length?tags.map(tag=>`<button class="tag-item" type="button" data-outline-tag="${htmlEsc(tag)}">${htmlEsc(tag)}</button>`).join(''):`<div class="muted" style="padding:8px 10px">${label('사용된 해시태그가 없습니다.','No hashtags used.')}</div>`}</div>
   </section>`:'';
   els.outline.innerHTML=structureSection+tagSection;
-  translateUi(els.outline);
 }
 let hashtagContextMenu=null,hashtagContextTag='';
 function hideHashtagContextMenu(){
@@ -11114,8 +11133,7 @@ function schedulePreviewVisualScroll(){
   });
 }
 els.editor.addEventListener('scroll',event=>{onEditorScroll(event);scheduleEditorVisualScroll()},{passive:true});
-els.preview.addEventListener('scroll',onPreviewScroll,{passive:true});
-els.preview.addEventListener('scroll',schedulePreviewVisualScroll,{passive:true});
+els.preview.addEventListener('scroll',()=>{onPreviewScroll();schedulePreviewVisualScroll()},{passive:true});
 let secondaryInnerScrollLock=false,secondaryExpectedEditorScroll=null,secondaryExpectedPreviewScroll=null;
 function syncSecondaryInnerScroll(source,target,sourceIsEditor){
   const expected=sourceIsEditor?secondaryExpectedEditorScroll:secondaryExpectedPreviewScroll;
@@ -12720,7 +12738,7 @@ function renderCustomFormatPanel(){
   const query=(customFormatPanel.querySelector('[data-custom-format-search]')?.value||'').trim().toLocaleLowerCase();
   const list=customFormatPanel.querySelector('.custom-format-list');
   list.innerHTML='';
-  const groups=[{id:'',name:'개별 서식',collapsed:customFormatRootCollapsed},...store.folders];
+  const groups=[{id:'',name:'',collapsed:customFormatRootCollapsed},...store.folders];
   let visibleCount=0;
   groups.forEach(folder=>{
     const presets=store.presets.filter(preset=>(preset.folderId||'')===folder.id&&(!query||`${preset.name} ${preset.previewText||''}`.toLocaleLowerCase().includes(query)));
@@ -12732,7 +12750,7 @@ function renderCustomFormatPanel(){
     const head=document.createElement('div');
     head.className='custom-format-folder-head';
     head.innerHTML=`<button class="custom-format-folder-toggle" type="button" data-custom-format-action="toggle-folder" aria-expanded="${String(!folder.collapsed)}"><span class="arrow">${folder.collapsed?'›':'⌄'}</span><span>${htmlEsc(folder.name)}</span><span class="custom-format-folder-count">${presets.length}</span></button>${folder.id?'<span class="custom-format-folder-actions"><button type="button" data-custom-format-action="rename-folder" title="폴더 이름 변경" aria-label="폴더 이름 변경">✎</button><button type="button" data-custom-format-action="delete-folder" title="폴더 삭제" aria-label="폴더 삭제">×</button></span>':''}`;
-    group.appendChild(head);
+    if(folder.id)group.appendChild(head);
     const items=document.createElement('div');
     items.className='custom-format-items';
     items.hidden=!!folder.collapsed&&!query;
@@ -12791,12 +12809,12 @@ function renderCustomFormatSavedWindow(){
   const folders=new Map(store.folders.map(folder=>[folder.id,folder.name]));
   const grouped=new Map();
   store.presets.forEach(preset=>{
-    const name=folders.get(preset.folderId)|| (uiLanguage==='en'?'Custom styles':'개별 서식');
+    const name=folders.get(preset.folderId)||'';
     const values=grouped.get(name)||[];values.push(preset);grouped.set(name,values);
   });
   grouped.forEach((presets,name)=>{
     const group=document.createElement('section');group.className='saved-custom-format-group';
-    const title=document.createElement('strong');title.textContent=name;group.appendChild(title);
+    if(name){const title=document.createElement('strong');title.textContent=name;group.appendChild(title)}
     presets.forEach(preset=>{
       const button=document.createElement('button');button.type='button';button.className='saved-custom-format-apply';
       button.innerHTML=`<span>${htmlEsc(preset.name)}${preset.shortcut?`<kbd>${htmlEsc(preset.shortcut)}</kbd>`:''}</span><em style="${htmlEsc(customFormatInlineStyle(preset))}">${htmlEsc(preset.previewText||(uiLanguage==='en'?'Preview text':'미리보기 텍스트'))}</em>`;
@@ -12807,13 +12825,18 @@ function renderCustomFormatSavedWindow(){
     list.appendChild(group);
   });
 }
+function closeCustomFormatSavedWindow(){
+  customFormatSavedWindow?.remove();
+  customFormatSavedWindow=null;
+}
 function openCustomFormatSavedWindow(anchor){
   if(!desktopSavedColorWindowEnabled())return false;
+  if(customFormatSavedWindow&&!customFormatSavedWindow.isConnected)customFormatSavedWindow=null;
   if(customFormatSavedWindow){customFormatSavedWindow.style.zIndex=String(++savedColorWindowZ);renderCustomFormatSavedWindow();return true}
   const panel=document.createElement('section');panel.className='saved-custom-format-window';
   panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','false');
   panel.innerHTML=`<header><strong>${uiLanguage==='en'?'Saved custom styles':'저장된 사용자 지정 서식'}</strong><button type="button" data-saved-custom-format-close aria-label="${uiLanguage==='en'?'Close':'닫기'}">×</button></header><div data-saved-custom-format-list></div>`;
-  panel.querySelector('[data-saved-custom-format-close]').onclick=event=>{event.stopPropagation();panel.remove();customFormatSavedWindow=null};
+  panel.querySelector('[data-saved-custom-format-close]').onclick=event=>{event.stopPropagation();closeCustomFormatSavedWindow()};
   panel.addEventListener('click',event=>event.stopPropagation());
   document.body.appendChild(panel);customFormatSavedWindow=panel;enableSavedColorWindowDrag(panel);renderCustomFormatSavedWindow();
   const anchorRect=anchor.getBoundingClientRect(),rect=panel.getBoundingClientRect();
@@ -13374,11 +13397,17 @@ async function handleCustomFormatPanelClick(event){
   }
 }
 $('custom-format-toggle').addEventListener('mousedown',rememberPreviewRange);
-$('custom-format-toggle').addEventListener('click',()=>toggleCustomFormatPanel());
+$('custom-format-toggle').addEventListener('click',event=>{
+  // The floating saved-style window owns the trigger while it is open. A
+  // normal click must not reveal the management panel underneath it.
+  if(customFormatSavedWindow?.isConnected){event.preventDefault();event.stopPropagation();return}
+  toggleCustomFormatPanel();
+});
 $('custom-format-toggle').addEventListener('dblclick',event=>{
   if(!desktopSavedColorWindowEnabled())return;
   event.preventDefault();event.stopPropagation();
   toggleCustomFormatPanel(false);
+  if(customFormatSavedWindow?.isConnected){closeCustomFormatSavedWindow();return}
   openCustomFormatSavedWindow(event.currentTarget);
 });
 document.addEventListener('mousedown',event=>{
@@ -14811,6 +14840,19 @@ function insertPlainPreviewParagraph(e){
   if(!e.shiftKey&&previewListItemIsEmpty(listItem)){
     e.preventDefault();
     return exitEmptyPreviewListItem(listItem);
+  }
+  if(!e.shiftKey&&range.collapsed&&listItem&&previewRangeSideIsEmpty(listItem,range,true)){
+    e.preventDefault();
+    pushHistory(true);
+    const blankItem=listItem.cloneNode(false);
+    blankItem.removeAttribute('id');
+    blankItem.replaceChildren(document.createElement('br'));
+    listItem.before(blankItem);
+    placeCaretInPreviewBlock(blankItem);
+    rememberPreviewRange();
+    syncFromPreview();
+    pushHistory(true);
+    return true;
   }
   const quote=origin?.closest?.('blockquote');
   const quoteBlock=closestPreviewBlock(range.startContainer);
@@ -16571,8 +16613,6 @@ function closeGuideModal(wrap){
   }
   wrap.remove();
 }
-const LANGUAGE_KEY='zz-ui-language-v1';
-let uiLanguage=localStorage.getItem(LANGUAGE_KEY)==='en'?'en':'ko';
 const EN_TEXT={
   '홈으로 이동':'Home','설정 열기':'Settings','설정':'Settings','설정 분류':'Settings categories','일반':'General','변환':'Convert','편집':'Edit','병합':'Merge',
   '파일 [0]':'Files [0]','파일':'Files','문서':'Document','로컬':'Local','로컬 [0]':'Local [0]','업로드된 파일':'Uploaded files','업로드된 파일 [0]':'Uploaded files [0]',
@@ -16704,7 +16744,7 @@ const EN_TEXT={
   '수평선':'Horizontal rule','줄바꿈':'Line break','페이지 구분':'Page break','인용':'Quote','중첩 인용':'Nested quote','각주':'Footnote','출처 인용':'Citation','참고문헌':'Bibliography','출처':'Source',
   '인라인 코드':'Inline code','코드 블록':'Code block','순서없는 목록':'Unordered list','순서있는 목록':'Ordered list',
   '빈 표 생성':'Create empty table','데이터로 표 만들기':'Create table from data','행·열 직접 입력...':'Enter rows and columns…',
-  '사용자 지정 테마':'Custom theme','배경색':'Background','글자색':'Text','인용선':'Quote line','적용':'Apply','빠른 색상':'Quick colors','최근 사용':'Recent','저장됨':'Saved','우클릭으로 삭제':'Right-click to delete','색 저장':'Save color','인용문 디자인 복사':'Copy quote design','인용문 디자인 붙여넣기':'Paste quote design','모든 인용선에 이 색상 적용':'Apply this color to all quote lines','모든 인용문 배경에 이 색상 적용':'Apply this color to all quote backgrounds','기본 색상으로 되돌리기':'Restore default color',
+  '사용자 지정 테마':'Custom theme','배경색':'Background','글자색':'Text','인용선':'Quote line','적용':'Apply','빠른 색상':'Quick colors','최근 사용':'Recent','저장됨':'Saved','우클릭으로 삭제':'Right-click to delete','색 저장':'Save color','글자색 기본':'Reset text color','배경색 기본':'Reset background color','인용문 디자인 복사':'Copy quote design','인용문 디자인 붙여넣기':'Paste quote design','모든 인용선에 이 색상 적용':'Apply this color to all quote lines','모든 인용문 배경에 이 색상 적용':'Apply this color to all quote backgrounds','기본 색상으로 되돌리기':'Restore default color',
   '색 조절':'Color adjustment','저장된 색 없음':'No saved colors','사용 기록 없음':'No recent colors','기본':'Default'
   ,'사이드바 접기':'Collapse sidebar','사이드바 보기':'Sidebar view','화면 테마 도움말':'Theme help','파일을 현재 문서에 삽입':'Insert file into the current document',
   '사용자 지정 서식 (Ctrl+Alt+S)':'Custom formatting (Ctrl+Alt+S)','서식 목록':'Style list','글씨 크기(px)':'Font size (px)','글씨 크기 목록':'Font size list',
@@ -16907,6 +16947,7 @@ function translateUi(root=document.body){
 }
 function setUiLanguage(language){
   uiLanguage=language==='en'?'en':'ko';localStorage.setItem(LANGUAGE_KEY,uiLanguage);
+  syncUiTranslationObserver();
   if(uiTranslationFrame)cancelAnimationFrame(uiTranslationFrame);
   uiTranslationFrame=0;pendingUiTranslationRoots.clear();
   renderSavedColorWindows();renderCustomFormatSavedWindow();
@@ -16930,8 +16971,7 @@ function queueUiTranslation(node){
     roots.forEach(translateUi);
   });
 }
-new MutationObserver(records=>{
-  if(uiLanguage!=='en')return;
+const uiTranslationObserver=new MutationObserver(records=>{
   records.forEach(record=>{
     if(uiTranslationExcluded(record.target))return;
     if(record.type==='characterData'||record.type==='attributes')queueUiTranslation(record.target);
@@ -16939,7 +16979,16 @@ new MutationObserver(records=>{
       if(node.nodeType===Node.ELEMENT_NODE||(node.nodeType===Node.TEXT_NODE&&node.nodeValue.trim()))queueUiTranslation(node);
     });
   });
-}).observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['title','aria-label','placeholder','data-tooltip']});
+});
+let uiTranslationObserverActive=false;
+function syncUiTranslationObserver(){
+  const shouldObserve=uiLanguage==='en';
+  if(shouldObserve===uiTranslationObserverActive)return;
+  uiTranslationObserver.disconnect();
+  uiTranslationObserverActive=shouldObserve;
+  if(shouldObserve)uiTranslationObserver.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['title','aria-label','placeholder','data-tooltip']});
+}
+syncUiTranslationObserver();
 let editGuideWelcomeTimer=0;
 function modeGuideKey(mode){return mode==='home'?HOME_GUIDE_WELCOME_KEY:mode==='convert'?CONVERT_GUIDE_WELCOME_KEY:mode==='merge'?MERGE_GUIDE_WELCOME_KEY:EDIT_GUIDE_WELCOME_KEY}
 function scheduleModeGuideWelcome(mode=state.mode,force=false){
@@ -17161,7 +17210,6 @@ async function showAppSettings(initialCategory='general'){
     <section class="app-settings-group app-about" data-settings-panel="about" ${settingsCategory==='about'?'':'hidden'}>
       <div class="app-about-icon" aria-hidden="true"><svg viewBox="0 0 64 64"><rect x="3" y="3" width="58" height="58" rx="14"></rect><path d="M23 13 18 51M45 13 40 51M11 26h42M9 40h43"></path></svg></div>
       <h4>#ZZ.md</h4>
-      <p><span>Markdown 작업을 더 빠르고 간결하게.</span><span>작성·미리보기부터 변환·병합까지 한곳에서 처리하세요.</span></p>
       <a class="app-about-github" href="https://github.com/RealZZIN/ZZ_Markdown_Editor" target="_blank" rel="noopener noreferrer" aria-label="GitHub 저장소로 이동" title="GitHub 저장소로 이동"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0Zm3.5 7.4V10.5L12 6l5.5 4.5v8.9M9.5 21v-6h5v6"></path></svg><span>GitHub</span></a>
     </section>
     <div class="modal-actions"><button class="tool primary" type="button" data-settings-close>닫기</button></div>
@@ -18116,6 +18164,7 @@ let colorDragState=null;
 let colorTargetSnapshot=null;
 function captureColorTarget(){
   let cells=[...els.preview.querySelectorAll('td.table-cell-selected,th.table-cell-selected')];
+  const math=selectedPreviewMath();
   const selection=window.getSelection();
   let range=null;
   if(selection?.rangeCount){
@@ -18130,8 +18179,16 @@ function captureColorTarget(){
   const editorSelection=document.activeElement===els.editor||els.editor.selectionStart!==els.editor.selectionEnd
     ?{start:els.editor.selectionStart,end:els.editor.selectionEnd}
     :state.savedSelection&&state.savedSelection.start!==state.savedSelection.end?{...state.savedSelection}:null;
-  if(!cells.length&&!range&&!editorSelection)return;
-  colorTargetSnapshot={cells,range,editorSelection,surface:cells.length||range?'preview':editorSelection?'editor':state.lastInsertionSurface};
+  if(!cells.length&&!range&&!editorSelection&&!math)return;
+  const mathIndex=math?[...els.preview.querySelectorAll('.zz-math')].indexOf(math):-1;
+  colorTargetSnapshot={cells,range,editorSelection,math,mathIndex,surface:math||cells.length||range?'preview':editorSelection?'editor':state.lastInsertionSurface};
+}
+function colorTargetMath(){
+  const selected=selectedPreviewMath();
+  if(selected)return selected;
+  if(colorTargetSnapshot?.math?.isConnected&&els.preview.contains(colorTargetSnapshot.math))return colorTargetSnapshot.math;
+  if(Number.isInteger(colorTargetSnapshot?.mathIndex)&&colorTargetSnapshot.mathIndex>=0)return els.preview.querySelectorAll('.zz-math')[colorTargetSnapshot.mathIndex]||null;
+  return null;
 }
 function snapshotTableSelection(){
   const snapshot=colorTargetSnapshot;
@@ -18146,6 +18203,11 @@ function restoreColorPreviewRange(){
   const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range.cloneRange());
 }
 function refreshColorTargetSnapshot(){
+  const math=colorTargetMath();
+  if(math){
+    colorTargetSnapshot={cells:[],range:state.savedPreviewRange?.cloneRange?.()||null,editorSelection:null,math,mathIndex:[...els.preview.querySelectorAll('.zz-math')].indexOf(math),surface:'preview'};
+    return;
+  }
   const range=state.savedPreviewRange;
   if(range&&!range.collapsed&&els.preview.contains(range.commonAncestorContainer)){
     colorTargetSnapshot={cells:[],range:range.cloneRange(),editorSelection:null,surface:'preview'};
@@ -18233,7 +18295,7 @@ function applyPickedColor(type,value){
   }
   // A selected equation is an explicit formatting target. Handle it before
   // stale table/editor selections so the color command cannot be intercepted.
-  const math=selectedPreviewMath();
+  const math=colorTargetMath();
   if(math){
     styleSelectedMath(math,prop,value);
     refreshColorTargetSnapshot();
@@ -18582,14 +18644,14 @@ $('clear-text-color').onclick=e=>{
     const property=quoteColorProperty(quoteColorTarget.kind,true);
     const quote=quoteColorTarget.quote;
     mutateQuoteDesign(quote,()=>quote.style.removeProperty(property));
-  }else applyPickedColor('text',currentThemeTextColor());
+  }else applyPickedColor('text','');
   closeAllPanels();
 };
 $('clear-bg-color').onclick=e=>{e.preventDefault();e.stopPropagation();applyPickedColor('bg','');closeAllPanels()};
 
 /* ── Extended persistence, compatibility, inserts, and custom fonts ── */
 const ZZ_DB_NAME='zz-md-workspace',ZZ_DB_VERSION=1;
-let zzDbPromise=null,autosaveTimer=0,autosaveIdle=0,lastVersionSignature='';
+let zzDbPromise=null,autosaveTimer=0,autosaveIdle=0,lastVersionFileKey='',lastVersionText=null;
 const CUSTOM_FONT_ENABLED_KEY='md-custom-font-enabled',CUSTOM_FONT_ACTIVE_KEY='md-custom-font-active';
 let customFontEnabled=savedOption(CUSTOM_FONT_ENABLED_KEY,false),customFonts=[],customFontsLoaded=false;
 const customFontFaces=new Map();
@@ -18705,9 +18767,12 @@ function scheduleWorkspaceSave(){
     await saveWorkspaceSession();
     const file=state.files[state.active];
     if(!file)return;
-    const signature=`${file.path}:${file.text}`;
-    if(signature===lastVersionSignature)return;
-    lastVersionSignature=signature;
+    const fileKey=file.path||file.name||'';
+    // Avoid allocating a second document-sized `${path}:${text}` string on
+    // every autosave. Strings are immutable, so key + text comparisons retain
+    // the same collision-free change detection without copying the content.
+    if(fileKey===lastVersionFileKey&&file.text===lastVersionText)return;
+    lastVersionFileKey=fileKey;lastVersionText=file.text;
     await saveVersionSnapshot('자동 기록');
   };
   autosaveTimer=setTimeout(()=>{
@@ -18756,7 +18821,7 @@ function applyWorkspaceSnapshot(snapshot){
   loadPrimaryHistoryState(state.files[state.active]);
   state.savedText=state.files[state.active]?.savedText||'';
   state.dirty=els.editor.value!==state.savedText;
-  lastVersionSignature='';
+  lastVersionFileKey='';lastVersionText=null;
   setMode('edit',false);
   renderAll({deferPreview:true,visibleOnly:true});
   restoreFileViewState(state.files[state.active]);

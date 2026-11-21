@@ -78,6 +78,24 @@ function auditFormattingStability(mainSource,indexSource,styleSource){
   assert(mainSource.includes('function mutateQuoteDesign('),'Quote formatting scroll guard is missing.');
   assert(mainSource.includes("type==='bg'&&pickedValue?quoteColorWithOpacity"),'Background opacity is not applied to picked colors.');
   assert(mainSource.includes("root.addEventListener('contextmenu',event=>"),'Preview background context-menu suppression is missing.');
+  const opacity=indexSource.indexOf('id="fmt-bg-opacity"'),picker=indexSource.indexOf('id="bg-color-current"');
+  assert(opacity>=0&&picker>=0&&opacity<picker,'Background opacity must appear above the color picker.');
+  assert(styleSource.includes('.font-bg-opacity { display:grid;grid-template-columns:auto minmax(0,1fr) 42px;align-items:center;gap:8px;margin:0 0 10px'),'Background opacity layout has drifted from the quote opacity layout.');
+  assert(indexSource.indexOf('id="clear-text-color"')<indexSource.indexOf('id="text-color-current"'),'The text-color reset action must stay at the top of its panel.');
+  assert(indexSource.indexOf('id="clear-bg-color"')<indexSource.indexOf('id="fmt-bg-opacity"'),'The background-color reset action must stay at the top of its panel.');
+  assert(styleSource.includes('.cp-reset-primary { width:100%;min-height:38px'),'Top-level color reset actions are not visually prominent.');
+  assert(mainSource.includes('function colorTargetMath()'),'Equation color targeting is not preserved while using the palette.');
+  assert(mainSource.includes("}else applyPickedColor('text','');"),'Resetting text color must remove the explicit color instead of applying a theme color.');
+  assert(mainSource.includes("const groups=[{id:'',name:'',collapsed:customFormatRootCollapsed}"),'The unfiled custom-style label is still visible.');
+  assert(mainSource.includes('listItem&&previewRangeSideIsEmpty(listItem,range,true)'),'Enter at the start of a list item does not create a preceding blank item.');
+  assert(mainSource.includes('listItem.before(blankItem)'),'A leading list split does not preserve list numbering.');
+  assert(styleSource.includes('.font-bg-opacity input { width:100%;margin:0;accent-color:var(--t1); }'),'Background opacity does not follow the active theme text color.');
+  assert(styleSource.includes('.save-format-extension { align-self:stretch;display:grid;place-items:center;'),'Save-format extension labels are not centered within their column.');
+  assert(styleSource.includes('.save-format-choice-copy b { font-size:15.5px;'),'Save-format title labels are too small.');
+  const aboutStart=mainSource.indexOf('<section class="app-settings-group app-about"');
+  const aboutEnd=mainSource.indexOf('</section>',aboutStart);
+  const aboutSource=mainSource.slice(aboutStart,aboutEnd);
+  assert(aboutStart>=0&&aboutEnd>aboutStart&&!aboutSource.includes('<p>'),'The About page description label is still present.');
 }
 
 function auditDomContracts(mainSource,indexSource){
@@ -102,6 +120,17 @@ function auditPerformanceGuards(mainSource){
   const enhancementEnd=mainSource.indexOf('function assignPreviewHeadingAnchors(',enhancementStart);
   const enhancement=mainSource.slice(enhancementStart,enhancementEnd);
   assert(!enhancement.includes('normalizeTableCellInlineBlocks(els.preview)'),'Table cells are normalized twice during a full preview render.');
+  assert(mainSource.includes("if(state.sidebarView!=='outline')return;"),'Hidden document outlines are still rebuilt after every Preview render.');
+  const outlineStart=mainSource.indexOf('function renderDocumentOutline()');
+  const outlineEnd=mainSource.indexOf('let hashtagContextMenu=',outlineStart);
+  const outlineSource=mainSource.slice(outlineStart,outlineEnd);
+  assert(outlineStart>=0&&outlineEnd>outlineStart&&!outlineSource.includes('translateUi(els.outline)'),'Document outline still retranslates its full DOM after rendering.');
+  assert(outlineSource.includes("const label=(korean,english)=>uiLanguage==='en'?english:korean"),'Document outline does not generate localized chrome directly.');
+  assert(mainSource.includes('if(mutation.target===els.preview&&mutation.addedNodes.length){roots.add(els.preview);continue}'),'Preview mutation contrast work is not batched by root.');
+  assert(mainSource.includes('function syncUiTranslationObserver()'),'The translation observer cannot be disabled outside English mode.');
+  assert(mainSource.includes("const shouldObserve=uiLanguage==='en'"),'Korean mode still records unnecessary translation mutations.');
+  assert(!mainSource.includes('lastVersionSignature'),'Autosave still allocates a document-sized version signature.');
+  assert(mainSource.includes("els.preview.addEventListener('scroll',()=>{onPreviewScroll();schedulePreviewVisualScroll()}"),'Preview scroll work is split across duplicate listeners.');
 }
 
 function auditLifecycleStability(mainSource){
@@ -109,6 +138,17 @@ function auditLifecycleStability(mainSource){
   assert(mainSource.includes('Preview enhancement stage ${currentStage+1} failed'),'Preview enhancement stages are not isolated.');
   assert(mainSource.includes("document.visibilityState==='hidden')flushWorkspaceForLifecycle()"),'Hidden tabs do not flush pending workspace recovery data.');
   assert(mainSource.includes('mutateQuoteDesign(quote,()=>quote.style.removeProperty(property))'),'Resetting quote colors bypasses the scroll-safe mutation path.');
+  assert(mainSource.includes('function closeCustomFormatSavedWindow()'),'Saved custom-format windows have no single close path.');
+  assert(mainSource.includes('if(customFormatSavedWindow?.isConnected){event.preventDefault();event.stopPropagation();return}'),'An open saved custom-format window does not suppress single-click panel toggles.');
+  assert(mainSource.includes('if(customFormatSavedWindow?.isConnected){closeCustomFormatSavedWindow();return}'),'Double-click does not close an open saved custom-format window.');
+}
+
+function auditPreviewLocalization(mainSource){
+  assert(mainSource.includes('function previewUiText(korean,english)'),'Generated Preview UI has no localization helper.');
+  assert(mainSource.includes("previewUiText('문서를 찾을 수 없음','Document not found')"),'Missing embedded documents are not localized.');
+  assert(mainSource.includes("previewUiText('동기화','Sync')"),'Sync block chrome is not localized.');
+  assert(mainSource.includes("previewUiText('관련 항목','Related items')"),'Multi-view block tabs are not localized.');
+  assert(mainSource.includes("if(uiLanguage==='en')return fallback==='분할 문서'?'Split document':'No document'"),'Document pane fallbacks ignore the selected UI language.');
 }
 
 async function packageText(zip,pattern){
@@ -157,5 +197,6 @@ auditFormattingStability(mainSource,indexSource,styleSource);
 auditDomContracts(mainSource,indexSource);
 auditPerformanceGuards(mainSource);
 auditLifecycleStability(mainSource);
+auditPreviewLocalization(mainSource);
 const sizes=await auditOfficeExports();
 console.log(`QA passed · translations/menu/DOM/formatting/performance/lifecycle · DOCX ${sizes.docxBytes.toLocaleString()} bytes · HWPX ${sizes.hwpxBytes.toLocaleString()} bytes`);
