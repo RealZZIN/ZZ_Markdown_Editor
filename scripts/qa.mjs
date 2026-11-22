@@ -72,6 +72,8 @@ function auditSaveMenu(mainSource,indexSource){
 }
 
 function auditFormattingStability(mainSource,indexSource,styleSource){
+  assert(styleSource.includes(':where(.app,.modal-backdrop,.file-context-menu,#tbl-ctx,.cp-panel,.saved-color-window,.saved-custom-format-window,.source-syntax-popover,.find-replace-panel) { font-family:var(--font); }'),'Dynamic application UI can fall back from Pretendard.');
+  assert(styleSource.includes("--font:     Pretendard")&&styleSource.includes('button, input, textarea, select { font: inherit;'),'Pretendard is not the global UI font or form controls do not inherit it.');
   assert(indexSource.includes('id="fmt-bg-opacity"'),'Background opacity control is missing.');
   assert(styleSource.includes('.font-bg-opacity'),'Background opacity control styles are missing.');
   assert(mainSource.includes('function refreshColorTargetSnapshot()'),'Color target refresh guard is missing.');
@@ -80,10 +82,10 @@ function auditFormattingStability(mainSource,indexSource,styleSource){
   assert(mainSource.includes("root.addEventListener('contextmenu',event=>"),'Preview background context-menu suppression is missing.');
   const opacity=indexSource.indexOf('id="fmt-bg-opacity"'),picker=indexSource.indexOf('id="bg-color-current"');
   assert(opacity>=0&&picker>=0&&opacity<picker,'Background opacity must appear above the color picker.');
-  assert(styleSource.includes('.font-bg-opacity { display:grid;grid-template-columns:auto minmax(0,1fr) 42px;align-items:center;gap:8px;margin:0 0 10px'),'Background opacity layout has drifted from the quote opacity layout.');
-  assert(indexSource.indexOf('id="clear-text-color"')<indexSource.indexOf('id="text-color-current"'),'The text-color reset action must stay at the top of its panel.');
-  assert(indexSource.indexOf('id="clear-bg-color"')<indexSource.indexOf('id="fmt-bg-opacity"'),'The background-color reset action must stay at the top of its panel.');
-  assert(styleSource.includes('.cp-reset-primary { width:100%;min-height:38px'),'Top-level color reset actions are not visually prominent.');
+  assert(indexSource.indexOf('id="clear-text-color"')>indexSource.indexOf('id="text-color-saved"'),'The regular text-color reset action was not restored beside Save color.');
+  assert(indexSource.indexOf('id="clear-bg-color"')>indexSource.indexOf('id="bg-color-saved"'),'The regular background-color reset action is not beside Save color.');
+  assert(/id="clear-text-color"[\s\S]{0,250}id="save-text-color"/.test(indexSource)&&/id="clear-bg-color"[\s\S]{0,250}id="save-bg-color"/.test(indexSource),'Text and background reset controls are not aligned with their Save color action.');
+  assert(!indexSource.includes('글자색 기본')&&!indexSource.includes('배경색 기본')&&!mainSource.includes("'글자색 기본'")&&!mainSource.includes("'배경색 기본'"),'Color reset controls still use the word 기본.');
   assert(mainSource.includes('function colorTargetMath()'),'Equation color targeting is not preserved while using the palette.');
   assert(mainSource.includes("}else applyPickedColor('text','');"),'Resetting text color must remove the explicit color instead of applying a theme color.');
   assert(mainSource.includes("const groups=[{id:'',name:'',collapsed:customFormatRootCollapsed}"),'The unfiled custom-style label is still visible.');
@@ -138,6 +140,32 @@ function auditLifecycleStability(mainSource){
   assert(mainSource.includes('Preview enhancement stage ${currentStage+1} failed'),'Preview enhancement stages are not isolated.');
   assert(mainSource.includes("document.visibilityState==='hidden')flushWorkspaceForLifecycle()"),'Hidden tabs do not flush pending workspace recovery data.');
   assert(mainSource.includes('mutateQuoteDesign(quote,()=>quote.style.removeProperty(property))'),'Resetting quote colors bypasses the scroll-safe mutation path.');
+  assert(mainSource.includes('|(?:>[ \\t]*)+\\S|'),'Nested quote markers are not recognized by live preview Markdown.');
+  assert(mainSource.includes('depth:(marker[0].match(/>/g)||[]).length'),'Nested quote depth is not preserved during preview conversion.');
+  assert(mainSource.includes("type==='list'?[['background','배경색'],['marker','목록 기호']]"),'List markers do not expose color and background controls.');
+  assert(mainSource.includes('setQuoteColorKind(button.dataset.quoteColorKind)'),'Reconfigured quote/list color tabs still use a stale target kind.');
+  assert(styleSource.includes('.preview li::marker { color:var(--zz-list-marker-color,currentColor); }'),'List marker colors are not rendered independently.');
+  assert(mainSource.includes("meaningful(range.toString())!==meaningful(host.textContent)"),'Replacing a selected background can still create nested color wrappers.');
+  assert(mainSource.includes('function updatePreviewSelectionColors(range)'),'Selected text colors are not reflected in the toolbar chips.');
+  assert(mainSource.includes('data-saved-custom-format-reset="text"')&&mainSource.includes('data-saved-custom-format-reset="bg"'),'Saved custom styles are missing top-level color reset actions.');
+  assert(mainSource.includes("['right','bottom'].forEach(edge=>"),'Saved custom styles do not have full-edge resize handles.');
+  assert(styleSource.includes('.saved-custom-format-resizer.right')&&styleSource.includes('.saved-custom-format-resizer.bottom'),'Saved custom style resize handles are not visible on both edges.');
+  assert(mainSource.includes('matchingHosts.forEach(item=>'),'Background reset does not clear every matching nested wrapper in one pass.');
+  assert(mainSource.includes("styleName==='background-color'||meaningful(element.textContent)===meaningful(range.toString())"),'Background reset can still split a highlighted run and leave colored side caps.');
+  assert(!mainSource.includes('<p>현재 문서에 저장되지 않은 수정사항이 있습니다. 계속하기 전에 어떻게 처리할까요?</p>'),'The unwanted unsaved-changes prompt sentence is still present.');
+  assert(styleSource.includes('#tbl-ctx .tbl-ctx-group'),'The table context menu is not visually grouped.');
+  assert(!mainSource.includes('class="tbl-ctx-label"'),'The table context menu still shows small section labels.');
+  assert(mainSource.includes("submenu('셀 편집'")&&mainSource.includes("submenu('행 · 열 추가'")&&mainSource.includes("submenu('삭제'"),'The table context menu is missing progressive submenus.');
+  assert(!mainSource.includes("submenu('표 작업'")&&mainSource.includes('<button data-op="reset-shape">표 형태 초기화</button>'),'Duplicate table cut/copy actions still occupy a submenu instead of a direct shape reset.');
+  assert(styleSource.includes('width:168px')&&styleSource.includes('left:calc(100% + 8px)'),'Table submenus do not open beside the main menu.');
+  assert(mainSource.includes("row.addEventListener('mouseenter',open)"),'Table submenus still require a click instead of pointer hover.');
+  assert(mainSource.includes("setTimeout(()=>row.classList.remove('open'),220)")&&styleSource.includes('.tbl-ctx-submenu-row.open::after'),'Table submenus can disappear while crossing the pointer gap.');
+  assert(styleSource.includes('width:168px')&&styleSource.includes('font:12px var(--font)'),'The main table menu is not compact or does not use Pretendard.');
+  assert(styleSource.includes('.cp-save-row { margin-top:14px;'),'Saved palette colors are still crowded against the reset/save actions.');
+  assert(styleSource.includes('color:#f5f5f5;font:11.5px var(--font)'),'Table submenu text is not explicitly white or does not use Pretendard.');
+  assert(indexSource.includes('aria-label="글자색 초기화">초기화</button>')&&indexSource.includes('aria-label="배경색 초기화">초기화</button>'),'Color reset buttons do not use the concise visible label.');
+  assert(styleSource.includes('#tbl-ctx.flip-submenus .tbl-ctx-submenu'),'Table submenus cannot flip away from the viewport edge.');
+  assert(mainSource.includes("Math.max(8,Math.min(x,innerWidth-r.width-8))"),'The table context menu can still render outside the horizontal viewport.');
   assert(mainSource.includes('function closeCustomFormatSavedWindow()'),'Saved custom-format windows have no single close path.');
   assert(mainSource.includes('if(customFormatSavedWindow?.isConnected){event.preventDefault();event.stopPropagation();return}'),'An open saved custom-format window does not suppress single-click panel toggles.');
   assert(mainSource.includes('if(customFormatSavedWindow?.isConnected){closeCustomFormatSavedWindow();return}'),'Double-click does not close an open saved custom-format window.');

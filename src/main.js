@@ -4411,36 +4411,46 @@ let resetTableInteractionState=()=>{};
     e.preventDefault();
     const menu=getMenu();ctxTarget=target;ctxActionTaken=false;
     const hasCells=selectedCells().length>0;
+    const submenu=(label,items,danger=false)=>`<div class="tbl-ctx-submenu-row"><button type="button" data-tbl-submenu class="${danger?'danger':''}"><span>${label}</span><span class="tbl-ctx-arrow">›</span></button><div class="tbl-ctx-submenu">${items}</div></div>`;
     menu.innerHTML=`
-      <div class="tbl-ctx-selection-actions"><button data-op="select-all">전체 선택</button><button data-op="clear-selection">선택 해제</button></div><hr>
-      ${hasCells?'<button data-op="cut-cells">선택 셀 잘라내기</button><button data-op="copy-cells">선택 셀 복사</button><button data-op="paste-cells">선택 셀에 붙여넣기</button><button data-op="clear-cells">선택 셀 내용 지우기</button><hr><button data-op="merge-cells">선택 셀 합치기</button><button data-op="split-cells">선택 셀 나누기…</button><button data-op="equal-height">셀 높이를 같게</button><button data-op="equal-width">셀 너비를 같게</button><hr>':''}
-      <button data-op="cut-table">표 잘라내기</button>
-      <button data-op="copy-table">표 복사</button>
-      <hr>
-      <button data-op="row-above">위에 행 추가</button>
-      <button data-op="row-below">아래에 행 추가</button>
-      <button data-op="col-left">왼쪽에 열 추가</button>
-      <button data-op="col-right">오른쪽에 열 추가</button>
-      <hr>
-      <button data-op="del-row">현재 행 삭제</button>
-      <button data-op="del-col">현재 열 삭제</button>
-      <button data-op="del-table">표 삭제</button>
-      <hr>
-      <button data-op="reset-shape">표 형태 초기화</button>
-    `;
-    menu.querySelectorAll('button').forEach(btn=>btn.onclick=()=>{
+      <section class="tbl-ctx-group"><button data-op="select-all">전체 선택</button><button data-op="clear-selection">선택 해제</button></section>
+      ${hasCells?`<section class="tbl-ctx-group"><button data-op="cut-cells">잘라내기</button><button data-op="copy-cells">복사</button><button data-op="paste-cells">붙여넣기</button><button data-op="clear-cells">내용 지우기</button></section>
+      <section class="tbl-ctx-group">${submenu('셀 편집','<button data-op="merge-cells">셀 합치기</button><button data-op="split-cells">셀 나누기…</button>')}${submenu('크기 맞춤','<button data-op="equal-height">셀 높이를 같게</button><button data-op="equal-width">셀 너비를 같게</button>')}</section>`:''}
+      <section class="tbl-ctx-group">${submenu('행 · 열 추가','<button data-op="row-above">위에 행 추가</button><button data-op="row-below">아래에 행 추가</button><button data-op="col-left">왼쪽에 열 추가</button><button data-op="col-right">오른쪽에 열 추가</button>')}<button data-op="reset-shape">표 형태 초기화</button>${submenu('삭제','<button class="danger" data-op="del-row">현재 행 삭제</button><button class="danger" data-op="del-col">현재 열 삭제</button><button class="danger" data-op="del-table">표 삭제</button>',true)}</section>`;
+    menu.querySelectorAll('[data-op]').forEach(btn=>btn.onclick=()=>{
       if(ctxActionTaken)return;
       ctxActionTaken=true;
       menu.querySelectorAll('button').forEach(button=>button.disabled=true);
       doOp(btn.dataset.op);
+    });
+    menu.querySelectorAll('.tbl-ctx-submenu-row').forEach(row=>{
+      const button=row.querySelector('[data-tbl-submenu]');
+      const open=()=>{
+      clearTimeout(row._submenuCloseTimer);
+      menu.querySelectorAll('.tbl-ctx-submenu-row.open').forEach(item=>item.classList.remove('open'));
+      row.classList.add('open');
+      requestAnimationFrame(()=>{
+        const submenu=row.querySelector('.tbl-ctx-submenu'),menuRect=menu.getBoundingClientRect();
+        menu.classList.toggle('flip-submenus',menuRect.right+176>innerWidth);
+        submenu.style.top='-6px';
+        const rect=submenu.getBoundingClientRect();
+        if(rect.bottom>innerHeight-8)submenu.style.top=`${-6-(rect.bottom-innerHeight+8)}px`;
+        if(rect.top<8)submenu.style.top=`${parseFloat(submenu.style.top||-6)+(8-rect.top)}px`;
+      });
+      };
+      row.addEventListener('mouseenter',open);
+      row.addEventListener('mouseleave',()=>{row._submenuCloseTimer=setTimeout(()=>row.classList.remove('open'),220)});
+      row.querySelector('.tbl-ctx-submenu').addEventListener('mouseenter',()=>clearTimeout(row._submenuCloseTimer));
+      button.addEventListener('focus',open);
+      button.onclick=event=>event.preventDefault();
     });
     menu.style.display='block';
     let x=e.clientX,y=e.clientY;
     menu.style.left=x+'px';menu.style.top=y+'px';
     requestAnimationFrame(()=>{
       const r=menu.getBoundingClientRect();
-      if(r.right>innerWidth)menu.style.left=Math.max(0,x-r.width)+'px';
-      if(r.bottom>innerHeight)menu.style.top=Math.max(0,y-r.height)+'px';
+      menu.style.left=Math.max(8,Math.min(x,innerWidth-r.width-8))+'px';
+      menu.style.top=Math.max(8,Math.min(y,innerHeight-r.height-8))+'px';
     });
   }
   document.addEventListener('contextmenu',e=>{
@@ -8541,7 +8551,7 @@ function confirmDirtyAction(actionLabel){
     wrap.className='modal-backdrop';
     wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="dirty-title">
       <h3 id="dirty-title">저장되지 않은 변경사항</h3>
-      <p>현재 문서에 저장되지 않은 수정사항이 있습니다. 계속하기 전에 어떻게 처리할까요?</p>
+      <p>현재 문서에 저장되지 않은 수정사항이 있습니다.</p>
       <div class="modal-actions">
         <button class="tool primary" data-choice="save">저장 후 ${actionLabel}</button>
         <button class="tool" data-choice="discard">저장하지 않고 ${actionLabel}</button>
@@ -12113,7 +12123,8 @@ function applyPreviewStyleToExisting(range,styleName,value){
     || closestStyleHost(range.endContainer,range);
   // Reuse an inline wrapper only when all of its text is selected.
   // A styled cell/block or a partially selected span must not expand the range.
-  if(!host||!host.matches('span,font')||range.toString()!==host.textContent)return false;
+  const meaningful=text=>String(text||'').replace(/[\u200b\u00a0\s]/g,'');
+  if(!host||!host.matches('span,font')||meaningful(range.toString())!==meaningful(host.textContent))return false;
   pushPreviewFormatHistory();
   const prop=styleName.replace(/-([a-z])/g,(_,c)=>c.toUpperCase());
   if(value===''||value==null){
@@ -12179,25 +12190,36 @@ function styleWholePreview(styleName,value){
 function clearPreviewInlineStyle(range,styleName){
   if(!range||range.collapsed||!range.toString())return false;
   const boundary=closestPreviewBlock(range.commonAncestorContainer)?.parentElement||els.preview;
-  const host=inlineStyleHost(range.startContainer,styleName,boundary);
+  const meaningful=value=>String(value||'').replace(/[\u200b\u00a0\s]/g,'');
+  const matchingHosts=[];
+  for(let element=range.startContainer.nodeType===1?range.startContainer:range.startContainer.parentElement;element&&element!==boundary;element=element.parentElement){
+    const styled=styleName==='color'&&element.matches?.('font[color]')||element.style?.getPropertyValue(styleName)||(styleName==='background-color'&&(element.style?.background||element.matches?.('mark')));
+    // A background highlight is one visual run. Clearing only the selected
+    // middle used to split that run and leave colored caps on both sides.
+    // Remove every containing background run as a unit; text color keeps the
+    // narrower, selection-only behavior.
+    if(styled&&element.contains(range.endContainer)&&(styleName==='background-color'||meaningful(element.textContent)===meaningful(range.toString())))matchingHosts.push(element);
+  }
+  const host=matchingHosts[0]||inlineStyleHost(range.startContainer,styleName,boundary);
   if(host&&host.contains(range.endContainer)){
     pushPreviewFormatHistory();
-    const meaningful=value=>String(value||'').replace(/[\u200b\u00a0\s]/g,'');
     // Selecting visible text commonly excludes the styled wrapper's leading
     // and trailing spaces. Treat that as a whole-wrapper clear so one click on
     // "Default" cannot leave colored bars on both sides of the text.
-    if(meaningful(range.toString())===meaningful(host.textContent)){
-      const fallback=closestPreviewBlock(host)||els.preview;
-      const children=[...host.childNodes],first=children[0],last=children.at(-1);
-      removeInlineStyleProperty(host,styleName);
-      if(styleName==='color'&&host.matches?.('font[color]'))host.removeAttribute('color');
-      const cleared=host.getAttribute('style')||host.attributes.length?host:null;
-      if(!host.attributes.length)host.replaceWith(...children);
-      const target=cleared?.isConnected?cleared:fallback;
+    if(matchingHosts.length){
+      const outer=matchingHosts.at(-1),walker=document.createTreeWalker(outer,NodeFilter.SHOW_TEXT),textNodes=[];let textNode;
+      while((textNode=walker.nextNode()))textNodes.push(textNode);
+      matchingHosts.forEach(item=>{
+        removeInlineStyleProperty(item,styleName);
+        if(styleName==='color'&&item.matches?.('font[color]'))item.removeAttribute('color');
+      });
+      matchingHosts.forEach(item=>{
+        if(!item.isConnected)return;
+        if(styleName==='background-color'&&item.matches('mark')||!item.attributes.length)item.replaceWith(...item.childNodes);
+      });
       const next=document.createRange();
-      if(cleared?.isConnected)next.selectNodeContents(cleared);
-      else if(first?.isConnected&&last?.isConnected){next.setStartBefore(first);next.setEndAfter(last)}
-      else next.selectNodeContents(target);
+      const first=textNodes.find(node=>node.isConnected),last=[...textNodes].reverse().find(node=>node.isConnected);
+      if(first&&last){next.setStart(first,0);next.setEnd(last,last.length)}else next.selectNodeContents(closestPreviewBlock(range.commonAncestorContainer)||els.preview);
       const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);
       state.savedPreviewRange=next.cloneRange();syncFromPreview();return true;
     }
@@ -12800,6 +12822,8 @@ function renderCustomFormatSavedWindow(){
   if(!customFormatSavedWindow)return;
   customFormatSavedWindow.querySelector('header strong').textContent=uiLanguage==='en'?'Saved custom styles':'저장된 사용자 지정 서식';
   customFormatSavedWindow.querySelector('[data-saved-custom-format-close]').setAttribute('aria-label',uiLanguage==='en'?'Close':'닫기');
+  customFormatSavedWindow.querySelector('[data-saved-custom-format-reset="text"]').textContent=uiLanguage==='en'?'Reset':'초기화';
+  customFormatSavedWindow.querySelector('[data-saved-custom-format-reset="bg"]').textContent=uiLanguage==='en'?'Reset':'초기화';
   const store=loadCustomFormats(),list=customFormatSavedWindow.querySelector('[data-saved-custom-format-list]');
   list.replaceChildren();
   if(!store.presets.length){
@@ -12835,10 +12859,14 @@ function openCustomFormatSavedWindow(anchor){
   if(customFormatSavedWindow){customFormatSavedWindow.style.zIndex=String(++savedColorWindowZ);renderCustomFormatSavedWindow();return true}
   const panel=document.createElement('section');panel.className='saved-custom-format-window';
   panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','false');
-  panel.innerHTML=`<header><strong>${uiLanguage==='en'?'Saved custom styles':'저장된 사용자 지정 서식'}</strong><button type="button" data-saved-custom-format-close aria-label="${uiLanguage==='en'?'Close':'닫기'}">×</button></header><div data-saved-custom-format-list></div>`;
+  panel.innerHTML=`<header><strong>${uiLanguage==='en'?'Saved custom styles':'저장된 사용자 지정 서식'}</strong><button type="button" data-saved-custom-format-close aria-label="${uiLanguage==='en'?'Close':'닫기'}">×</button></header><div class="saved-custom-format-resets"><button type="button" data-saved-custom-format-reset="text" aria-label="${uiLanguage==='en'?'Reset text color':'글자색 초기화'}">${uiLanguage==='en'?'Reset':'초기화'}</button><button type="button" data-saved-custom-format-reset="bg" aria-label="${uiLanguage==='en'?'Reset background':'배경색 초기화'}">${uiLanguage==='en'?'Reset':'초기화'}</button></div><div data-saved-custom-format-list></div>`;
   panel.querySelector('[data-saved-custom-format-close]').onclick=event=>{event.stopPropagation();closeCustomFormatSavedWindow()};
+  panel.querySelectorAll('[data-saved-custom-format-reset]').forEach(button=>{
+    button.addEventListener('mousedown',event=>event.preventDefault());
+    button.addEventListener('click',event=>{event.stopPropagation();applyPickedColor(button.dataset.savedCustomFormatReset,'')});
+  });
   panel.addEventListener('click',event=>event.stopPropagation());
-  document.body.appendChild(panel);customFormatSavedWindow=panel;enableSavedColorWindowDrag(panel);renderCustomFormatSavedWindow();
+  document.body.appendChild(panel);customFormatSavedWindow=panel;enableSavedColorWindowDrag(panel);enableSavedCustomFormatResize(panel);renderCustomFormatSavedWindow();
   const anchorRect=anchor.getBoundingClientRect(),rect=panel.getBoundingClientRect();
   panel.style.left=`${Math.max(8,Math.min(innerWidth-rect.width-8,anchorRect.left))}px`;
   panel.style.top=`${Math.max(8,Math.min(innerHeight-rect.height-8,anchorRect.bottom+8))}px`;
@@ -13707,7 +13735,11 @@ function previewMarkdownCaretOffset(source,offset){
 }
 function previewMarkdownCandidate(text){
   return /(?:\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|`[^`\n]+`|!?\[[^\]\n]+\]\([^)\n]+\)|(?:^|\s)[*_][^*_\n]+[*_](?:\s|$))/.test(text)
-    || /^\s{0,3}(?:#{1,6}\s+\S|[-+*](?:\s+|$)(?:\S.*)?|\d+\.(?:\s+|$)(?:\S.*)?|>\s+\S|```|~~~|(?:---+|\*\*\*+)\s*$)/.test(text);
+    || /^\s{0,3}(?:#{1,6}\s+\S|[-+*](?:\s+|$)(?:\S.*)?|\d+\.(?:\s+|$)(?:\S.*)?|(?:>[ \t]*)+\S|```|~~~|(?:---+|\*\*\*+)\s*$)/.test(text);
+}
+function previewQuoteMarker(text){
+  const marker=String(text||'').match(/^\s{0,3}(?:>[ \t]*)+(?=\S)/);
+  return marker?{length:marker[0].length,depth:(marker[0].match(/>/g)||[]).length}:null;
 }
 function confirmPreviewQuoteFormatLoss(){
   return new Promise(resolve=>{
@@ -13753,12 +13785,14 @@ function removePreviewTextPrefix(block,count){
   }
 }
 function applyPreviewQuoteKeepingFormat(block,text){
-  const marker=text.match(/^\s{0,3}>\s+/);
+  const marker=previewQuoteMarker(text);
   if(!marker||!block?.isConnected)return false;
   if(!shouldDeferPreviewMarkdownSync())pushHistory(true);
-  removePreviewTextPrefix(block,marker[0].length);
+  removePreviewTextPrefix(block,marker.length);
   block.querySelectorAll(':scope > .block-move-handle,:scope > .form-move-handle').forEach(handle=>handle.remove());
-  const quote=document.createElement('blockquote');
+  const quotes=Array.from({length:marker.depth},()=>document.createElement('blockquote'));
+  const quote=quotes[0],deepest=quotes[quotes.length-1];
+  for(let index=1;index<quotes.length;index++)quotes[index-1].appendChild(quotes[index]);
   let caretTarget=block;
   if(block.matches('li')&&block.parentElement?.matches('ul,ol')){
     const list=block.parentElement,parent=list.parentNode;
@@ -13769,15 +13803,15 @@ function applyPreviewQuoteKeepingFormat(block,text){
     while(sibling){const next=sibling.nextSibling;after.append(sibling);sibling=next}
     const paragraph=document.createElement('p');
     while(block.firstChild)paragraph.appendChild(block.firstChild);
-    quote.appendChild(paragraph);caretTarget=paragraph;
+    deepest.appendChild(paragraph);caretTarget=paragraph;
     if(before.childNodes.length)parent.insertBefore(before,list);
     parent.insertBefore(quote,list);
     if(after.childNodes.length)parent.insertBefore(after,list);
     list.remove();
   }else{
-    block.before(quote);quote.appendChild(block);
+    block.before(quote);deepest.appendChild(block);
   }
-  quote.appendChild(makeMoveHandle('인용 위치 이동'));
+  quotes.forEach(item=>item.appendChild(makeMoveHandle('인용 위치 이동')));
   placeCaretAtPreviewEnd(caretTarget);
   rememberPreviewRange();finishPreviewMarkdownMutation();
   return true;
@@ -14010,7 +14044,7 @@ function applyPreviewMarkdown(block){
     delete block.dataset.listFormatAllowed;
     removeListFormatting=true;
   }
-  const quoteCandidate=/^\s{0,3}>\s+\S/.test(text);
+  const quoteCandidate=Boolean(previewQuoteMarker(text));
   if(quoteCandidate&&previewBlockHasInlineFormatting(block)){
     if(block.dataset.quoteFormatDismissed==='1')return false;
     if(block.dataset.quoteFormatAllowed!=='1'){
@@ -15339,6 +15373,25 @@ function updatePreviewFormatButtons(range){
   updateFormatButtons._last={inBold,inItalic,inUnder};
   return true;
 }
+function cssColorSample(value){
+  const parts=String(value||'').match(/[\d.]+/g)?.map(Number)||[];
+  if(parts.length<3)return null;
+  return{hex:rgbToHex(parts[0],parts[1],parts[2]),alpha:parts.length>3?Math.max(0,Math.min(1,parts[3])):1};
+}
+function updatePreviewSelectionColors(range){
+  if(!range||range.collapsed)return;
+  const details=selectedPreviewFormatDetails(range);
+  if(!details)return;
+  const text=details.options.color.available?cssColorSample(details.options.color.value):null;
+  const background=details.options.backgroundColor.available?cssColorSample(details.options.backgroundColor.value):null;
+  if(text)setHexInputValue($('fmt-color'),text.hex);
+  if(background){
+    setHexInputValue($('fmt-bg'),background.hex);
+    const opacity=$('fmt-bg-opacity');
+    if(opacity){opacity.value=String(Math.round(background.alpha*100));if(opacity.nextElementSibling)opacity.nextElementSibling.textContent=`${opacity.value}%`}
+  }
+  if(text||background)syncColorButtons();
+}
 function updateFormatButtons(){
   const selection=window.getSelection();
   const previewRange=selection?.rangeCount?selection.getRangeAt(0):null;
@@ -15412,6 +15465,7 @@ function scheduleFormatStateRefresh(){
     if(range&&els.preview.contains(range.commonAncestorContainer)){
       updateFormatButtons();
       updatePreviewFontSize();
+      updatePreviewSelectionColors(range);
     }else if(document.activeElement===els.editor)updateFormatButtons();
   });
 }
@@ -15622,6 +15676,24 @@ function enableSavedColorWindowDrag(panel){
   });
   panel.addEventListener('pointerdown',()=>{panel.style.zIndex=String(++savedColorWindowZ)});
 }
+function enableSavedCustomFormatResize(panel){
+  ['right','bottom'].forEach(edge=>{
+    const handle=document.createElement('span');handle.className=`saved-custom-format-resizer ${edge}`;handle.setAttribute('aria-hidden','true');
+    handle.addEventListener('pointerdown',event=>{
+      if(event.button!==0)return;
+      event.preventDefault();event.stopPropagation();panel.style.zIndex=String(++savedColorWindowZ);
+      const rect=panel.getBoundingClientRect(),startX=event.clientX,startY=event.clientY,startWidth=rect.width,startHeight=rect.height;
+      handle.setPointerCapture?.(event.pointerId);panel.classList.add('is-resizing');
+      const move=moveEvent=>{
+        if(edge==='right')panel.style.width=`${Math.max(240,Math.min(innerWidth-rect.left-8,startWidth+moveEvent.clientX-startX))}px`;
+        else panel.style.height=`${Math.max(150,Math.min(innerHeight-rect.top-8,startHeight+moveEvent.clientY-startY))}px`;
+      };
+      const stop=()=>{panel.classList.remove('is-resizing');handle.removeEventListener('pointermove',move);handle.removeEventListener('pointerup',stop);handle.removeEventListener('pointercancel',stop)};
+      handle.addEventListener('pointermove',move);handle.addEventListener('pointerup',stop);handle.addEventListener('pointercancel',stop);
+    });
+    panel.appendChild(handle);
+  });
+}
 function openSavedColorWindow(type,anchor){
   if(!desktopSavedColorWindowEnabled())return false;
   let panel=savedColorWindows.get(type);
@@ -15824,7 +15896,7 @@ function ensureQuoteColorTabs(){
   const tabs=document.createElement('div');tabs.className='quote-color-tabs';
   [['background','배경색'],['border','인용선']].forEach(([kind,label])=>{
     const button=document.createElement('button');button.type='button';button.dataset.quoteColorKind=kind;button.textContent=uiLanguage==='en'?translatedUiText(label):label;
-    button.onclick=event=>{event.stopPropagation();setQuoteColorKind(kind)};tabs.appendChild(button);
+    button.onclick=event=>{event.stopPropagation();setQuoteColorKind(button.dataset.quoteColorKind)};tabs.appendChild(button);
   });
   const opacity=document.createElement('label');opacity.className='quote-color-opacity';
   opacity.innerHTML=`<span>${uiLanguage==='en'?'Opacity':'투명도'}</span><input type="range" min="0" max="100" value="100" step="1" data-quote-opacity><output>100%</output>`;
@@ -15833,7 +15905,15 @@ function ensureQuoteColorTabs(){
   slider.oninput=event=>{event.stopPropagation();output.textContent=`${slider.value}%`;applyQuoteColorValue(getHexInputValue($('fmt-color')),Number(slider.value),false)};
   panel.prepend(tabs,opacity);
 }
+function configureQuoteColorTabs(type){
+  const tabs=$('text-color-panel')?.querySelector('.quote-color-tabs');if(!tabs)return;
+  const definitions=type==='list'?[['background','배경색'],['marker','목록 기호']]:[['background','배경색'],['border','인용선']];
+  [...tabs.querySelectorAll('button')].forEach((button,index)=>{
+    const [kind,label]=definitions[index];button.dataset.quoteColorKind=kind;button.textContent=uiLanguage==='en'?translatedUiText(label):label;
+  });
+}
 function quoteColorProperty(kind,css=false){
+  if(kind==='marker')return'--zz-list-marker-color';
   if(kind==='border')return css?'border-left-color':'borderLeftColor';
   return css?'background-color':'backgroundColor';
 }
@@ -15854,19 +15934,19 @@ function mutateQuoteDesign(quote,mutation,push=true){
 function applyQuoteColorValue(value,opacity,push=true){
   if(!quoteColorTarget?.quote?.isConnected)return;
   const {quote,kind}=quoteColorTarget;
-  mutateQuoteDesign(quote,()=>{quote.style[quoteColorProperty(kind)]=quoteColorWithOpacity(value,opacity)},push);
+  mutateQuoteDesign(quote,()=>{quote.style.setProperty(quoteColorProperty(kind,true),quoteColorWithOpacity(value,opacity))},push);
 }
 function setQuoteColorKind(kind){
   if(!quoteColorTarget?.quote?.isConnected)return;
   quoteColorTarget.kind=kind;
   const panel=$('text-color-panel'),quote=quoteColorTarget.quote;
   panel.querySelectorAll('[data-quote-color-kind]').forEach(button=>button.classList.toggle('active',button.dataset.quoteColorKind===kind));
-  const style=getComputedStyle(quote),computed=kind==='border'?style.borderLeftColor:style.backgroundColor;
+  const style=getComputedStyle(quote),computed=kind==='marker'?getComputedStyle(quote,'::marker').color:kind==='border'?style.borderLeftColor:style.backgroundColor;
   const parts=computed.match(/[\d.]+/g)?.map(Number)||[],transparent=/rgba/i.test(computed)&&(parts[3]??1)===0;
   const fallback=kind==='background'?(normalizeColorValue(getComputedStyle(document.documentElement).getPropertyValue('--s1'))||'#ffffff'):currentThemeTextColor();
   const color=!transparent&&(normalizeColorValue(computed)||(parts.length>=3?rgbToHex(parts[0],parts[1],parts[2]):''))||fallback;
   setHexInputValue($('fmt-color'),color);syncColorButtons();
-  const inline=quote.style[quoteColorProperty(kind)],alpha=inline&&/rgba/i.test(inline)?(inline.match(/[\d.]+/g)?.map(Number)?.[3]??1):1;
+  const inline=quote.style.getPropertyValue(quoteColorProperty(kind,true)),alpha=inline&&/rgba/i.test(inline)?(inline.match(/[\d.]+/g)?.map(Number)?.[3]??1):1;
   const slider=panel.querySelector('[data-quote-opacity]'),percent=Math.round(alpha*100);
   if(slider){slider.value=String(percent);slider.nextElementSibling.textContent=`${percent}%`}
 }
@@ -15899,12 +15979,13 @@ function openPanel(panelId,toggleId){
     panel.style.overflowY='auto';
   }
 }
-function openQuoteColorPicker(quote,kind,event){
+function openQuoteColorPicker(quote,kind,event,type='quote'){
   closeAllPanels();
   const panel=$('text-color-panel'),toggle=$('text-color-toggle');
   if(!panel||!toggle||!quote?.isConnected)return;
-  quoteColorTarget={quote,kind};
+  quoteColorTarget={quote,kind,type};
   ensureQuoteColorTabs();
+  configureQuoteColorTabs(type);
   panel.classList.add('quote-color-mode');
   panel.classList.remove('hidden');
   toggle.classList.add('active');
@@ -15918,7 +15999,17 @@ function openQuoteColorPicker(quote,kind,event){
   restoreColorPanelPosition(panel);
 }
 function handleQuoteBorderDoubleClick(event){
-  const root=event.currentTarget,quote=event.target.closest?.('blockquote');
+  const root=event.currentTarget,listItem=event.target.closest?.('li');
+  if(listItem&&root.contains(listItem)){
+    const rect=listItem.getBoundingClientRect();
+    event.preventDefault();event.stopImmediatePropagation();
+    openQuoteColorPicker(listItem,event.clientX<=rect.left+18?'marker':'background',event,'list');
+    return;
+  }
+  const ancestors=[];
+  for(let item=event.target.closest?.('blockquote');item&&root.contains(item);item=item.parentElement?.closest('blockquote'))ancestors.push(item);
+  const rail=ancestors.map(quote=>({quote,distance:Math.abs(event.clientX-quote.getBoundingClientRect().left)})).filter(item=>item.distance<=14).sort((a,b)=>a.distance-b.distance)[0];
+  const quote=rail?.quote||ancestors[0];
   if(!quote||!root.contains(quote))return;
   const rect=quote.getBoundingClientRect();
   event.preventDefault();event.stopImmediatePropagation();
@@ -15937,7 +16028,7 @@ function showQuoteColorContextMenu(event){
   const copy=document.createElement('button'),paste=document.createElement('button'),separator=document.createElement('hr'),unify=document.createElement('button'),reset=document.createElement('button');
   copy.type=paste.type=unify.type=reset.type='button';
   copy.textContent=label('인용문 디자인 복사');paste.textContent=label('인용문 디자인 붙여넣기');paste.disabled=!quoteDesignClipboard;
-  unify.textContent=label(kind==='border'?'모든 인용선에 이 색상 적용':'모든 인용문 배경에 이 색상 적용');reset.textContent=label('기본 색상으로 되돌리기');
+  unify.textContent=label(kind==='border'?'모든 인용선에 이 색상 적용':'모든 인용문 배경에 이 색상 적용');reset.textContent=label('색상 초기화');
   copy.onclick=()=>{const style=getComputedStyle(quote);quoteDesignClipboard={borderLeftColor:style.borderLeftColor,backgroundColor:style.backgroundColor};menu.remove()};
   paste.onclick=()=>{if(!quoteDesignClipboard)return;mutateQuoteDesign(quote,()=>{quote.style.borderLeftColor=quoteDesignClipboard.borderLeftColor;quote.style.backgroundColor=quoteDesignClipboard.backgroundColor});menu.remove()};
   unify.onclick=()=>{const property=quoteColorProperty(kind),value=getComputedStyle(quote)[property];mutateQuoteDesign(quote,()=>root.querySelectorAll('blockquote').forEach(item=>item.style[property]=value));menu.remove()};
@@ -16744,7 +16835,7 @@ const EN_TEXT={
   '수평선':'Horizontal rule','줄바꿈':'Line break','페이지 구분':'Page break','인용':'Quote','중첩 인용':'Nested quote','각주':'Footnote','출처 인용':'Citation','참고문헌':'Bibliography','출처':'Source',
   '인라인 코드':'Inline code','코드 블록':'Code block','순서없는 목록':'Unordered list','순서있는 목록':'Ordered list',
   '빈 표 생성':'Create empty table','데이터로 표 만들기':'Create table from data','행·열 직접 입력...':'Enter rows and columns…',
-  '사용자 지정 테마':'Custom theme','배경색':'Background','글자색':'Text','인용선':'Quote line','적용':'Apply','빠른 색상':'Quick colors','최근 사용':'Recent','저장됨':'Saved','우클릭으로 삭제':'Right-click to delete','색 저장':'Save color','글자색 기본':'Reset text color','배경색 기본':'Reset background color','인용문 디자인 복사':'Copy quote design','인용문 디자인 붙여넣기':'Paste quote design','모든 인용선에 이 색상 적용':'Apply this color to all quote lines','모든 인용문 배경에 이 색상 적용':'Apply this color to all quote backgrounds','기본 색상으로 되돌리기':'Restore default color',
+  '사용자 지정 테마':'Custom theme','배경색':'Background','글자색':'Text','인용선':'Quote line','적용':'Apply','빠른 색상':'Quick colors','최근 사용':'Recent','저장됨':'Saved','우클릭으로 삭제':'Right-click to delete','색 저장':'Save color','초기화':'Reset','글자색 초기화':'Reset text color','배경색 초기화':'Reset background color','인용문 디자인 복사':'Copy quote design','인용문 디자인 붙여넣기':'Paste quote design','모든 인용선에 이 색상 적용':'Apply this color to all quote lines','모든 인용문 배경에 이 색상 적용':'Apply this color to all quote backgrounds','색상 초기화':'Reset color',
   '색 조절':'Color adjustment','저장된 색 없음':'No saved colors','사용 기록 없음':'No recent colors','기본':'Default'
   ,'사이드바 접기':'Collapse sidebar','사이드바 보기':'Sidebar view','화면 테마 도움말':'Theme help','파일을 현재 문서에 삽입':'Insert file into the current document',
   '사용자 지정 서식 (Ctrl+Alt+S)':'Custom formatting (Ctrl+Alt+S)','서식 목록':'Style list','글씨 크기(px)':'Font size (px)','글씨 크기 목록':'Font size list',
@@ -16809,7 +16900,7 @@ const EN_TEXT={
   '전용 서식 출력은 PDF 저장만 지원합니다. MD 저장에는 Obsidian 문법 원문이 보존됩니다.':'Rich formatting is supported only when saving as PDF. The original Obsidian syntax is preserved when saving as MD.',
   '문서 추가':'Add document','새 문서를 만들거나 기존 파일을 불러올 수 있습니다.':'Create a new document or open an existing file.','빈 Markdown 문서를 새로 만듭니다.':'Create a blank Markdown document.','MD, 코드, 이미지 등의 파일을 불러옵니다.':'Open Markdown, code, image, and other files.',
   '라이트·다크·사용자 지정 테마는 PDF로 저장할 때 적용됩니다. MD 파일로 저장할 때는 배경색과 글자색이 문서 내용에 포함되지 않습니다.':'Light, dark, and custom themes are applied when saving as PDF. Background and text colors are not included in document content when saving as MD.',
-  '저장되지 않은 변경사항':'Unsaved changes','현재 문서에 저장되지 않은 수정사항이 있습니다. 계속하기 전에 어떻게 처리할까요?':'The current document has unsaved changes. What would you like to do before continuing?','저장 후 닫기':'Save and close','저장하지 않고 닫기':'Close without saving',
+  '저장되지 않은 변경사항':'Unsaved changes','현재 문서에 저장되지 않은 수정사항이 있습니다.':'The current document has unsaved changes.','현재 문서에 저장되지 않은 수정사항이 있습니다. 계속하기 전에 어떻게 처리할까요?':'The current document has unsaved changes. What would you like to do before continuing?','저장 후 닫기':'Save and close','저장하지 않고 닫기':'Close without saving',
   '파일 닫기':'Close file','파일을 닫았습니다.':'File closed.'
   ,'스포이드 사용 불가':'Eyedropper unavailable','현재 브라우저에서는 화면 색 선택을 지원하지 않습니다. 최신 Chrome 또는 Edge에서 사용해 주세요.':'Screen color picking is not supported in this browser. Use the latest Chrome or Edge.','스포이드 오류':'Eyedropper error','색을 선택하지 못했습니다. 브라우저에서 화면 색 선택이 허용되는지 확인해 주세요.':'Could not pick a color. Check that the browser allows screen color selection.',
   'Enter를 누르면 마크다운 강제 줄바꿈 문법인 공백 두 칸 + 줄바꿈을 넣습니다.':'Pressing Enter inserts two spaces and a line break, the Markdown hard-break syntax.','프리뷰에서 완성한 마크다운 문법을 굵게, 코드, 제목, 목록 등의 실제 서식으로 바로 변환합니다.':'Immediately converts completed Markdown syntax in Preview into formatting such as bold, code, headings, and lists.','색상이나 강조가 있는 줄을 목록으로 바꿀 때 서식 유지 여부를 확인합니다.':'Asks whether to preserve formatting when converting a line with color or emphasis into a list.','URL을 붙여넣으면 클릭할 수 있는 링크 서식으로 자동 변환합니다.':'Automatically converts pasted URLs into clickable links.','미리보기의 글씨에 설정한 시간 동안 마우스를 올리면 원문을 수정할 수 있는 작은 창을 표시합니다.':'Shows a small source editor after you hover over Preview text for the selected delay.','편집창과 미리보기의 세로 스크롤 위치를 서로 맞춥니다.':'Keeps the vertical scroll positions of Markdown and Preview in sync.','마크다운 편집창 왼쪽에 행 번호를 표시합니다.':'Shows line numbers beside the Markdown editor.','분할 보기에서 Preview와 Markdown의 위아래 순서를 바꿉니다.':'Swaps the vertical order of Preview and Markdown in split view.','문서 탐색 하단에 현재 문서에서 사용한 해시태그를 모아서 표시합니다.':'Lists hashtags used in the current document at the bottom of Document navigation.',
@@ -16819,7 +16910,7 @@ const EN_TEXT={
   '붙여넣기 실패':'Paste failed','클립보드의 텍스트를 읽을 수 없습니다.':'Could not read text from the clipboard.','제목 없음':'Untitled','문서 맨 아래에 배치':'Place at bottom of document','문서 맨 위에 배치':'Place at top of document','이 블록 위에 배치':'Place above this block','이 글자 위치에 삽입':'Insert at this text position','첫 번째 양식 위치에 배치':'Place at the first form position','이 양식 앞에 배치':'Place before this form','이 양식 뒤에 배치':'Place after this form','고정됨':'Pinned',
   '올바른 링크 주소를 입력해 주세요.':'Enter a valid link URL.','연결 문서 없음':'No linked documents','이 열 필터 및 정렬':'Filter and sort this column','오름차순 정렬':'Sort ascending','내림차순 정렬':'Sort descending','이 표 필터·정렬 초기화':'Reset filtering and sorting for this table','값 필터':'Value filter','값 검색':'Search values','전체 선택 / 해제':'Select / clear all','(빈 값)':'(Empty)','서식 필터':'Formatting filter','서식 없는 셀만':'Unformatted cells only','굵게, 기울임, 밑줄, 글자색, 배경색이 없는 셀만 표시합니다.':'Show only cells without bold, italic, underline, text color, or background color.','글자색 선택':'Choose text color','배경색 선택':'Choose background color',
   '셀 합치기':'Merge cells','이미 합쳐진 셀이 포함된 범위는 먼저 셀 나누기를 해주세요.':'Split existing merged cells before merging this range.','셀 나누기':'Split cells','선택한 셀을 지정한 행과 열로 나눕니다.':'Split the selected cell into the specified rows and columns.',
-  '전체 선택':'Select all','선택 해제':'Clear selection','선택 셀 잘라내기':'Cut selected cells','선택 셀 복사':'Copy selected cells','선택 셀에 붙여넣기':'Paste into selected cells','선택 셀 내용 지우기':'Clear selected cells','선택 셀 합치기':'Merge selected cells','선택 셀 나누기…':'Split selected cells…','셀 높이를 같게':'Distribute rows evenly','셀 너비를 같게':'Distribute columns evenly','표 잘라내기':'Cut table','표 복사':'Copy table','위에 행 추가':'Insert row above','아래에 행 추가':'Insert row below','왼쪽에 열 추가':'Insert column left','오른쪽에 열 추가':'Insert column right','현재 행 삭제':'Delete current row','현재 열 삭제':'Delete current column','표 삭제':'Delete table','표 형태 초기화':'Reset table shape',
+  '전체 선택':'Select all','선택 해제':'Clear selection','선택':'Selection','선택한 셀':'Selected cells','내용 지우기':'Clear contents','셀 나누기…':'Split cells…','높이 같게':'Equal height','너비 같게':'Equal width','표':'Table','형태 초기화':'Reset shape','셀 편집':'Edit cells','크기 맞춤':'Match size','표 작업':'Table actions','행 · 열 추가':'Add rows · columns','위에 행':'Row above','아래에 행':'Row below','왼쪽에 열':'Column left','오른쪽에 열':'Column right','현재 행':'Current row','현재 열':'Current column','표 전체':'Entire table','목록 기호':'List marker','선택 셀 잘라내기':'Cut selected cells','선택 셀 복사':'Copy selected cells','선택 셀에 붙여넣기':'Paste into selected cells','선택 셀 내용 지우기':'Clear selected cells','선택 셀 합치기':'Merge selected cells','선택 셀 나누기…':'Split selected cells…','셀 높이를 같게':'Distribute rows evenly','셀 너비를 같게':'Distribute columns evenly','표 잘라내기':'Cut table','표 복사':'Copy table','위에 행 추가':'Insert row above','아래에 행 추가':'Insert row below','왼쪽에 열 추가':'Insert column left','오른쪽에 열 추가':'Insert column right','현재 행 삭제':'Delete current row','현재 열 삭제':'Delete current column','표 삭제':'Delete table','표 형태 초기화':'Reset table shape',
   '잘라내기':'Cut','복사':'Copy','붙여넣기':'Paste','제거':'Remove','삭제':'Delete','순서…':'Order…','수식 변경':'Edit equation','서식 복사':'Copy formatting','서식 붙여넣기':'Paste formatting','서식 제거':'Clear formatting','이미지 대체':'Replace image','이미지 삭제':'Delete image','행 수':'Rows','열 수':'Columns','나누기':'Split','합쳐진 셀을 풀고 다시 나눕니다.':'Unmerge the cell, then split it again.','다른 합쳐진 셀이 있는 표에서는 해당 셀도 먼저 나눠 주세요.':'Split the other merged cells in this table first.','빈틈 없이 직사각형으로 선택한 셀만 합칠 수 있습니다.':'Only a complete rectangular cell selection can be merged.',
   '루트':'Root','단일문서':'Single document','폴더 이름을 입력해 주세요.':'Enter a folder name.','같은 이름의 폴더가 있습니다.':'A folder with that name already exists.','폴더 복제':'Duplicate folder','폴더 이름 변경':'Rename folder','이동할 수 없음':'Cannot move','대상 위치에 같은 이름의 파일 또는 폴더가 있습니다.':'A file or folder with the same name exists at the destination.',
   '업로드된 MD에서 참조를 찾지 못했습니다.':'No references were found in the uploaded Markdown.','문서를 열면 제목과 문단 탐색이 표시됩니다.':'Open a document to browse its headings and paragraphs.','펼치기':'Expand','접기':'Collapse','제목 서식이 없습니다.':'No heading styles.','해시태그':'Hashtags','사용된 해시태그가 없습니다.':'No hashtags used.','해시태그 제거':'Remove hashtag',
