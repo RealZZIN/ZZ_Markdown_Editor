@@ -172,7 +172,8 @@ function auditLifecycleStability(mainSource){
   assert(mainSource.includes('function enableOptionsPanelDrag(')&&mainSource.includes("md-options-panel-position"),'Editor options panel cannot be dragged or restore its position.');
   assert(mainSource.includes('let top=rect.top')&&mainSource.includes('rect.right+gap'),'Option previews are not aligned directly beside their option row.');
   assert(mainSource.includes('positionOptionPreview(activeOptionPreviewLabel)')&&mainSource.includes('function positionOptionPreview('),'Option previews do not follow the options panel while it is dragged.');
-  assert(styleSource.includes('.preview-box .preview::-webkit-scrollbar')&&styleSource.includes('height:12px'),'Mobile horizontal preview dragging is not persistently visible.');
+  assert(styleSource.includes('.option-example-head { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:5px;'),'Option preview headings are spaced too far from their descriptions.');
+  assert(mainSource.includes('function installMobilePreviewScrollDrag(')&&mainSource.includes("range.addEventListener('input'")&&styleSource.includes('.mobile-preview-hscroll { position:absolute'),'Mobile horizontal preview dragging is not persistently visible or synchronized.');
   assert(mainSource.includes('class="ac-dependent-options"')&&styleSource.includes('.ac-dependent-options'),'Document split dependencies are not visually grouped beneath their parent option.');
   assert(styleSource.includes('.ac-panel label:hover .ac-desc'),'Option descriptions are still permanently visible instead of appearing on demand.');
   assert(styleSource.includes('width:168px')&&styleSource.includes('font:12px var(--font)'),'The main table menu is not compact or does not use Pretendard.');

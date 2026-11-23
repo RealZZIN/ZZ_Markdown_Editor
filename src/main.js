@@ -44,6 +44,32 @@ const codeLanguageByExt={
 };
 const codeLanguageByName={dockerfile:'dockerfile',makefile:'makefile'};
 const els={app:$('app'),sidebar:$('sidebar'),list:$('file-list'),outline:$('outline-list'),count:$('file-count'),status:$('status'),editor:$('editor'),markdownHighlight:$('markdown-highlight'),preview:$('preview'),convertPreview:$('convert-preview'),convertList:$('convert-list'),home:$('home'),homeMergeList:$('home-merge-list'),homeImageSummary:$('home-image-summary'),mergeList:$('merge-list'),mergeResult:$('merge-result'),editSplit:$('edit-split'),documentSplit:$('document-split'),primaryDocumentPane:$('primary-document-pane'),secondaryDocumentPane:$('secondary-document-pane'),secondaryEditor:$('secondary-editor'),secondaryPreview:$('secondary-preview'),secondaryEditSplit:$('secondary-edit-split'),hoverPreview:$('hover-preview'),lineGutter:$('line-gutter'),previewLineGutter:$('preview-line-gutter'),folderInput:$('folder-input'),fileInput:$('file-input'),imageInput:$('image-input'),pdfInput:$('pdf-input'),homeSource:$('home-source-name'),homeOutput:$('home-output-name'),homeOutputExt:$('home-output-ext')};
+function installMobilePreviewScrollDrag(preview){
+  const body=preview?.parentElement;if(!body)return;
+  const control=document.createElement('div');control.className='mobile-preview-hscroll';
+  control.innerHTML='<input type="range" min="0" max="0" value="0" step="1" aria-label="미리보기 가로 스크롤">';
+  const range=control.querySelector('input');body.appendChild(control);
+  let frame=0,setting=false;
+  const update=()=>{
+    frame=0;
+    const max=Math.max(0,preview.scrollWidth-preview.clientWidth);
+    range.max=String(Math.max(1,Math.round(max)));
+    range.value=String(Math.min(max,Math.round(preview.scrollLeft)));
+    range.disabled=max<1;
+    control.classList.toggle('inactive',max<1);
+  };
+  const schedule=()=>{if(!frame)frame=requestAnimationFrame(update)};
+  range.addEventListener('input',()=>{
+    setting=true;preview.scrollLeft=Math.min(Number(range.max),Number(range.value));setting=false;
+  });
+  preview.addEventListener('scroll',()=>{if(!setting)schedule()},{passive:true});
+  new MutationObserver(schedule).observe(preview,{childList:true,subtree:true,attributes:true});
+  if(window.ResizeObserver)new ResizeObserver(schedule).observe(preview);
+  window.addEventListener('resize',schedule,{passive:true});
+  schedule();
+}
+installMobilePreviewScrollDrag(els.preview);
+installMobilePreviewScrollDrag(els.secondaryPreview);
 let activePreviewTableCell=null;
 const documentSplitState={activePane:'primary',secondaryFile:null,secondaryView:localStorage.getItem('md-secondary-edit-view')||'both',secondaryTimer:0,secondaryHistoryTimer:0,secondaryHistoryFile:null,secondaryRenderFrame:0,maximizedPane:null,secondarySelection:{start:0,end:0},secondarySurface:'editor',secondaryPreviewRange:null,secondaryPendingInsertionContext:null,pendingImagePane:'primary'};
 if(window.mermaid){
@@ -16860,7 +16886,7 @@ const EN_TEXT={
   '다운로드':'Download','병합 파일을 기기에 저장합니다.':'Save the merged file to this device.',
   '문서 목록에 추가':'Add to document list','현재 작업 목록에 새 문서로 추가합니다.':'Add it as a new document in the current workspace.',
   '둘 다':'Both','다운로드하고 문서 목록에도 추가합니다.':'Download it and add it to the document list.',
-  'Markdown':'Markdown','Preview':'Preview','분할':'Split','보기':'Preview',
+  'Markdown':'Markdown','Preview':'Preview','분할':'Split','보기':'Preview','미리보기 가로 스크롤':'Preview horizontal scroll',
   '가이드':'Guide','기능 가이드 표시':'Show feature guides','설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.':'Hover over a feature to see instructions and examples.','설명이 필요한 기능을 길게 누르면 사용법과 예시를 보여줍니다.':'Press and hold a feature to see instructions and examples.',
   '가이드 다시 보기':'View guides again','목록에서 다시 볼 가이드를 선택합니다.':'Choose a guide to view again.',
   '단축키':'Shortcuts','단축키 설정':'Shortcut settings','17개 명령의 단축키를 확인하고 변경합니다.':'Review and change shortcuts for 17 commands.',
