@@ -46,7 +46,6 @@ const codeLanguageByName={dockerfile:'dockerfile',makefile:'makefile'};
 const els={app:$('app'),sidebar:$('sidebar'),list:$('file-list'),outline:$('outline-list'),count:$('file-count'),status:$('status'),editor:$('editor'),markdownHighlight:$('markdown-highlight'),preview:$('preview'),convertPreview:$('convert-preview'),convertList:$('convert-list'),home:$('home'),homeMergeList:$('home-merge-list'),homeImageSummary:$('home-image-summary'),mergeList:$('merge-list'),mergeResult:$('merge-result'),editSplit:$('edit-split'),documentSplit:$('document-split'),primaryDocumentPane:$('primary-document-pane'),secondaryDocumentPane:$('secondary-document-pane'),secondaryEditor:$('secondary-editor'),secondaryPreview:$('secondary-preview'),secondaryEditSplit:$('secondary-edit-split'),hoverPreview:$('hover-preview'),lineGutter:$('line-gutter'),previewLineGutter:$('preview-line-gutter'),folderInput:$('folder-input'),fileInput:$('file-input'),imageInput:$('image-input'),pdfInput:$('pdf-input'),homeSource:$('home-source-name'),homeOutput:$('home-output-name'),homeOutputExt:$('home-output-ext')};
 let activePreviewTableCell=null;
 const documentSplitState={activePane:'primary',secondaryFile:null,secondaryView:localStorage.getItem('md-secondary-edit-view')||'both',secondaryTimer:0,secondaryHistoryTimer:0,secondaryHistoryFile:null,secondaryRenderFrame:0,maximizedPane:null,secondarySelection:{start:0,end:0},secondarySurface:'editor',secondaryPreviewRange:null,secondaryPendingInsertionContext:null,pendingImagePane:'primary'};
-// ── Mermaid + marked setup ──
 if(window.mermaid){
   mermaid.initialize({startOnLoad:false,theme:'neutral',securityLevel:'loose'});
   const mermaidRenderer={code({text,lang}){
@@ -966,7 +965,7 @@ function preprocessEnhancedMarkdown(source){
     return token;
   });
   text=extractObsidianCallouts(text,replacements);
-  // ChatGPT-style source chips: ``[label](url) or ``https://example.com
+  // Source chip syntax: ``[label](url) or ``https://example.com
   text=text.replace(/``\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/gi,(_,label,url)=>{
     const token=markdownToken('SOURCECHIP');
     replacements.set(token,`<a class="zz-source-chip" href="${htmlEsc(url)}" title="${htmlEsc(url)}"><span class="zz-source-chip-label">${htmlEsc(label.trim())}</span></a>`);
@@ -1479,7 +1478,6 @@ function scheduleEditableCodeHighlight(code){
     if(caretOffset!==null)placeCaretAtPreviewTextOffset(target,caretOffset);
   },110);
 }
-/* ── Table resize ── */
 const CODE_LANGUAGES=[
   ['', '없음'],['python','Python'],['java','Java'],['c','C'],['cpp','C++'],['csharp','C#'],
   ['javascript','JavaScript'],['typescript','TypeScript'],['html','HTML'],['css','CSS'],['json','JSON'],
@@ -3762,7 +3760,6 @@ function finishTableResize(e){
 }
 document.addEventListener('pointerup',finishTableResize);
 document.addEventListener('pointercancel',finishTableResize);
-/* ── Table context menu ── */
 let resetTableInteractionState=()=>{};
 (function(){
   let ctx=null,ctxTarget=null,selectedTable=null,copiedTableHtml='',cellAnchor=null,cellFocus=null,cellDragging=false,ctxActionTaken=false;
@@ -10809,7 +10806,6 @@ secondarySplitResizer.addEventListener('mousedown',event=>{
 secondarySplitResizer.addEventListener('dblclick',event=>{event.preventDefault();els.secondaryEditSplit.style.gridTemplateRows=''});
 updateDocumentPaneTitles();updateDocumentPaneViewButtons();
 
-// ── 툴바 클릭 시 에디터 선택 유지 (capture=true → color mousedown보다 먼저 실행) ──
 let secondaryFormatContext=null;
 let secondaryFormatAsyncPending=false;
 function beginSecondaryFormatContext(){
@@ -10857,7 +10853,7 @@ function endSecondaryFormatContext(){
   if(sourceChanged)scheduleWorkspaceSave();
 }
 const secondaryFormatUiSelector='#format-tools,#fmt-heading-menu,#fmt-size-menu,#fmt-line-height-menu,#text-color-panel,#bg-color-panel,#table-size-panel,#ins-menu,#syntax-menu,.custom-format-panel,.saved-custom-format-window,.find-replace-panel';
-let formatScrollSnapshot=null,formatMenuScrollSnapshot=null,formatSelectionScrollSnapshot=null,formatScrollRestoreFrame=0;
+let formatScrollSnapshot=null,formatMenuScrollSnapshot=null,formatSelectionScrollSnapshot=null,formatScrollRestoreFrame=0,formatScrollRestoreToken=0;
 function captureFormatScrollSnapshot(){
   const secondary=documentSplitState.activePane==='secondary'&&documentSplitState.secondaryFile;
   const preview=secondary?els.secondaryPreview:els.preview,editor=secondary?els.secondaryEditor:els.editor;
@@ -10879,7 +10875,9 @@ for(const eventName of ['mouseup','keyup'])els.secondaryPreview.addEventListener
 function scheduleFormatScrollRestore(snapshot=formatScrollSnapshot){
   if(!snapshot)return;
   if(formatScrollRestoreFrame)cancelAnimationFrame(formatScrollRestoreFrame);
+  const restoreToken=++formatScrollRestoreToken;
   const restore=()=>{
+    if(restoreToken!==formatScrollRestoreToken)return false;
     const {preview,editor,anchor}=snapshot;
     if(!preview?.isConnected||!editor?.isConnected)return false;
     documentFormatScrollLock=true;syncScrollLock=true;
@@ -10899,12 +10897,15 @@ function scheduleFormatScrollRestore(snapshot=formatScrollSnapshot){
   // the following click capture the browser's temporary auto-scrolled value.
   if(!restore())return;
   formatScrollRestoreFrame=requestAnimationFrame(()=>{
+    if(restoreToken!==formatScrollRestoreToken)return;
     formatScrollRestoreFrame=0;restore();
-    requestAnimationFrame(()=>{restore();requestAnimationFrame(()=>{syncScrollLock=false;documentFormatScrollLock=false})});
+    requestAnimationFrame(()=>{if(restoreToken!==formatScrollRestoreToken)return;restore();requestAnimationFrame(()=>{if(restoreToken!==formatScrollRestoreToken)return;syncScrollLock=false;documentFormatScrollLock=false})});
   });
 }
 for(const eventName of ['mousedown','pointerdown'])document.addEventListener(eventName,event=>{
   if(!event.target.closest?.(secondaryFormatUiSelector))return;
+  const quoteSnapshot=event.target.closest?.('#text-color-panel')&&$('text-color-panel')?.classList.contains('quote-color-mode')?quoteColorTarget?.scrollSnapshot:null;
+  if(quoteSnapshot){formatScrollSnapshot=quoteSnapshot;formatMenuScrollSnapshot=quoteSnapshot;return}
   const submenu=event.target.closest?.('#fmt-heading-menu,#fmt-size-menu,#fmt-line-height-menu,#text-color-panel,#bg-color-panel,#table-size-panel,#ins-menu,#syntax-menu,.custom-format-panel,.saved-custom-format-window');
   if(submenu&&formatMenuScrollSnapshot?.preview?.isConnected)formatScrollSnapshot=formatMenuScrollSnapshot;
   else{
@@ -10920,7 +10921,8 @@ document.addEventListener('click',event=>{
 },true);
 for(const eventName of ['click','change'])document.addEventListener(eventName,event=>{
   if(!event.target.closest?.(secondaryFormatUiSelector))return;
-  const snapshot=formatScrollSnapshot||captureFormatScrollSnapshot();
+  const quoteSnapshot=event.target.closest?.('#text-color-panel')&&$('text-color-panel')?.classList.contains('quote-color-mode')?quoteColorTarget?.scrollSnapshot:null;
+  const snapshot=quoteSnapshot||formatScrollSnapshot||captureFormatScrollSnapshot();
   formatScrollSnapshot=null;
   scheduleFormatScrollRestore(snapshot);
 },false);
@@ -10970,7 +10972,6 @@ document.getElementById('format-tools').addEventListener('mousedown',e=>{
   }
 },true);
 
-// ── 스크롤 동기화 ──
 let syncScrollEnabled=savedOption('md-option-sync-scroll',false);
 let syncScrollLock=false;
 let scrollAnchorCache=null;
@@ -12822,8 +12823,8 @@ function renderCustomFormatSavedWindow(){
   if(!customFormatSavedWindow)return;
   customFormatSavedWindow.querySelector('header strong').textContent=uiLanguage==='en'?'Saved custom styles':'저장된 사용자 지정 서식';
   customFormatSavedWindow.querySelector('[data-saved-custom-format-close]').setAttribute('aria-label',uiLanguage==='en'?'Close':'닫기');
-  customFormatSavedWindow.querySelector('[data-saved-custom-format-reset="text"]').textContent=uiLanguage==='en'?'Reset':'초기화';
-  customFormatSavedWindow.querySelector('[data-saved-custom-format-reset="bg"]').textContent=uiLanguage==='en'?'Reset':'초기화';
+  customFormatSavedWindow.querySelector('[data-saved-custom-format-reset="text"]').textContent=uiLanguage==='en'?'Reset text color':'글자색 초기화';
+  customFormatSavedWindow.querySelector('[data-saved-custom-format-reset="bg"]').textContent=uiLanguage==='en'?'Reset background':'배경색 초기화';
   const store=loadCustomFormats(),list=customFormatSavedWindow.querySelector('[data-saved-custom-format-list]');
   list.replaceChildren();
   if(!store.presets.length){
@@ -12859,7 +12860,7 @@ function openCustomFormatSavedWindow(anchor){
   if(customFormatSavedWindow){customFormatSavedWindow.style.zIndex=String(++savedColorWindowZ);renderCustomFormatSavedWindow();return true}
   const panel=document.createElement('section');panel.className='saved-custom-format-window';
   panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','false');
-  panel.innerHTML=`<header><strong>${uiLanguage==='en'?'Saved custom styles':'저장된 사용자 지정 서식'}</strong><button type="button" data-saved-custom-format-close aria-label="${uiLanguage==='en'?'Close':'닫기'}">×</button></header><div class="saved-custom-format-resets"><button type="button" data-saved-custom-format-reset="text" aria-label="${uiLanguage==='en'?'Reset text color':'글자색 초기화'}">${uiLanguage==='en'?'Reset':'초기화'}</button><button type="button" data-saved-custom-format-reset="bg" aria-label="${uiLanguage==='en'?'Reset background':'배경색 초기화'}">${uiLanguage==='en'?'Reset':'초기화'}</button></div><div data-saved-custom-format-list></div>`;
+  panel.innerHTML=`<header><strong>${uiLanguage==='en'?'Saved custom styles':'저장된 사용자 지정 서식'}</strong><button type="button" data-saved-custom-format-close aria-label="${uiLanguage==='en'?'Close':'닫기'}">×</button></header><div class="saved-custom-format-resets"><button type="button" data-saved-custom-format-reset="text" aria-label="${uiLanguage==='en'?'Reset text color':'글자색 초기화'}">${uiLanguage==='en'?'Reset text color':'글자색 초기화'}</button><button type="button" data-saved-custom-format-reset="bg" aria-label="${uiLanguage==='en'?'Reset background':'배경색 초기화'}">${uiLanguage==='en'?'Reset background':'배경색 초기화'}</button></div><div data-saved-custom-format-list></div>`;
   panel.querySelector('[data-saved-custom-format-close]').onclick=event=>{event.stopPropagation();closeCustomFormatSavedWindow()};
   panel.querySelectorAll('[data-saved-custom-format-reset]').forEach(button=>{
     button.addEventListener('mousedown',event=>event.preventDefault());
@@ -15476,7 +15477,6 @@ document.addEventListener('selectionchange',()=>{
   const range=selection?.rangeCount?selection.getRangeAt(0):null;
   if(range&&els.preview.contains(range.commonAncestorContainer)||document.activeElement===els.editor)scheduleFormatStateRefresh();
 });
-// ── Color palette ──
 const MAX_CHIST=16,MAX_CSAVE=16,CUSTOM_THEME_HISTORY_MAX=16;
 function loadC(k){try{return JSON.parse(localStorage.getItem(k))||[]}catch{return[]}}
 function saveC(k,a){localStorage.setItem(k,JSON.stringify(a))}
@@ -15735,7 +15735,6 @@ function bindSavedColorDoubleClick(type,element){
 bindSavedColorDoubleClick('text',$('text-color-toggle'));
 bindSavedColorDoubleClick('bg',$('bg-color-toggle'));
 
-// ── Panel positioning (fixed, escapes overflow:hidden) ──
 const tableSizePanel=document.createElement('div');
 tableSizePanel.id='table-size-panel';
 tableSizePanel.className='table-size-panel hidden';
@@ -15891,6 +15890,7 @@ const PANELS=['text-color-panel','bg-color-panel','custom-theme-panel','ins-menu
 const TOGGLES=['text-color-toggle','bg-color-toggle','fmt-insert-toggle','fmt-syntax-toggle','fmt-table-toggle'];
 let quoteColorTarget=null;
 let quoteDesignClipboard=null;
+let quoteColorInteraction=null;
 function ensureQuoteColorTabs(){
   const panel=$('text-color-panel');if(!panel||panel.querySelector('.quote-color-tabs'))return;
   const tabs=document.createElement('div');tabs.className='quote-color-tabs';
@@ -15901,8 +15901,9 @@ function ensureQuoteColorTabs(){
   const opacity=document.createElement('label');opacity.className='quote-color-opacity';
   opacity.innerHTML=`<span>${uiLanguage==='en'?'Opacity':'투명도'}</span><input type="range" min="0" max="100" value="100" step="1" data-quote-opacity><output>100%</output>`;
   const slider=opacity.querySelector('input'),output=opacity.querySelector('output');
-  slider.onpointerdown=()=>{if(quoteColorTarget?.quote?.isConnected)pushPreviewFormatHistory()};
-  slider.oninput=event=>{event.stopPropagation();output.textContent=`${slider.value}%`;applyQuoteColorValue(getHexInputValue($('fmt-color')),Number(slider.value),false)};
+  slider.onpointerdown=()=>{quoteColorInteraction=null;beginQuoteColorInteraction(true)};
+  slider.oninput=event=>{event.stopPropagation();output.textContent=`${slider.value}%`;previewQuoteColorValue(getHexInputValue($('fmt-color')),Number(slider.value))};
+  slider.onchange=()=>commitQuoteColorInteraction(getHexInputValue($('fmt-color')),Number(slider.value));
   panel.prepend(tabs,opacity);
 }
 function configureQuoteColorTabs(type){
@@ -15934,23 +15935,78 @@ function mutateQuoteDesign(quote,mutation,push=true){
 function applyQuoteColorValue(value,opacity,push=true){
   if(!quoteColorTarget?.quote?.isConnected)return;
   const {quote,kind}=quoteColorTarget;
+  quoteColorTarget.values?.set(kind,{color:normalizeColorValue(value)||value,opacity:Number(opacity)});
   mutateQuoteDesign(quote,()=>{quote.style.setProperty(quoteColorProperty(kind,true),quoteColorWithOpacity(value,opacity))},push);
+}
+function beginQuoteColorInteraction(forceCurrent=false){
+  if(!quoteColorTarget?.quote?.isConnected)return false;
+  if(!forceCurrent&&quoteColorInteraction?.quote===quoteColorTarget.quote&&quoteColorInteraction.kind===quoteColorTarget.kind)return true;
+  const snapshot=captureFormatScrollSnapshot();
+  if(snapshot){snapshot.anchor=null;snapshot.anchorTop=null}
+  quoteColorInteraction={quote:quoteColorTarget.quote,kind:quoteColorTarget.kind,scrollSnapshot:snapshot||quoteColorTarget.scrollSnapshot};
+  quoteColorTarget.scrollSnapshot=quoteColorInteraction.scrollSnapshot;
+  pushPreviewFormatHistory();
+  return true;
+}
+function refreshQuoteColorScrollSnapshot(){
+  if(!quoteColorTarget?.quote?.isConnected)return null;
+  const snapshot=captureFormatScrollSnapshot();
+  if(!snapshot)return null;
+  snapshot.anchor=null;snapshot.anchorTop=null;
+  quoteColorTarget.scrollSnapshot=snapshot;
+  if(quoteColorInteraction)quoteColorInteraction.scrollSnapshot=snapshot;
+  return snapshot;
+}
+function previewQuoteColorValue(value,opacity){
+  if(!beginQuoteColorInteraction())return;
+  const {quote,kind,scrollSnapshot}=quoteColorInteraction;
+  quoteColorTarget.values?.set(kind,{color:normalizeColorValue(value)||value,opacity:Number(opacity)});
+  quote.style.setProperty(quoteColorProperty(kind,true),quoteColorWithOpacity(value,opacity));
+  restoreQuoteColorScroll(scrollSnapshot);
+  scheduleFormatScrollRestore(scrollSnapshot);
+}
+function restoreQuoteColorScroll(snapshot){
+  if(!snapshot?.preview?.isConnected)return;
+  snapshot.preview.scrollTop=snapshot.previewTop;snapshot.preview.scrollLeft=snapshot.previewLeft;
+  if(snapshot.editor?.isConnected){snapshot.editor.scrollTop=snapshot.editorTop;snapshot.editor.scrollLeft=snapshot.editorLeft}
+}
+function commitQuoteColorInteraction(value,opacity){
+  if(!quoteColorTarget?.quote?.isConnected){quoteColorInteraction=null;return}
+  if(!quoteColorInteraction)beginQuoteColorInteraction();
+  const interaction=quoteColorInteraction;
+  const finalValue=quoteColorWithOpacity(value,opacity),property=quoteColorProperty(interaction.kind,true);
+  quoteColorTarget.values?.set(interaction.kind,{color:normalizeColorValue(value)||value,opacity:Number(opacity)});
+  interaction.quote.style.setProperty(property,finalValue);
+  syncFromPreview();
+  restoreQuoteColorScroll(interaction.scrollSnapshot);
+  scheduleFormatScrollRestore(interaction.scrollSnapshot);
+  const lockedSnapshot=interaction.scrollSnapshot;
+  const lockedQuote=interaction.quote;
+  requestAnimationFrame(()=>{
+    if(lockedQuote?.isConnected)lockedQuote.style.setProperty(property,finalValue);
+    restoreQuoteColorScroll(lockedSnapshot);
+    requestAnimationFrame(()=>restoreQuoteColorScroll(lockedSnapshot));
+  });
+  quoteColorInteraction=null;
 }
 function setQuoteColorKind(kind){
   if(!quoteColorTarget?.quote?.isConnected)return;
+  if(quoteColorInteraction)commitQuoteColorInteraction(getHexInputValue($('fmt-color')),Number($('text-color-panel')?.querySelector('[data-quote-opacity]')?.value??100));
   quoteColorTarget.kind=kind;
   const panel=$('text-color-panel'),quote=quoteColorTarget.quote;
   panel.querySelectorAll('[data-quote-color-kind]').forEach(button=>button.classList.toggle('active',button.dataset.quoteColorKind===kind));
   const style=getComputedStyle(quote),computed=kind==='marker'?getComputedStyle(quote,'::marker').color:kind==='border'?style.borderLeftColor:style.backgroundColor;
   const parts=computed.match(/[\d.]+/g)?.map(Number)||[],transparent=/rgba/i.test(computed)&&(parts[3]??1)===0;
   const fallback=kind==='background'?(normalizeColorValue(getComputedStyle(document.documentElement).getPropertyValue('--s1'))||'#ffffff'):currentThemeTextColor();
-  const color=!transparent&&(normalizeColorValue(computed)||(parts.length>=3?rgbToHex(parts[0],parts[1],parts[2]):''))||fallback;
+  const saved=quoteColorTarget.values?.get(kind);
+  const color=saved?.color||(!transparent&&(normalizeColorValue(computed)||(parts.length>=3?rgbToHex(parts[0],parts[1],parts[2]):''))||fallback);
   setHexInputValue($('fmt-color'),color);syncColorButtons();
   const inline=quote.style.getPropertyValue(quoteColorProperty(kind,true)),alpha=inline&&/rgba/i.test(inline)?(inline.match(/[\d.]+/g)?.map(Number)?.[3]??1):1;
-  const slider=panel.querySelector('[data-quote-opacity]'),percent=Math.round(alpha*100);
+  const slider=panel.querySelector('[data-quote-opacity]'),percent=saved?Math.round(saved.opacity):Math.round(alpha*100);
   if(slider){slider.value=String(percent);slider.nextElementSibling.textContent=`${percent}%`}
 }
 function closeAllPanels(){
+  if(quoteColorInteraction)commitQuoteColorInteraction(getHexInputValue($('fmt-color')),Number($('text-color-panel')?.querySelector('[data-quote-opacity]')?.value??100));
   PANELS.forEach(id=>{const el=$(id);if(el)el.classList.add('hidden')});
   $('text-color-panel')?.classList.remove('quote-color-mode','quote-border-color-mode');
   quoteColorTarget=null;
@@ -15968,7 +16024,6 @@ function openPanel(panelId,toggleId){
   panel.classList.remove('hidden');
   toggle.classList.add('active');
   if(toggle.hasAttribute('aria-expanded'))toggle.setAttribute('aria-expanded','true');
-  // position fixed below the toggle button
   const r=toggle.getBoundingClientRect();
   const panelTop=r.bottom+6;
   panel.style.top=panelTop+'px';
@@ -15983,7 +16038,13 @@ function openQuoteColorPicker(quote,kind,event,type='quote'){
   closeAllPanels();
   const panel=$('text-color-panel'),toggle=$('text-color-toggle');
   if(!panel||!toggle||!quote?.isConnected)return;
-  quoteColorTarget={quote,kind,type};
+  formatScrollRestoreToken++;
+  if(formatScrollRestoreFrame)cancelAnimationFrame(formatScrollRestoreFrame);
+  formatScrollRestoreFrame=0;
+  const pickerScrollSnapshot=captureFormatScrollSnapshot();
+  formatMenuScrollSnapshot=pickerScrollSnapshot;
+  formatScrollSnapshot=pickerScrollSnapshot;
+  quoteColorTarget={quote,kind,type,scrollSnapshot:pickerScrollSnapshot,values:new Map()};
   ensureQuoteColorTabs();
   configureQuoteColorTabs(type);
   panel.classList.add('quote-color-mode');
@@ -16184,18 +16245,18 @@ document.addEventListener('click',e=>{
     closeAllPanels();
 });
 
-// ── Autocorrect panel ──
 const acPanelHtml=`
 <div id="ac-panel" class="ac-panel hidden">
-  <div class="ac-group">
-    <div class="ac-group-title">작성 옵션</div>
+  <div class="ac-panel-head">
+    <strong>옵션</strong>
+    <label class="ac-search"><span aria-hidden="true">⌕</span><input type="search" id="option-search" placeholder="기능 찾기" autocomplete="off" aria-label="기능 찾기"></label>
+  </div>
+  <details class="ac-group" data-option-group open>
+    <summary><span>편집</span><small data-option-count>5</small></summary>
+    <div class="ac-group-body">
     <label title="Enter를 누르면 마크다운 강제 줄바꿈 문법인 공백 두 칸 + 줄바꿈을 넣습니다.">
       <input type="checkbox" id="enable-paragraph-break" checked>
       <span><b>Enter로 줄바꿈</b><div class="ac-desc">Enter를 누른 위치에서 바로 줄바꿈</div></span>
-    </label>
-    <label title="프리뷰에서 완성한 마크다운 문법을 굵게, 코드, 제목, 목록 등의 실제 서식으로 바로 변환합니다.">
-      <input type="checkbox" id="enable-preview-markdown" checked>
-      <span><b>프리뷰 MD 문법 적용</b><div class="ac-desc">Preview에 입력한 Markdown 문법을 서식으로 변환</div></span>
     </label>
     <label title="색상이나 강조가 있는 줄을 목록으로 바꿀 때 서식 유지 여부를 확인합니다.">
       <input type="checkbox" id="enable-list-format-confirm" checked>
@@ -16218,13 +16279,23 @@ const acPanelHtml=`
       <input type="checkbox" id="enable-autocorrect" checked>
       <span><b>기호 공백 보정</b><div class="ac-desc">MD 기호 안의 불필요한 공백 제거</div></span>
     </label>
+    </div>
+  </details>
+  <details class="ac-group" data-option-group>
+    <summary><span>미리보기</span><small data-option-count>5</small></summary>
+    <div class="ac-group-body">
+    <label title="프리뷰에서 완성한 마크다운 문법을 굵게, 코드, 제목, 목록 등의 실제 서식으로 바로 변환합니다.">
+      <input type="checkbox" id="enable-preview-markdown" checked>
+      <span><b>프리뷰 MD 문법 적용</b><div class="ac-desc">Preview에 입력한 Markdown 문법을 서식으로 변환</div></span>
+    </label>
     <label title="라이트 모드에서 흰색/밝은 글씨를 검은색 계열로,&#10;다크 모드에서 검은색/어두운 글씨를 흰색 계열로&#10;자동 변환하여 가독성을 높입니다.&#10;&#10;(미리보기에만 적용, 원본은 변경하지 않음)">
       <input type="checkbox" id="enable-color-correct" checked>
       <span><b>색상 가독성 보정</b><div class="ac-desc">화면 테마에 맞춰 읽기 어려운 글자색을 자동 보정</div></span>
     </label>
-  </div>
-  <div class="ac-group">
-    <div class="ac-group-title">보기 옵션</div>
+    <label title="마크다운 편집창 왼쪽에 행 번호를 표시합니다.">
+      <input type="checkbox" id="enable-line-numbers">
+      <span><b>행 번호 보기</b><div class="ac-desc">Markdown 편집창 왼쪽에 행 번호 표시</div></span>
+    </label>
     <label class="ac-feature-highlight" title="분할 보기에서 편집창과 보기창의 세로 스크롤 위치를 서로 맞춥니다.">
       <input type="checkbox" id="enable-sync-scroll">
       <span><b>분할 보기 스크롤 동기화</b><div class="ac-desc">편집·보기를 함께 스크롤</div></span>
@@ -16233,30 +16304,90 @@ const acPanelHtml=`
       <input type="checkbox" id="enable-split-selection-link">
       <span><b>분할 선택 위치 표시</b><div class="ac-desc">선택한 내용의 반대쪽 위치를 강조</div></span>
     </label>
-    <label><input type="checkbox" id="enable-table-filter"><span><b>표 필터·정렬</b><div class="ac-desc">표 머리글에서 행을 필터링하거나 정렬하며 원문은 유지</div></span></label>
-    <label title="마크다운 편집창 왼쪽에 행 번호를 표시합니다.">
-      <input type="checkbox" id="enable-line-numbers">
-      <span><b>행 번호 보기</b><div class="ac-desc">Markdown 편집창 왼쪽에 행 번호 표시</div></span>
-    </label>
+    </div>
+  </details>
+  <details class="ac-group" id="document-split-options" data-option-group open>
+    <summary><span>분할 화면</span><small data-option-count>5</small></summary>
+    <div class="ac-group-body">
     <label title="한 문서를 분할해서 볼 때 Preview와 Markdown의 좌우 순서를 바꿉니다.">
       <input type="checkbox" id="enable-swap-panes">
       <span><b>한 문서 분할 위치</b><div class="ac-desc">Preview와 Markdown의 좌우 순서 변경</div></span>
     </label>
-    <label title="문서 탐색 하단에 현재 문서에서 사용한 해시태그를 모아서 표시합니다.">
-      <input type="checkbox" id="enable-hashtag-navigator">
-      <span><b>해시태그 탐색</b><div class="ac-desc">문서의 #태그를 모아 빠르게 이동</div></span>
-    </label>
-  </div>
-  <div class="ac-group" id="document-split-options">
-    <div class="ac-group-title">분할 옵션</div>
     <label class="ac-split-option"><span><span class="ac-option-title-row"><input type="checkbox" id="enable-document-split"><b>문서 분할 편집</b></span><div class="ac-desc">다른 문서를 좌우에 배치해 동시에 편집</div></span><button type="button" class="ac-next" id="open-document-split" title="분할할 문서 선택" aria-label="분할할 문서 선택">›</button></label>
-    <label title="한 문서를 내린 거리만큼 다른 문서도 함께 이동합니다."><input type="checkbox" id="enable-document-sync-scroll"><span><b>분할 문서 스크롤 동기화</b><div class="ac-desc">한쪽을 내린 거리만큼 다른 쪽도 이동</div></span></label>
-    <label title="두 문서를 열었을 때 각 문서 안에서 미리보기를 위에, 편집창을 아래에 놓습니다."><input type="checkbox" id="enable-split-preview-first"><span><b>두 문서 내부 배치</b><div class="ac-desc">미리보기 위 · 편집 아래</div></span></label>
-    <label title="두 문서의 미리보기에서 긴 줄을 각 칸의 너비에 맞춰 줄바꿈합니다."><input type="checkbox" id="enable-split-preview-wrap"><span><b>두 문서 미리보기 줄바꿈</b><div class="ac-desc">긴 줄을 칸 너비에 맞춤</div></span></label>
-  </div>
+    <div class="ac-dependent-options">
+      <label title="한 문서를 내린 거리만큼 다른 문서도 함께 이동합니다."><input type="checkbox" id="enable-document-sync-scroll"><span><b>분할 문서 스크롤 동기화</b><div class="ac-desc">한쪽을 내린 거리만큼 다른 쪽도 이동</div></span></label>
+      <label title="두 문서를 열었을 때 각 문서 안에서 미리보기를 위에, 편집창을 아래에 놓습니다."><input type="checkbox" id="enable-split-preview-first"><span><b>두 문서 내부 배치</b><div class="ac-desc">미리보기 위 · 편집 아래</div></span></label>
+      <label title="두 문서의 미리보기에서 긴 줄을 각 칸의 너비에 맞춰 줄바꿈합니다."><input type="checkbox" id="enable-split-preview-wrap"><span><b>두 문서 미리보기 줄바꿈</b><div class="ac-desc">긴 줄을 칸 너비에 맞춤</div></span></label>
+    </div>
+    </div>
+  </details>
+  <details class="ac-group" data-option-group>
+    <summary><span>고급 기능</span><small data-option-count>2</small></summary>
+    <div class="ac-group-body">
+      <label><input type="checkbox" id="enable-table-filter"><span><b>표 필터·정렬</b><div class="ac-desc">표 머리글에서 행을 필터링하거나 정렬하며 원문은 유지</div></span></label>
+      <label title="문서 탐색 하단에 현재 문서에서 사용한 해시태그를 모아서 표시합니다.">
+        <input type="checkbox" id="enable-hashtag-navigator">
+        <span><b>해시태그 탐색</b><div class="ac-desc">문서의 #태그를 모아 빠르게 이동</div></span>
+      </label>
+    </div>
+  </details>
+  <div class="ac-search-empty" hidden>일치하는 옵션이 없습니다.</div>
 </div>`;
 document.body.insertAdjacentHTML('beforeend',acPanelHtml);
 PANELS.push('ac-panel');TOGGLES.push('autocorrect-toggle');
+const optionSearch=$('option-search'),optionGroups=[...$('ac-panel').querySelectorAll('[data-option-group]')];
+const defaultOpenOptionGroups=new Set(optionGroups.filter(group=>group.open));
+function enableOptionsPanelDrag(){
+  const panel=$('ac-panel'),handle=panel?.querySelector('.ac-panel-head');
+  if(!panel||!handle)return;
+  handle.addEventListener('pointerdown',event=>{
+    if(event.button!==0||event.target.closest('input,button,label'))return;
+    event.preventDefault();
+    const rect=panel.getBoundingClientRect(),offsetX=event.clientX-rect.left,offsetY=event.clientY-rect.top;
+    handle.setPointerCapture?.(event.pointerId);panel.classList.add('is-dragging');
+    const move=moveEvent=>{
+      const maxLeft=Math.max(8,innerWidth-panel.offsetWidth-8),maxTop=Math.max(8,innerHeight-panel.offsetHeight-8);
+      panel.style.left=`${Math.max(8,Math.min(maxLeft,moveEvent.clientX-offsetX))}px`;
+      panel.style.top=`${Math.max(8,Math.min(maxTop,moveEvent.clientY-offsetY))}px`;
+      if(!optionPreview.hidden&&activeOptionPreviewLabel)positionOptionPreview(activeOptionPreviewLabel);
+    };
+    const stop=()=>{
+      panel.classList.remove('is-dragging');
+      handle.removeEventListener('pointermove',move);handle.removeEventListener('pointerup',stop);handle.removeEventListener('pointercancel',stop);
+      const moved=panel.getBoundingClientRect();
+      localStorage.setItem('md-options-panel-position',JSON.stringify({left:moved.left,top:moved.top}));
+    };
+    handle.addEventListener('pointermove',move);handle.addEventListener('pointerup',stop);handle.addEventListener('pointercancel',stop);
+  });
+}
+function restoreOptionsPanelPosition(){
+  const panel=$('ac-panel');if(!panel||innerWidth<=680)return false;
+  let saved;try{saved=JSON.parse(localStorage.getItem('md-options-panel-position')||'null')}catch(_){return false}
+  if(!saved||!Number.isFinite(saved.left)||!Number.isFinite(saved.top))return false;
+  panel.style.left=`${Math.max(8,Math.min(innerWidth-panel.offsetWidth-8,saved.left))}px`;
+  panel.style.top=`${Math.max(8,Math.min(innerHeight-panel.offsetHeight-8,saved.top))}px`;
+  return true;
+}
+enableOptionsPanelDrag();
+function filterOptions(query=''){
+  const normalized=query.trim().toLocaleLowerCase(uiLanguage==='en'?'en':'ko');
+  let visibleTotal=0;
+  optionGroups.forEach(group=>{
+    let visibleInGroup=0;
+    group.querySelectorAll('.ac-group-body > label,.ac-option-block,.ac-dependent-options > label').forEach(row=>{
+      const visible=!normalized||row.textContent.toLocaleLowerCase(uiLanguage==='en'?'en':'ko').includes(normalized);
+      row.hidden=!visible;
+      if(visible)visibleInGroup++;
+    });
+    group.hidden=visibleInGroup===0;
+    group.querySelector('[data-option-count]').textContent=String(visibleInGroup);
+    if(normalized&&visibleInGroup)group.open=true;
+    else if(!normalized)group.open=defaultOpenOptionGroups.has(group);
+    visibleTotal+=visibleInGroup;
+  });
+  $('ac-panel').querySelector('.ac-search-empty').hidden=visibleTotal!==0;
+}
+optionSearch.addEventListener('input',()=>filterOptions(optionSearch.value));
 const optionPreviewExamples={
   'enable-paragraph-break':{title:'Enter로 줄바꿈',body:'<div class="option-live-demo"><small>Enter를 누르면 다음 줄이 바로 만들어집니다.</small><div class="option-enter-animation"><span>첫 번째 줄</span><i>Enter ↵</i><span>두 번째 줄</span><b></b></div></div>'},
   'enable-preview-markdown':{title:'프리뷰 MD 문법 적용',body:'<div class="option-live-demo"><small>입력한 Markdown 문법이 바로 서식으로 바뀝니다.</small><div class="option-markdown-animation"><div class="option-demo-input"><span>**텍스트**</span><b></b></div><i>서식 적용</i><div class="option-demo-output"><strong>텍스트</strong></div></div></div>'},
@@ -16280,11 +16411,22 @@ optionPreview.className='option-example-popover';
 optionPreview.setAttribute('role','tooltip');
 optionPreview.hidden=true;
 document.body.appendChild(optionPreview);
-let optionPreviewTimer=0,optionPreviewCloseTimer=0;
+let optionPreviewTimer=0,optionPreviewCloseTimer=0,activeOptionPreviewLabel=null;
+function positionOptionPreview(label){
+  if(!label?.isConnected||optionPreview.hidden)return;
+  const rect=label.getBoundingClientRect(),width=Math.min(390,innerWidth-16),gap=6;
+  const roomOnLeft=rect.left-gap,roomOnRight=innerWidth-rect.right-gap;
+  let left=roomOnRight>=width||roomOnRight>=roomOnLeft?rect.right+gap:rect.left-width-gap;
+  left=Math.max(8,Math.min(innerWidth-width-8,left));
+  optionPreview.style.left=`${left}px`;
+  let top=rect.top;
+  if(top+optionPreview.offsetHeight>innerHeight-8)top=innerHeight-optionPreview.offsetHeight-8;
+  optionPreview.style.top=`${Math.max(8,top)}px`;
+}
 function hideOptionPreview(immediate=false){
   clearTimeout(optionPreviewTimer);clearTimeout(optionPreviewCloseTimer);
-  if(immediate)optionPreview.hidden=true;
-  else optionPreviewCloseTimer=setTimeout(()=>{optionPreview.hidden=true},180);
+  if(immediate){optionPreview.hidden=true;activeOptionPreviewLabel=null}
+  else optionPreviewCloseTimer=setTimeout(()=>{optionPreview.hidden=true;activeOptionPreviewLabel=null},180);
 }
 function showOptionPreview(label,id){
   const example=optionPreviewExamples[id];
@@ -16295,14 +16437,8 @@ function showOptionPreview(label,id){
     if(uiLanguage==='en')translateUi(optionPreview);
     optionPreview.querySelector('.option-example-head button').onclick=event=>{event.stopPropagation();hideOptionPreview(true)};
     optionPreview.hidden=false;
-    const rect=label.getBoundingClientRect(),panelRect=$('ac-panel').getBoundingClientRect(),width=Math.min(390,innerWidth-16),gap=12;
-    const groups=[...$('ac-panel').querySelectorAll('.ac-group')],isLeft=groups.indexOf(label.closest('.ac-group'))===0;
-    let left=isLeft?panelRect.left-width-gap:panelRect.right+gap;
-    left=Math.max(8,Math.min(innerWidth-width-8,left));
-    optionPreview.style.left=`${left}px`;
-    let top=rect.bottom+gap;
-    if(top+optionPreview.offsetHeight>innerHeight-8)top=rect.top-optionPreview.offsetHeight-gap;
-    optionPreview.style.top=`${Math.max(8,top)}px`;
+    activeOptionPreviewLabel=label;
+    positionOptionPreview(label);
   },280);
 }
 optionPreview.addEventListener('mouseenter',()=>clearTimeout(optionPreviewCloseTimer));
@@ -16320,7 +16456,7 @@ Object.keys(optionPreviewExamples).forEach(id=>{
 $('autocorrect-toggle').onclick=e=>{
   e.stopPropagation();
   const open=!$('ac-panel').classList.contains('hidden');
-  if(open){hideOptionPreview(true);closeAllPanels()}else openPanel('ac-panel','autocorrect-toggle');
+  if(open){hideOptionPreview(true);closeAllPanels()}else{openPanel('ac-panel','autocorrect-toggle');restoreOptionsPanelPosition()}
 };
 $('enable-document-split').onchange=e=>setDocumentSplitEnabled(e.target.checked);
 $('open-document-split').onclick=e=>{e.preventDefault();e.stopPropagation();if(!documentSplitEnabled)return;closeAllPanels();showDocumentSplitPicker()};
@@ -16420,7 +16556,6 @@ $('enable-color-correct').onchange=e=>{
   if(documentSplitState.secondaryFile&&documentSplitState.secondaryView!=='md')renderSecondaryPreview({defer:true});
 };
 
-// ── Insert menu (구분선, 줄바꿈 등) ──
 const insMenuHtml=`
 <div id="ins-menu" class="ins-menu hidden">
   <button class="ins-item" id="ins-hr"><span class="ins-item-icon">─</span>수평선<span class="ins-item-desc">---</span></button>
@@ -16740,7 +16875,7 @@ const EN_TEXT={
   '이미지':'Images','업로드한 이미지가 없습니다.':'No uploaded images.','이미지 정보':'Image details','파일명':'File name','확장자':'Extension','경로':'Path','파일 크기':'File size','이미지 크기':'Dimensions','확인 중...':'Checking...','확인할 수 없음':'Unavailable','사용 중인 업로드 MD':'Uploaded Markdown files using this image','업로드된 MD에서 이 이미지를 참조하지 않습니다.':'No uploaded Markdown file references this image.',
   '닫기':'Close','완료':'Done','취소':'Cancel','확인':'OK','복구':'Restore','작업 복구':'Restore workspace',
   '브라우저 저장소가 지워지기 전까지 이 기록을 복구할 수 있습니다.':'This workspace can be restored until the browser storage is cleared.',
-  '작성 옵션':'Writing options','보기 옵션':'View options','분할 옵션':'Split options','Enter로 줄바꿈':'Line break with Enter','Enter를 누른 위치에서 바로 줄바꿈':'Insert a line break where Enter is pressed',
+  '작성 옵션':'Writing options','보기 옵션':'View options','분할 옵션':'Split options','기능 찾기':'Find a feature','미리보기':'Preview','분할 화면':'Split screen','고급 기능':'Advanced','일치하는 옵션이 없습니다.':'No matching options.','Enter로 줄바꿈':'Line break with Enter','Enter를 누른 위치에서 바로 줄바꿈':'Insert a line break where Enter is pressed',
   '문서 분할 편집':'Split document editing','다른 문서를 좌우에 배치해 동시에 편집':'Place documents side by side and edit them together','분할할 문서 선택':'Choose a document for split view','문서 분할 편집은 데스크톱 화면에서만 사용할 수 있습니다.':'Split document editing is available on desktop screens only.',
   '분할 문서 스크롤 동기화':'Sync split document scrolling','한쪽을 내린 거리만큼 다른 쪽도 이동':'Move the other document by the same scroll distance','한 문서를 내린 거리만큼 다른 문서도 함께 이동합니다.':'Moves the other document by the same distance you scroll one document.',
   '두 문서 내부 배치':'Two-document inner layout','미리보기 위 · 편집 아래':'Preview above · Edit below','두 문서를 열었을 때 각 문서 안에서 미리보기를 위에, 편집창을 아래에 놓습니다.':'Places Preview above and Edit below inside each document when two documents are open.','각 문서 안의 미리보기와 편집창이 위아래로 배치됩니다.':'Preview and Edit are stacked inside each document.','문서 A':'Document A','문서 B':'Document B',
@@ -18250,7 +18385,6 @@ $('ins-block-code').onclick=()=>{if(insertPreviewCodeBlock())return;insertBlock(
 $('ins-ul').onclick=()=>{if(insertPreviewList(false))return;linePrefix('- ')};
 $('ins-ol').onclick=()=>{if(insertPreviewList(true))return;orderedListPrefix()};
 
-// ── Real-time color (direct apply, no focus() to avoid OS picker conflict) ──
 let colorDragState=null;
 let colorTargetSnapshot=null;
 function captureColorTarget(){
@@ -18352,7 +18486,6 @@ function applyColorLive(type,value){
   const prop=type==='text'?'color':'background-color';
   if(start===end)return;
   const inner=snapshot.slice(start,end);
-  // strip existing same-property span if present in snapshot
   const spanRe=new RegExp(`^<span style="[^"]*${prop}[^"]*">([\\s\\S]*)<\\/span>$`);
   const core=inner.match(spanRe)?inner.replace(spanRe,'$1'):inner;
   const newVal=snapshot.slice(0,start)+`<span style="${prop}:${value}">${core}</span>`+snapshot.slice(end);
@@ -18361,7 +18494,6 @@ function applyColorLive(type,value){
   scheduleEditorRender(newVal);
 }
 function finalizeColor(type,value){
-  // on change: restore snapshot, use full styleSpan for clean merging
   if(!colorDragState||colorDragState.type!==type)return false;
   if(colorDragState.preview){clearPreviewColorLive(true);colorDragState=null;return false}
   els.editor.value=colorDragState.snapshot;
@@ -18664,13 +18796,16 @@ document.querySelectorAll('.cp-picker-main').forEach(picker=>{
     if(type==='theme')setCustomThemeColor(nextColor,false);
     else{
       syncColorButtons();
-      applyColorLive(type,nextColor);
+      if(type==='text'&&quoteColorTarget?.quote?.isConnected&&$('text-color-panel')?.classList.contains('quote-color-mode'))previewQuoteColorValue(nextColor,Number($('text-color-panel').querySelector('[data-quote-opacity]')?.value??100));
+      else applyColorLive(type,nextColor);
     }
   };
   picker.querySelectorAll('.cp-sv,.cp-hue').forEach(part=>part.addEventListener('pointerdown',e=>{
     if(e.button!==0)return;
     e.preventDefault();
-    if(type!=='theme')initColorDrag(type);
+    const quoteColorDrag=type==='text'&&quoteColorTarget?.quote?.isConnected&&$('text-color-panel')?.classList.contains('quote-color-mode');
+    if(quoteColorDrag){quoteColorInteraction=null;beginQuoteColorInteraction(true)}
+    else if(type!=='theme')initColorDrag(type);
     part.setPointerCapture(e.pointerId);
     update(part,e);
     const move=ev=>update(part,ev);
@@ -18683,6 +18818,7 @@ document.querySelectorAll('.cp-picker-main').forEach(picker=>{
       part.removeEventListener('lostpointercapture',finish);
       const selectedColor=getHexInputValue(input);
       if(type==='theme')setCustomThemeColor(selectedColor,true);
+      else if(quoteColorDrag)commitQuoteColorInteraction(selectedColor,Number($('text-color-panel').querySelector('[data-quote-opacity]')?.value??100));
       else applyPickedColor(type,selectedColor);
     };
     part.addEventListener('pointermove',move);
@@ -18740,7 +18876,6 @@ $('clear-text-color').onclick=e=>{
 };
 $('clear-bg-color').onclick=e=>{e.preventDefault();e.stopPropagation();applyPickedColor('bg','');closeAllPanels()};
 
-/* ── Extended persistence, compatibility, inserts, and custom fonts ── */
 const ZZ_DB_NAME='zz-md-workspace',ZZ_DB_VERSION=1;
 let zzDbPromise=null,autosaveTimer=0,autosaveIdle=0,lastVersionFileKey='',lastVersionText=null;
 const CUSTOM_FONT_ENABLED_KEY='md-custom-font-enabled',CUSTOM_FONT_ACTIVE_KEY='md-custom-font-active';
@@ -19183,7 +19318,6 @@ $('fmt-link').onclick=insertLinkWithDialog;
 $('fmt-math').onclick=insertMathWithDialog;
 $('new-doc').onclick=newDocument;
 $('edit-close-doc').onclick=closeDocument;
-// ── Open / Save dropdown menus ──
 (function(){
   function makeMenu(items,isSubmenu=false){
     const m=document.createElement('div');m.className=isSubmenu?'tb-menu tb-submenu':'tb-menu';
