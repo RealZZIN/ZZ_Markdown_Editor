@@ -27,10 +27,13 @@ function escapeHtml(value=''){
 
 async function sourceToDataUri(source){
   if(!source||/^data:/i.test(source))return source;
+  let resourceUrl;
+  try{resourceUrl=new URL(source,location.href)}catch{return ''}
+  if(resourceUrl.origin!==location.origin)return '';
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(),15000);
   try{
-    const response=await fetch(source,{signal:controller.signal});
+    const response=await fetch(resourceUrl.href,{signal:controller.signal,credentials:'same-origin'});
     if(!response.ok)throw new Error(`HTTP ${response.status}`);
     const blob=await response.blob();
     if(blob.size>32*1024*1024)throw new Error('Image is too large to embed safely.');

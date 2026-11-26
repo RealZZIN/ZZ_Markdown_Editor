@@ -48,6 +48,8 @@ async function auditTranslations(mainSource,indexSource){
     for(const match of source.matchAll(/(?:title|aria-label|placeholder|data-tooltip)=["']([^"']*[가-힣][^"']*)["']/g))candidates.push(decodeHtmlText(match[1]));
   }
   for(const match of mainSource.matchAll(/\b(?:setStatus|showInsertDialog)\(\s*'((?:\\.|[^'\\])*)'/g))candidates.push(decodeJsText(match[1]));
+  for(const match of mainSource.matchAll(/\b(?:textContent|title|placeholder)\s*=\s*'((?:\\.|[^'\\])*)'/g))candidates.push(decodeJsText(match[1]));
+  for(const match of mainSource.matchAll(/\.setAttribute\(\s*'(?:title|aria-label|placeholder)'\s*,\s*'((?:\\.|[^'\\])*)'/g))candidates.push(decodeJsText(match[1]));
   for(const match of mainSource.matchAll(/\bshowInfoNotice\(\s*'((?:\\.|[^'\\])*)'\s*,\s*'((?:\\.|[^'\\])*)'/g)){
     candidates.push(decodeJsText(match[1]),decodeJsText(match[2]));
   }
@@ -132,11 +134,14 @@ function auditPerformanceGuards(mainSource){
   assert(mainSource.includes('function syncUiTranslationObserver()'),'The translation observer cannot be disabled outside English mode.');
   assert(mainSource.includes("const shouldObserve=uiLanguage==='en'"),'Korean mode still records unnecessary translation mutations.');
   assert(!mainSource.includes('lastVersionSignature'),'Autosave still allocates a document-sized version signature.');
+  assert(mainSource.includes("import('@e965/xlsx')")&&mainSource.includes("import('mermaid')")&&mainSource.includes("import('mathlive')")&&mainSource.includes("import('katex')")&&mainSource.includes("import('./syntax-highlight-runtime.js')"),'Large optional editor modules are no longer lazy-loaded.');
+  assert(mainSource.includes("matchMedia('(max-width:860px)')")&&mainSource.includes('mobilePreviewScrollInstalled'),'Desktop mode still installs mobile-only preview scroll observers.');
+  assert(mainSource.includes("observe(preview,{childList:true,subtree:true})")&&!mainSource.includes("observe(preview,{childList:true,subtree:true,attributes:true})"),'Mobile preview scroll sync watches every attribute mutation.');
   assert(mainSource.includes("els.preview.addEventListener('scroll',()=>{onPreviewScroll();schedulePreviewVisualScroll()}"),'Preview scroll work is split across duplicate listeners.');
 }
 
 function auditLifecycleStability(mainSource){
-  assert(mainSource.includes("task?.catch?.(error=>console.warn('Mermaid render failed'"),'Async Mermaid failures are not contained.');
+  assert(mainSource.includes("loadMermaidRuntime().then(runtime=>")&&mainSource.includes("console.warn('Mermaid render failed',error)"),'Async Mermaid failures are not contained.');
   assert(mainSource.includes('Preview enhancement stage ${currentStage+1} failed'),'Preview enhancement stages are not isolated.');
   assert(mainSource.includes("document.visibilityState==='hidden')flushWorkspaceForLifecycle()"),'Hidden tabs do not flush pending workspace recovery data.');
   assert(mainSource.includes('mutateQuoteDesign(quote,()=>quote.style.removeProperty(property))'),'Resetting quote colors bypasses the scroll-safe mutation path.');
@@ -173,7 +178,9 @@ function auditLifecycleStability(mainSource){
   assert(mainSource.includes('let top=rect.top')&&mainSource.includes('rect.right+gap'),'Option previews are not aligned directly beside their option row.');
   assert(mainSource.includes('positionOptionPreview(activeOptionPreviewLabel)')&&mainSource.includes('function positionOptionPreview('),'Option previews do not follow the options panel while it is dragged.');
   assert(styleSource.includes('.option-example-head { display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:5px;'),'Option preview headings are spaced too far from their descriptions.');
-  assert(mainSource.includes('function installMobilePreviewScrollDrag(')&&mainSource.includes("range.addEventListener('input'")&&styleSource.includes('.mobile-preview-hscroll { position:absolute'),'Mobile horizontal preview dragging is not persistently visible or synchronized.');
+  assert(mainSource.includes('function installMobilePreviewScrollDrag(')&&mainSource.includes("rangeX.addEventListener('input'")&&mainSource.includes("rangeY.addEventListener('input'")&&styleSource.includes('.mobile-preview-vscroll { top:10px'),'Mobile preview scroll controls are not persistently visible or synchronized on both axes.');
+  assert(mainSource.includes('ZZ_EMERGENCY_WORKSPACE_KEY')&&mainSource.includes('writeEmergencyWorkspace();')&&mainSource.includes('readEmergencyWorkspace()'),'Rapid reloads can lose the latest workspace before IndexedDB autosave completes.');
+  assert(mainSource.includes('function scheduleEmergencyWorkspace(')&&mainSource.includes('now-emergencySaveStartedAt>=1000?0:180')&&mainSource.includes('scheduleEmergencyWorkspace();'),'Emergency recovery still serializes every open document on each keystroke.');
   assert(mainSource.includes('class="ac-dependent-options"')&&styleSource.includes('.ac-dependent-options'),'Document split dependencies are not visually grouped beneath their parent option.');
   assert(styleSource.includes('.ac-panel label:hover .ac-desc'),'Option descriptions are still permanently visible instead of appearing on demand.');
   assert(styleSource.includes('width:168px')&&styleSource.includes('font:12px var(--font)'),'The main table menu is not compact or does not use Pretendard.');
@@ -185,6 +192,24 @@ function auditLifecycleStability(mainSource){
   assert(mainSource.includes('function closeCustomFormatSavedWindow()'),'Saved custom-format windows have no single close path.');
   assert(mainSource.includes('if(customFormatSavedWindow?.isConnected){event.preventDefault();event.stopPropagation();return}'),'An open saved custom-format window does not suppress single-click panel toggles.');
   assert(mainSource.includes('if(customFormatSavedWindow?.isConnected){closeCustomFormatSavedWindow();return}'),'Double-click does not close an open saved custom-format window.');
+}
+
+function auditEmbeddedObjectEditing(mainSource,styleSource){
+  assert(mainSource.includes(".zz-sheet[data-embed-source],.zz-html-embed[data-embed-source],.zz-doc-embed[data-embed-source]"),'Embedded HTML, spreadsheets, and documents do not share object editing behavior.');
+  assert(mainSource.includes('clickMoveElement.matches(atomicPreviewObjectSelector)'),'Backspace/Delete can leave an empty embedded-object frame behind.');
+  assert(mainSource.includes("block?.dataset.referenceSource"),'Reference blocks cannot preserve their source during copy and paste.');
+  assert(mainSource.includes('class="zz-sheet" contenteditable="false"')&&mainSource.includes('class="zz-html-embed" contenteditable="false"'),'Read-only embedded objects can still be partially edited or leave an empty shell.');
+  assert(styleSource.includes('.zz-html-frame')&&styleSource.includes('pointer-events:none'),'Read-only HTML iframe content still intercepts selection and context-menu input.');
+}
+
+function auditResourceIntegrity(mainSource,indexSource,lockSource){
+  const lock=JSON.parse(lockSource);
+  const unhashed=Object.entries(lock.packages||{}).filter(([path,entry])=>path&&entry.resolved&&!entry.integrity);
+  assert(!unhashed.length,`Downloaded packages without recorded integrity hashes: ${unhashed.map(([path])=>path).join(', ')}`);
+  assert(indexSource.includes('http-equiv="Content-Security-Policy"'),'The application has no resource-loading Content Security Policy.');
+  assert(!/<(?:script|link)\b[^>]*https?:\/\//i.test(indexSource),'Executable code or styles are still loaded directly from a remote CDN.');
+  assert(!/(?:import\s*\(|\.src\s*=)[^\n]*(?:cdnjs|cdn\.jsdelivr|unpkg)/i.test(mainSource),'Runtime code can still execute an unverified remote module.');
+  assert(mainSource.includes("import './vendor-runtime.js'"),'The verified local vendor runtime is not loaded.');
 }
 
 function auditPreviewLocalization(mainSource){
@@ -229,10 +254,11 @@ async function auditOfficeExports(){
   return {docxBytes:docx.size,hwpxBytes:hwpx.size};
 }
 
-const [mainSource,indexSource,styleSource]=await Promise.all([
+const [mainSource,indexSource,styleSource,lockSource]=await Promise.all([
   fs.readFile(new URL('../src/main.js',import.meta.url),'utf8'),
   fs.readFile(new URL('../index.html',import.meta.url),'utf8'),
-  fs.readFile(new URL('../src/styles/app.css',import.meta.url),'utf8')
+  fs.readFile(new URL('../src/styles/app.css',import.meta.url),'utf8'),
+  fs.readFile(new URL('../package-lock.json',import.meta.url),'utf8')
 ]);
 
 await auditTranslations(mainSource,indexSource);
@@ -241,6 +267,8 @@ auditFormattingStability(mainSource,indexSource,styleSource);
 auditDomContracts(mainSource,indexSource);
 auditPerformanceGuards(mainSource);
 auditLifecycleStability(mainSource);
+auditEmbeddedObjectEditing(mainSource,styleSource);
+auditResourceIntegrity(mainSource,indexSource,lockSource);
 auditPreviewLocalization(mainSource);
 const sizes=await auditOfficeExports();
 console.log(`QA passed · translations/menu/DOM/formatting/performance/lifecycle · DOCX ${sizes.docxBytes.toLocaleString()} bytes · HWPX ${sizes.hwpxBytes.toLocaleString()} bytes`);

@@ -1,3 +1,6 @@
+import './vendor-runtime.js';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
 let documentExportModulePromise=null;
 function loadDocumentExportTools(){
   return documentExportModulePromise||(documentExportModulePromise=import('./document-export.js').catch(error=>{
@@ -46,40 +49,41 @@ const codeLanguageByName={dockerfile:'dockerfile',makefile:'makefile'};
 const els={app:$('app'),sidebar:$('sidebar'),list:$('file-list'),outline:$('outline-list'),count:$('file-count'),status:$('status'),editor:$('editor'),markdownHighlight:$('markdown-highlight'),preview:$('preview'),convertPreview:$('convert-preview'),convertList:$('convert-list'),home:$('home'),homeMergeList:$('home-merge-list'),homeImageSummary:$('home-image-summary'),mergeList:$('merge-list'),mergeResult:$('merge-result'),editSplit:$('edit-split'),documentSplit:$('document-split'),primaryDocumentPane:$('primary-document-pane'),secondaryDocumentPane:$('secondary-document-pane'),secondaryEditor:$('secondary-editor'),secondaryPreview:$('secondary-preview'),secondaryEditSplit:$('secondary-edit-split'),hoverPreview:$('hover-preview'),lineGutter:$('line-gutter'),previewLineGutter:$('preview-line-gutter'),folderInput:$('folder-input'),fileInput:$('file-input'),imageInput:$('image-input'),pdfInput:$('pdf-input'),homeSource:$('home-source-name'),homeOutput:$('home-output-name'),homeOutputExt:$('home-output-ext')};
 function installMobilePreviewScrollDrag(preview){
   const body=preview?.parentElement;if(!body)return;
-  const control=document.createElement('div');control.className='mobile-preview-hscroll';
-  control.innerHTML='<input type="range" min="0" max="0" value="0" step="1" aria-label="미리보기 가로 스크롤">';
-  const range=control.querySelector('input');body.appendChild(control);
+  const horizontal=document.createElement('div'),vertical=document.createElement('div');
+  horizontal.className='mobile-preview-hscroll';vertical.className='mobile-preview-vscroll';
+  horizontal.innerHTML='<input type="range" min="0" max="1" value="0" step="1" aria-label="미리보기 가로 스크롤">';
+  vertical.innerHTML='<input type="range" min="0" max="1" value="0" step="1" aria-label="미리보기 세로 스크롤">';
+  const rangeX=horizontal.querySelector('input'),rangeY=vertical.querySelector('input');body.append(horizontal,vertical);
   let frame=0,setting=false;
   const update=()=>{
     frame=0;
-    const max=Math.max(0,preview.scrollWidth-preview.clientWidth);
-    range.max=String(Math.max(1,Math.round(max)));
-    range.value=String(Math.min(max,Math.round(preview.scrollLeft)));
-    range.disabled=max<1;
-    control.classList.toggle('inactive',max<1);
+    const maxX=Math.max(0,preview.scrollWidth-preview.clientWidth),maxY=Math.max(0,preview.scrollHeight-preview.clientHeight);
+    rangeX.max=String(Math.max(1,Math.round(maxX)));rangeX.value=String(Math.min(maxX,Math.round(preview.scrollLeft)));
+    rangeY.max=String(Math.max(1,Math.round(maxY)));rangeY.value=String(Math.min(maxY,Math.round(preview.scrollTop)));
+    rangeX.disabled=maxX<1;rangeY.disabled=maxY<1;
+    horizontal.classList.toggle('inactive',maxX<1);vertical.classList.toggle('inactive',maxY<1);
   };
   const schedule=()=>{if(!frame)frame=requestAnimationFrame(update)};
-  range.addEventListener('input',()=>{
-    setting=true;preview.scrollLeft=Math.min(Number(range.max),Number(range.value));setting=false;
-  });
+  rangeX.addEventListener('input',()=>{setting=true;preview.scrollLeft=Math.min(Number(rangeX.max),Number(rangeX.value));setting=false});
+  rangeY.addEventListener('input',()=>{setting=true;preview.scrollTop=Math.min(Number(rangeY.max),Number(rangeY.value));setting=false});
   preview.addEventListener('scroll',()=>{if(!setting)schedule()},{passive:true});
-  new MutationObserver(schedule).observe(preview,{childList:true,subtree:true,attributes:true});
+  new MutationObserver(schedule).observe(preview,{childList:true,subtree:true});
   if(window.ResizeObserver)new ResizeObserver(schedule).observe(preview);
   window.addEventListener('resize',schedule,{passive:true});
   schedule();
 }
-installMobilePreviewScrollDrag(els.preview);
-installMobilePreviewScrollDrag(els.secondaryPreview);
+const mobilePreviewMedia=matchMedia('(max-width:860px)');
+let mobilePreviewScrollInstalled=false;
+function enableMobilePreviewScrollDrag(){
+  if(!mobilePreviewMedia.matches||mobilePreviewScrollInstalled)return;
+  mobilePreviewScrollInstalled=true;
+  installMobilePreviewScrollDrag(els.preview);
+  installMobilePreviewScrollDrag(els.secondaryPreview);
+}
+enableMobilePreviewScrollDrag();
+mobilePreviewMedia.addEventListener?.('change',enableMobilePreviewScrollDrag);
 let activePreviewTableCell=null;
 const documentSplitState={activePane:'primary',secondaryFile:null,secondaryView:localStorage.getItem('md-secondary-edit-view')||'both',secondaryTimer:0,secondaryHistoryTimer:0,secondaryHistoryFile:null,secondaryRenderFrame:0,maximizedPane:null,secondarySelection:{start:0,end:0},secondarySurface:'editor',secondaryPreviewRange:null,secondaryPendingInsertionContext:null,pendingImagePane:'primary'};
-if(window.mermaid){
-  mermaid.initialize({startOnLoad:false,theme:'neutral',securityLevel:'loose'});
-  const mermaidRenderer={code({text,lang}){
-    if(lang==='mermaid')return `<div class="mermaid">${text}</div>`;
-    return false;
-  }};
-  if(window.marked&&marked.use)marked.use({renderer:mermaidRenderer});
-}
 const parser=window.marked||{parse:s=>s.replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m])).replace(/\n/g,'<br>')};
 function setStatus(t){els.status.textContent=t}
 let busyNoticeDepth=0,busyNoticeTimer=0,busyNoticeVisibleAt=0;
@@ -540,14 +544,14 @@ function renderEmbeddedSheet(attrsRaw,payload){
   table+='<tbody>'+visibleRows.map((row,rowIndex)=>`<tr>${headers?`<th class="zz-row-head">${rowIndex+1}</th>`:''}${Array.from({length:visibleCols},(_,col)=>`<td>${htmlEsc(row?.[col]??'')}</td>`).join('')}</tr>`).join('')+'</tbody></table>';
   const source=`<!-- zz:sheet${attrsRaw} -->\n${payload}\n<!-- /zz:sheet -->`;
   const limit=truncated?`<div class="zz-sheet-limit">${uiLanguage==='en'?`This large sheet shows only ${visibleRowCount} rows × ${visibleCols} columns. Saved data is preserved.`:`큰 시트라 화면에는 ${visibleRowCount}행 × ${visibleCols}열만 표시합니다. 저장 데이터는 유지됩니다.`}</div>`:'';
-  return `<div class="zz-sheet" tabindex="0" aria-label="${previewUiText('스프레드시트','Spreadsheet')}" data-embed-source="${htmlEsc(encodeURIComponent(source))}" style="width:${width}px;height:${height}px;${scroll?'':'overflow:hidden;'}--sheet-zoom:${zoom}"><div class="zz-embed-head"><span>${htmlEsc(attrs.name||previewUiText('스프레드시트','Spreadsheet'))}</span><span>${htmlEsc(attrs.sheet||'Sheet1')} · ${htmlEsc(attrs.range||previewUiText('전체','All'))}</span></div>${table}${limit}</div>`;
+  return `<div class="zz-sheet" contenteditable="false" aria-readonly="true" tabindex="0" role="group" aria-label="${previewUiText('스프레드시트','Spreadsheet')}" data-embed-source="${htmlEsc(encodeURIComponent(source))}" style="width:${width}px;height:${height}px;${scroll?'':'overflow:hidden;'}--sheet-zoom:${zoom}"><div class="zz-embed-head"><span>${htmlEsc(attrs.name||previewUiText('스프레드시트','Spreadsheet'))}</span><span>${htmlEsc(attrs.sheet||'Sheet1')} · ${htmlEsc(attrs.range||previewUiText('전체','All'))}</span></div>${table}${limit}</div>`;
 }
 function renderEmbeddedHtml(attrsRaw,payload){
   const attrs=parseZzAttributes(attrsRaw),source=`<!-- zz:html${attrsRaw} -->\n${payload}\n<!-- /zz:html -->`;
   const html=zzDecodePayload(payload).replace(/<\/script/gi,'<\\/script');
   const width=Math.max(280,Number(attrs.width)||720),height=Math.max(180,Number(attrs.height)||420);
   const title=attrs.name||previewUiText('HTML 미리보기','HTML preview');
-  return `<div class="zz-html-embed" data-embed-source="${htmlEsc(encodeURIComponent(source))}" style="width:${width}px;height:${height}px"><div class="zz-embed-head"><span>${htmlEsc(title)}</span><span>${previewUiText('읽기 전용','Read only')}</span></div><iframe class="zz-html-frame" sandbox="allow-forms" srcdoc="${htmlEsc(html)}" title="${htmlEsc(title)}"></iframe></div>`;
+  return `<div class="zz-html-embed" contenteditable="false" aria-readonly="true" tabindex="0" role="group" aria-label="${htmlEsc(title)}" data-embed-source="${htmlEsc(encodeURIComponent(source))}" style="width:${width}px;height:${height}px"><div class="zz-embed-head"><span>${htmlEsc(title)}</span><span>${previewUiText('읽기 전용','Read only')}</span></div><iframe class="zz-html-frame" sandbox="allow-forms" srcdoc="${htmlEsc(html)}" title="${htmlEsc(title)}"></iframe></div>`;
 }
 function renderEmbeddedDocument(name,mode,start=1,end=20){
   const file=state.files.find(item=>item.name===name||item.path===name||item.name.replace(/\.md$/i,'')===name.replace(/\.md$/i,''));
@@ -774,6 +778,26 @@ function renderZzToc(attrsRaw,source){
     :`<li class="zz-toc-item"><span class="zz-toc-link muted">${zzTocEmptyText()}</span></li>`;
   return `<nav class="zz-toc" data-toc-style="${htmlEsc(style)}" data-toc-layout="${htmlEsc(layout)}" data-toc-numbered="${numbered}" data-toc-source="${htmlEsc(encodeURIComponent(raw))}" aria-label="${zzTocTitleText()}" contenteditable="false"><div class="zz-toc-title">${zzTocTitleText()}</div><ol class="zz-toc-list">${items}</ol></nav>`;
 }
+let katexRuntimePromise=null;
+function upgradeMathRendering(root=document){
+  if(!window.katex)return;
+  root.querySelectorAll?.('.zz-math-fallback').forEach(fallback=>{
+    const math=fallback.closest('.zz-math');if(!math)return;
+    try{
+      math.innerHTML=katex.renderToString(math.dataset.latex||'',{displayMode:math.dataset.display==='block',throwOnError:false,trust:false,strict:'warn',output:'html'});
+    }catch{ }
+  });
+}
+function loadKatexRuntime(){
+  if(window.katex)return Promise.resolve(window.katex);
+  if(katexRuntimePromise)return katexRuntimePromise;
+  katexRuntimePromise=Promise.all([import('katex'),import('katex/dist/katex.min.css')]).then(([module])=>{
+    window.katex=module.default||module;
+    requestAnimationFrame(()=>upgradeMathRendering(document));
+    return window.katex;
+  }).catch(error=>{katexRuntimePromise=null;throw error});
+  return katexRuntimePromise;
+}
 function renderMathHtml(latex,displayMode=false){
   const clean=String(latex||'').trim();
   let rendered;
@@ -781,6 +805,7 @@ function renderMathHtml(latex,displayMode=false){
     rendered=window.katex
       ?katex.renderToString(clean,{displayMode,throwOnError:false,trust:false,strict:'warn',output:'html'})
       :`<code class="zz-math-fallback">${htmlEsc(clean)}</code>`;
+    if(!window.katex)loadKatexRuntime().catch(error=>console.warn('KaTeX render failed',error));
   }catch{
     rendered=`<code class="zz-math-fallback">${htmlEsc(clean)}</code>`;
   }
@@ -1447,18 +1472,57 @@ function fixSpanColors(container){
     el.style.setProperty('--readable-color',`rgb(${adjusted.r},${adjusted.g},${adjusted.b})`);
   });
 }
+let mermaidRuntimePromise=null;
+function loadMermaidRuntime(){
+  if(window.mermaid)return Promise.resolve(window.mermaid);
+  if(mermaidRuntimePromise)return mermaidRuntimePromise;
+  mermaidRuntimePromise=import('mermaid').then(module=>{
+    const runtime=module.default||module;
+    runtime.initialize({startOnLoad:false,theme:'neutral',securityLevel:'strict'});
+    window.mermaid=runtime;
+    return runtime;
+  }).catch(error=>{mermaidRuntimePromise=null;throw error});
+  return mermaidRuntimePromise;
+}
 function runMermaid(container){
-  if(!window.mermaid)return;
-  const els2=container.querySelectorAll('.mermaid:not([data-processed])');
-  if(!els2.length)return;
-  try{
-    const task=mermaid.run({nodes:els2});
-    task?.catch?.(error=>console.warn('Mermaid render failed',error));
-  }catch(error){console.warn('Mermaid render failed',error)}
+  container.querySelectorAll('pre > code.language-mermaid').forEach(code=>{
+    const diagram=document.createElement('div');diagram.className='mermaid';diagram.textContent=code.textContent||'';
+    code.parentElement.replaceWith(diagram);
+  });
+  const nodes=[...container.querySelectorAll('.mermaid:not([data-processed]):not([data-mermaid-pending])')];
+  if(!nodes.length)return;
+  nodes.forEach(node=>node.dataset.mermaidPending='1');
+  loadMermaidRuntime().then(runtime=>{
+    const connected=nodes.filter(node=>node.isConnected);
+    connected.forEach(node=>delete node.dataset.mermaidPending);
+    if(connected.length)return runtime.run({nodes:connected});
+  }).catch(error=>{
+    nodes.forEach(node=>delete node.dataset.mermaidPending);
+    console.warn('Mermaid render failed',error);
+  });
+}
+let highlightRuntimePromise=null;
+function loadHighlightRuntime(){
+  if(window.hljs)return Promise.resolve(window.hljs);
+  if(highlightRuntimePromise)return highlightRuntimePromise;
+  highlightRuntimePromise=import('./syntax-highlight-runtime.js').then(module=>{
+    window.hljs=module.default;
+    return window.hljs;
+  }).catch(error=>{highlightRuntimePromise=null;throw error});
+  return highlightRuntimePromise;
 }
 function runHighlight(container){
-  if(!window.hljs)return;
-  scopedElements(container,'pre code').forEach(block=>{
+  const blocks=scopedElements(container,'pre code');
+  blocks.filter(block=>block.hasAttribute('data-code-language')&&!block.dataset.codeLanguage).forEach(block=>{
+    block.className='hljs';block.dataset.highlighted='yes';block.style.background='transparent';
+  });
+  const pending=blocks.filter(block=>!block.dataset.highlighted);
+  if(!pending.length)return;
+  if(!window.hljs){
+    loadHighlightRuntime().then(()=>runHighlight(container)).catch(error=>console.warn('Syntax highlight failed',error));
+    return;
+  }
+  blocks.forEach(block=>{
     const explicitNone=block.hasAttribute('data-code-language')&&!block.dataset.codeLanguage;
     if(explicitNone){
       block.className='hljs';
@@ -1483,7 +1547,8 @@ function scheduleEditableCodeHighlight(code){
     editableCodeHighlightTimer=null;
     const target=pendingEditableCode;
     pendingEditableCode=null;
-    if(!target?.isConnected||!els.preview.contains(target)||!window.hljs)return;
+    if(!target?.isConnected||!els.preview.contains(target))return;
+    if(!window.hljs){loadHighlightRuntime().then(()=>scheduleEditableCodeHighlight(target)).catch(()=>{});return}
     const language=codeLanguage(target);
     if(!language||!hljs.getLanguage(language))return;
     const selection=window.getSelection();
@@ -1872,7 +1937,7 @@ function ensureMathContextMenu(){
   });
   document.addEventListener('keydown',e=>{if(e.key==='Escape')hideMathContextMenu()});
   window.addEventListener('resize',hideMathContextMenu);
-  document.addEventListener('scroll',hideMathContextMenu,true);
+  document.addEventListener('scroll',hideMathContextMenu,{capture:true,passive:true});
   document.body.appendChild(mathContextMenu);
   return mathContextMenu;
 }
@@ -1891,13 +1956,15 @@ function showMathContextMenu(e,math){
   menu.style.left=Math.max(6,Math.min(e.clientX,window.innerWidth-rect.width-6))+'px';
   menu.style.top=Math.max(6,Math.min(e.clientY,window.innerHeight-rect.height-6))+'px';
 }
+const uniquePreviewBlockSelector='.code-block,.zz-lens[data-lens-source],.obsidian-callout[data-callout-source],.zz-sync-block[data-sync-source],.zz-toc[data-toc-source],.zz-sheet[data-embed-source],.zz-html-embed[data-embed-source],.zz-doc-embed[data-embed-source],.reference-list[data-reference-source]';
+const atomicPreviewObjectSelector='.zz-math,.zz-sheet[data-embed-source],.zz-html-embed[data-embed-source],.zz-doc-embed[data-embed-source]';
 let uniqueBlockContextMenu=null,uniqueBlockContextTarget=null,copiedUniqueBlockSource='';
 function hideUniqueBlockContextMenu(){
   if(uniqueBlockContextMenu)uniqueBlockContextMenu.hidden=true;
   uniqueBlockContextTarget=null;
 }
 function uniqueBlockSource(block){
-  const encoded=block?.dataset.lensSource||block?.dataset.calloutSource||block?.dataset.syncSource||block?.dataset.tocSource||block?.dataset.embedSource||'';
+  const encoded=block?.dataset.lensSource||block?.dataset.calloutSource||block?.dataset.syncSource||block?.dataset.tocSource||block?.dataset.embedSource||block?.dataset.referenceSource||'';
   if(!encoded){
     if(block?.matches?.('.code-block')){
       const host=document.createElement('div');host.appendChild(block.cloneNode(true));
@@ -2024,7 +2091,7 @@ function ensureUniqueBlockContextMenu(){
   });
   document.addEventListener('keydown',e=>{if(e.key==='Escape')hideUniqueBlockContextMenu()});
   window.addEventListener('resize',hideUniqueBlockContextMenu);
-  document.addEventListener('scroll',hideUniqueBlockContextMenu,true);
+  document.addEventListener('scroll',hideUniqueBlockContextMenu,{capture:true,passive:true});
   document.body.appendChild(uniqueBlockContextMenu);
   return uniqueBlockContextMenu;
 }
@@ -2108,7 +2175,7 @@ function ensureImageContextMenu(){
   });
   document.addEventListener('keydown',e=>{if(e.key==='Escape')hideImageContextMenu()});
   window.addEventListener('resize',hideImageContextMenu);
-  document.addEventListener('scroll',hideImageContextMenu,true);
+  document.addEventListener('scroll',hideImageContextMenu,{capture:true,passive:true});
   document.body.appendChild(imageContextMenu);
   return imageContextMenu;
 }
@@ -2183,7 +2250,7 @@ function ensureHorizontalRuleContextMenu(){
   });
   document.addEventListener('keydown',event=>{if(event.key==='Escape')hideHorizontalRuleContextMenu()});
   window.addEventListener('resize',hideHorizontalRuleContextMenu);
-  document.addEventListener('scroll',hideHorizontalRuleContextMenu,true);
+  document.addEventListener('scroll',hideHorizontalRuleContextMenu,{capture:true,passive:true});
   document.body.appendChild(horizontalRuleContextMenu);
   return horizontalRuleContextMenu;
 }
@@ -2242,13 +2309,13 @@ document.addEventListener('contextmenu',e=>{
     showMathContextMenu(e,math);
     return;
   }
-  const embeddedDocument=e.target.closest('#preview .zz-doc-embed[data-embed-source]');
-  if(embeddedDocument){
-    showUniqueBlockContextMenu(e,embeddedDocument);
+  const embeddedObject=e.target.closest('#preview .zz-sheet[data-embed-source],#preview .zz-html-embed[data-embed-source],#preview .zz-doc-embed[data-embed-source]');
+  if(embeddedObject){
+    showUniqueBlockContextMenu(e,embeddedObject);
     return;
   }
   if(showTextContextMenu(e))return;
-  const uniqueBlock=e.target.closest('#preview .code-block,#preview .zz-lens[data-lens-source],#preview .obsidian-callout[data-callout-source],#preview .zz-sync-block[data-sync-source],#preview .zz-toc[data-toc-source]');
+  const uniqueBlock=e.target.closest(uniquePreviewBlockSelector);
   if(uniqueBlock){
     showUniqueBlockContextMenu(e,uniqueBlock);
     return;
@@ -2696,7 +2763,7 @@ function keepSourceChipCaretInside(){
   state.savedPreviewRange=next.cloneRange();
   return true;
 }
-let sourceSyntaxHoverTimer=0,sourceSyntaxHideTimer=0,sourceSyntaxPopover=null,sourceSyntaxTarget=null,sourceSyntaxRange=null,sourceSyntaxHoverCandidate=null,sourceSyntaxPinned=false,sourceSyntaxResizeObserver=null;
+let sourceSyntaxHoverTimer=0,sourceSyntaxHideTimer=0,sourceSyntaxPopover=null,sourceSyntaxTarget=null,sourceSyntaxRange=null,sourceSyntaxHoverCandidate=null,sourceSyntaxPinned=false,sourceSyntaxResizeObserver=null,sourceSyntaxPositionFrame=0;
 function loadSourceSyntaxPopoverSize(){
   try{
     const value=JSON.parse(localStorage.getItem('md-source-syntax-popover-size')||'null');
@@ -2863,8 +2930,15 @@ document.addEventListener('keydown',event=>{
 document.addEventListener('mousedown',event=>{
   if(sourceSyntaxPopover&&!sourceSyntaxPinned&&!sourceSyntaxPopover.contains(event.target))closeSourceSyntaxPopover();
 },true);
-window.addEventListener('resize',()=>{if(sourceSyntaxPopover&&sourceSyntaxTarget)positionSourceSyntaxPopover(sourceSyntaxTarget)});
-document.addEventListener('scroll',()=>{if(sourceSyntaxPopover&&sourceSyntaxTarget)positionSourceSyntaxPopover(sourceSyntaxTarget)},true);
+function scheduleSourceSyntaxPopoverPosition(){
+  if(sourceSyntaxPositionFrame||!sourceSyntaxPopover||!sourceSyntaxTarget)return;
+  sourceSyntaxPositionFrame=requestAnimationFrame(()=>{
+    sourceSyntaxPositionFrame=0;
+    if(sourceSyntaxPopover&&sourceSyntaxTarget)positionSourceSyntaxPopover(sourceSyntaxTarget);
+  });
+}
+window.addEventListener('resize',scheduleSourceSyntaxPopoverPosition,{passive:true});
+document.addEventListener('scroll',scheduleSourceSyntaxPopoverPosition,{capture:true,passive:true});
 function clearClickMove(){
   if(clickMoveElement){
     clickMoveElement.classList.remove('move-selected');
@@ -3237,7 +3311,7 @@ document.addEventListener('keydown',e=>{
     }
     const selection=window.getSelection();
     const range=selection?.rangeCount?selection.getRangeAt(0):null;
-    const selectedObject=clickMoveElement.matches('.zz-doc-embed[data-embed-source]');
+    const selectedObject=clickMoveElement.matches(atomicPreviewObjectSelector);
     if(!selectedObject&&e.target===els.preview&&range&&els.preview.contains(range.commonAncestorContainer)){
       clearClickMove();
       return;
@@ -3252,7 +3326,7 @@ document.addEventListener('keydown',e=>{
   }
 });
 els.preview.addEventListener('beforeinput',e=>{
-  if(!/^delete/i.test(e.inputType||'')||!clickMoveElement?.matches?.('.zz-math')||!els.preview.contains(clickMoveElement))return;
+  if(!/^delete/i.test(e.inputType||'')||!clickMoveElement?.matches?.(atomicPreviewObjectSelector)||!els.preview.contains(clickMoveElement))return;
   e.preventDefault();
   e.stopImmediatePropagation();
   deleteSelectedPreviewElement();
@@ -3510,7 +3584,7 @@ function showTableFilterMenu(table,column,button){
     };
     formatBody.appendChild(row);if(palette)formatBody.appendChild(palette);
   });
-  document.body.appendChild(menu);reposition();document.addEventListener('pointerdown',outside);document.addEventListener('keydown',key);window.addEventListener('scroll',scheduleReposition,true);window.addEventListener('resize',scheduleReposition);
+  document.body.appendChild(menu);reposition();document.addEventListener('pointerdown',outside);document.addEventListener('keydown',key);window.addEventListener('scroll',scheduleReposition,{capture:true,passive:true});window.addEventListener('resize',scheduleReposition,{passive:true});
 }
 function addTableResize(container){
   scopedElements(container,'table').forEach(table=>{
@@ -4811,7 +4885,7 @@ function schedulePostRenderEnhancements(text){
   const token=postRenderEnhancementToken;
   let stage=0;
   els.preview.setAttribute('aria-busy','true');
-  const hasMermaid=!!els.preview.querySelector('.mermaid:not([data-processed])');
+  const hasMermaid=!!els.preview.querySelector('.mermaid:not([data-processed]),pre > code.language-mermaid');
   const hasCode=!!els.preview.querySelector('pre code');
   const hasTables=!!els.preview.querySelector('table');
   const hasImages=!!els.preview.querySelector('img');
@@ -5829,7 +5903,7 @@ function ensureHashtagContextMenu(){
   });
   document.addEventListener('keydown',e=>{if(e.key==='Escape')hideHashtagContextMenu()});
   window.addEventListener('resize',hideHashtagContextMenu);
-  document.addEventListener('scroll',hideHashtagContextMenu,true);
+  document.addEventListener('scroll',hideHashtagContextMenu,{capture:true,passive:true});
   document.body.appendChild(hashtagContextMenu);
   translateUi(hashtagContextMenu);
   return hashtagContextMenu;
@@ -5892,7 +5966,7 @@ function ensureFileContextMenu(){
   document.addEventListener('mousedown',e=>{if(!fileContextMenu.hidden&&!fileContextMenu.contains(e.target))hideFileContextMenu()});
   document.addEventListener('keydown',e=>{if(e.key==='Escape')hideFileContextMenu()});
   window.addEventListener('resize',hideFileContextMenu);
-  document.addEventListener('scroll',hideFileContextMenu,true);
+  document.addEventListener('scroll',hideFileContextMenu,{capture:true,passive:true});
   document.body.appendChild(fileContextMenu);
   return fileContextMenu;
 }
@@ -7515,11 +7589,9 @@ async function extractPdfWithLayout(file){
   let doc=null,loading=null;
   try{
     state.lastInput={type:'pdf',name:file.name};updateHomeConvert();
-    const base='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/';
-    const pdfjs=await import(/* @vite-ignore */ base+'pdf.min.mjs');
-    pdfjs.GlobalWorkerOptions.workerSrc=base+'pdf.worker.min.mjs';
-    const assets='https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/';
-    loading=pdfjs.getDocument({data:await file.arrayBuffer(),cMapUrl:assets+'cmaps/',cMapPacked:true,standardFontDataUrl:assets+'standard_fonts/'});
+    const pdfjs=await import('pdfjs-dist/build/pdf.min.mjs');
+    pdfjs.GlobalWorkerOptions.workerSrc=pdfWorkerUrl;
+    loading=pdfjs.getDocument({data:await file.arrayBuffer()});
     doc=await loading.promise;
     const pages=[];let tableCount=0,imageOnly=0,preservedCount=0,documentBodySize=null;
     for(let p=1;p<=doc.numPages;p++){
@@ -9117,13 +9189,12 @@ let pagedJsPromise=null;
 function loadPagedJs(){
   if(window.Paged?.Previewer)return Promise.resolve(window.Paged);
   if(pagedJsPromise)return pagedJsPromise;
-  pagedJsPromise=new Promise((resolve,reject)=>{
-    window.PagedConfig={...(window.PagedConfig||{}),auto:false};
-    const script=document.createElement('script');
-    script.src='https://unpkg.com/pagedjs@0.4.3/dist/paged.polyfill.min.js';
-    script.onload=()=>window.Paged?.Previewer?resolve(window.Paged):reject(new Error('페이지 분할 기능을 초기화하지 못했습니다.'));
-    script.onerror=()=>reject(new Error('페이지 분할 모듈을 불러오지 못했습니다.'));
-    document.head.appendChild(script);
+  pagedJsPromise=import('pagedjs').then(module=>{
+    const Previewer=module.Previewer||module.default?.Previewer;
+    if(!Previewer)throw new Error('페이지 분할 기능을 초기화하지 못했습니다.');
+    const api={...module,Previewer};
+    window.Paged=api;
+    return api;
   }).catch(error=>{pagedJsPromise=null;throw error});
   return pagedJsPromise;
 }
@@ -13507,7 +13578,7 @@ function ensureTextContextMenu(){
   document.addEventListener('mousedown',e=>{if(!textContextMenu.hidden&&!textContextMenu.contains(e.target))hideTextContextMenu()});
   document.addEventListener('keydown',e=>{if(e.key==='Escape')hideTextContextMenu()});
   window.addEventListener('resize',hideTextContextMenu);
-  document.addEventListener('scroll',hideTextContextMenu,true);
+  document.addEventListener('scroll',hideTextContextMenu,{capture:true,passive:true});
   document.body.appendChild(textContextMenu);
   return textContextMenu;
 }
@@ -15095,7 +15166,19 @@ function showLinkDialog(initialText='',initialUrl='https://',editing=false,initi
     urlInput.select();
   });
 }
-function showMathDialog(initialLatex='',initialDisplay='inline'){
+let mathLiveRuntimePromise=null;
+function loadMathLiveRuntime(){
+  if(customElements.get('math-field'))return Promise.resolve(customElements.get('math-field'));
+  if(mathLiveRuntimePromise)return mathLiveRuntimePromise;
+  mathLiveRuntimePromise=Promise.all([import('mathlive'),import('mathlive/fonts.css')]).then(([module])=>{
+    const MathfieldElementClass=module.MathfieldElement||customElements.get('math-field');
+    if(MathfieldElementClass)window.MathfieldElement=MathfieldElementClass;
+    return MathfieldElementClass;
+  }).catch(error=>{mathLiveRuntimePromise=null;throw error});
+  return mathLiveRuntimePromise;
+}
+async function showMathDialog(initialLatex='',initialDisplay='inline'){
+  await Promise.all([loadMathLiveRuntime().catch(()=>null),loadKatexRuntime().catch(()=>null)]);
   return new Promise(resolve=>{
     const wrap=document.createElement('div');
     wrap.className='modal-backdrop';
@@ -15286,7 +15369,7 @@ els.preview.addEventListener('click',event=>{
 },true);
 els.preview.addEventListener('click',event=>{
   if(!usesMobileObjectGesture()||event.detail<2)return;
-  const target=event.target.closest('table,img,.zz-doc-embed[data-embed-source],.zz-lens[data-lens-source],.obsidian-callout[data-callout-source],.zz-sync-block[data-sync-source],.zz-toc[data-toc-source]');
+  const target=event.target.closest(`table,img,${uniquePreviewBlockSelector}`);
   if(!target)return;
   event.preventDefault();
   event.stopImmediatePropagation();
@@ -15319,9 +15402,7 @@ els.preview.addEventListener('dblclick',async event=>{
     return;
   }
   if(usesMobileObjectGesture()){
-    const embeddedDocument=event.target.closest('.zz-doc-embed[data-embed-source]');
-    if(embeddedDocument){showUniqueBlockContextMenu(event,embeddedDocument);return}
-    const uniqueBlock=event.target.closest('.zz-lens[data-lens-source],.obsidian-callout[data-callout-source],.zz-sync-block[data-sync-source],.zz-toc[data-toc-source]');
+    const uniqueBlock=event.target.closest(uniquePreviewBlockSelector);
     if(uniqueBlock){showUniqueBlockContextMenu(event,uniqueBlock);return}
     const image=event.target.closest('img');
     if(image){showImageContextMenu(event,image);return}
@@ -16866,6 +16947,8 @@ function closeGuideModal(wrap){
   wrap.remove();
 }
 const EN_TEXT={
+  '``[표시 문구](링크) 형식으로 입력해 주세요.':'Use the ``[label](link) format.',
+  '스프레드시트 모듈을 불러오지 못했습니다. 다시 시도해 주세요.':'Could not load spreadsheet support. Please try again.',
   '홈으로 이동':'Home','설정 열기':'Settings','설정':'Settings','설정 분류':'Settings categories','일반':'General','변환':'Convert','편집':'Edit','병합':'Merge',
   '파일 [0]':'Files [0]','파일':'Files','문서':'Document','로컬':'Local','로컬 [0]':'Local [0]','업로드된 파일':'Uploaded files','업로드된 파일 [0]':'Uploaded files [0]',
   '문서 작업':'Document workspace','작업할 파일':'Files to work with','작업할 파일을 여기에 놓으세요':'Drop files here',
@@ -16886,7 +16969,7 @@ const EN_TEXT={
   '다운로드':'Download','병합 파일을 기기에 저장합니다.':'Save the merged file to this device.',
   '문서 목록에 추가':'Add to document list','현재 작업 목록에 새 문서로 추가합니다.':'Add it as a new document in the current workspace.',
   '둘 다':'Both','다운로드하고 문서 목록에도 추가합니다.':'Download it and add it to the document list.',
-  'Markdown':'Markdown','Preview':'Preview','분할':'Split','보기':'Preview','미리보기 가로 스크롤':'Preview horizontal scroll',
+  'Markdown':'Markdown','Preview':'Preview','분할':'Split','보기':'Preview','미리보기 가로 스크롤':'Preview horizontal scroll','미리보기 세로 스크롤':'Preview vertical scroll',
   '가이드':'Guide','기능 가이드 표시':'Show feature guides','설명이 필요한 기능에 마우스를 올리면 사용법과 예시를 보여줍니다.':'Hover over a feature to see instructions and examples.','설명이 필요한 기능을 길게 누르면 사용법과 예시를 보여줍니다.':'Press and hold a feature to see instructions and examples.',
   '가이드 다시 보기':'View guides again','목록에서 다시 볼 가이드를 선택합니다.':'Choose a guide to view again.',
   '단축키':'Shortcuts','단축키 설정':'Shortcut settings','17개 명령의 단축키를 확인하고 변경합니다.':'Review and change shortcuts for 17 commands.',
@@ -18902,8 +18985,8 @@ $('clear-text-color').onclick=e=>{
 };
 $('clear-bg-color').onclick=e=>{e.preventDefault();e.stopPropagation();applyPickedColor('bg','');closeAllPanels()};
 
-const ZZ_DB_NAME='zz-md-workspace',ZZ_DB_VERSION=1;
-let zzDbPromise=null,autosaveTimer=0,autosaveIdle=0,lastVersionFileKey='',lastVersionText=null;
+const ZZ_DB_NAME='zz-md-workspace',ZZ_DB_VERSION=1,ZZ_EMERGENCY_WORKSPACE_KEY='zz-md-emergency-workspace-v1';
+let zzDbPromise=null,autosaveTimer=0,autosaveIdle=0,emergencySaveTimer=0,emergencySaveStartedAt=0,lastVersionFileKey='',lastVersionText=null;
 const CUSTOM_FONT_ENABLED_KEY='md-custom-font-enabled',CUSTOM_FONT_ACTIVE_KEY='md-custom-font-active';
 let customFontEnabled=savedOption(CUSTOM_FONT_ENABLED_KEY,false),customFonts=[],customFontsLoaded=false;
 const customFontFaces=new Map();
@@ -19008,10 +19091,32 @@ function serializableWorkspace(){
     }))
   };
 }
+function writeEmergencyWorkspace(){
+  try{
+    const snapshot=serializableWorkspace();
+    snapshot.assets=[];
+    localStorage.setItem(ZZ_EMERGENCY_WORKSPACE_KEY,JSON.stringify(snapshot));
+  }catch(_){ }
+}
+function scheduleEmergencyWorkspace(){
+  const now=Date.now();
+  if(!emergencySaveStartedAt)emergencySaveStartedAt=now;
+  clearTimeout(emergencySaveTimer);
+  const delay=now-emergencySaveStartedAt>=1000?0:180;
+  emergencySaveTimer=setTimeout(()=>{
+    emergencySaveTimer=0;emergencySaveStartedAt=0;writeEmergencyWorkspace();
+  },delay);
+}
+function readEmergencyWorkspace(){
+  try{return JSON.parse(localStorage.getItem(ZZ_EMERGENCY_WORKSPACE_KEY)||'null')}catch(_){return null}
+}
 async function saveWorkspaceSession(){
-  try{await zzStorePut('session','latest',serializableWorkspace())}catch(_){}
+  const snapshot=serializableWorkspace();
+  writeEmergencyWorkspace();
+  try{await zzStorePut('session','latest',snapshot)}catch(_){}
 }
 function scheduleWorkspaceSave(){
+  scheduleEmergencyWorkspace();
   clearTimeout(autosaveTimer);
   if(autosaveIdle&&'cancelIdleCallback' in window)cancelIdleCallback(autosaveIdle);
   autosaveIdle=0;
@@ -19093,7 +19198,8 @@ function waitForActivePreviewRender(text=els.editor.value,timeout=5000){
 }
 async function showVersionHistory(){
   const file=state.files[state.active];
-  const snapshot=await zzStoreGet('session','latest').catch(()=>null);
+  const storedSnapshot=await zzStoreGet('session','latest').catch(()=>null),emergencySnapshot=readEmergencyWorkspace();
+  const snapshot=emergencySnapshot?.savedAt>(storedSnapshot?.savedAt||0)?emergencySnapshot:storedSnapshot;
   const versions=file?await zzStoreGet('versions',file.path||file.name)||[]:[];
   if(!file&&!snapshot?.files?.length){showInfoNotice('버전 기록','저장된 버전이 없습니다.');return}
   const locale=uiLanguage==='en'?'en-US':'ko-KR';
@@ -19132,7 +19238,8 @@ async function showVersionHistory(){
 }
 async function restoreWorkspaceSession(){
   const finishLookup=beginBusyNotice(uiLanguage==='en'?'Checking recovery data…':'복원 데이터를 확인하는 중…');
-  const snapshot=await zzStoreGet('session','latest').catch(()=>null).finally(finishLookup);
+  const stored=await zzStoreGet('session','latest').catch(()=>null).finally(finishLookup),emergency=readEmergencyWorkspace();
+  const snapshot=emergency?.savedAt>(stored?.savedAt||0)?emergency:stored;
   if(!(snapshot?.files?.length||snapshot?.sidebarFolders?.length||snapshot?.assets?.length)||state.files.length)return;
   const age=new Date(snapshot.savedAt).toLocaleString();
   const dialog=await showInsertDialog('작업 복구',`<p class="recovery-summary">${htmlEsc(age)}에 자동 저장된 문서 ${snapshot.files.length}개가 있습니다.<br>브라우저 저장소가 지워지기 전까지 이 기록을 복구할 수 있습니다.</p>`,'복구',wrap=>wrap.classList.add('recovery-dialog'));
@@ -19225,8 +19332,20 @@ async function insertHtmlAsset(file){
   const html=await readText(file),payload=zzEncodePayload(html);
   replaceSelection(`<!-- zz:html name="${file.name.replace(/"/g,'&quot;')}" width="720" height="420" -->\n${payload}\n<!-- /zz:html -->`);
 }
+let spreadsheetRuntimePromise=null;
+function loadSpreadsheetRuntime(){
+  if(window.XLSX)return Promise.resolve(window.XLSX);
+  if(spreadsheetRuntimePromise)return spreadsheetRuntimePromise;
+  spreadsheetRuntimePromise=import('@e965/xlsx').then(module=>{
+    window.XLSX=module;
+    return module;
+  }).catch(error=>{spreadsheetRuntimePromise=null;throw error});
+  return spreadsheetRuntimePromise;
+}
 async function showSheetInsertDialog(file){
-  if(!window.XLSX){showInfoNotice('스프레드시트 삽입','스프레드시트 모듈을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.');return}
+  let XLSX;
+  try{XLSX=await loadSpreadsheetRuntime()}
+  catch(_){showInfoNotice('스프레드시트 삽입','스프레드시트 모듈을 불러오지 못했습니다. 다시 시도해 주세요.');return}
   const extension=file.name.split('.').pop().toLowerCase();
   const workbook=extension==='csv'||extension==='tsv'
     ?XLSX.read(await readText(file),{type:'string',FS:extension==='tsv'?'\t':','})
@@ -19329,6 +19448,7 @@ function flushWorkspaceForLifecycle(){
   autosaveIdle=0;
   if(previewMarkdownTimer||previewSyncTimer||previewSyncIdle)syncFromPreview();
   captureActiveFileViewState();
+  clearTimeout(emergencySaveTimer);emergencySaveTimer=0;emergencySaveStartedAt=0;writeEmergencyWorkspace();
   return saveWorkspaceSession();
 }
 document.addEventListener('visibilitychange',()=>{
