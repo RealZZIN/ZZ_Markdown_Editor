@@ -468,7 +468,10 @@ function markdownImageSrc(src){const resolved=resolveImage(src.trim());return /^
 let enhancedMarkdownToken=0;
 function markdownToken(prefix,block=false){
   const id=`ZZ${prefix}${enhancedMarkdownToken++}TOKEN`;
-  return block?`<!--${id}-->`:id;
+  // Text and comment placeholders can be auto-linked by the URL extension,
+  // which puts rendered math HTML inside an href and corrupts the source.
+  // An empty raw-HTML placeholder remains a standalone DOM token in marked.
+  return block?`<div data-zz-token="${id}"></div>`:`<span data-zz-token="${id}"></span>`;
 }
 function zzEncodePayload(value){
   const bytes=new TextEncoder().encode(String(value??''));
@@ -3370,9 +3373,19 @@ document.addEventListener('paste',e=>{
 });
 document.addEventListener('click',e=>{if(codeLangMenu&&!e.target.closest('.code-lang-menu')&&!e.target.closest('.code-lang'))closeCodeLanguageMenu()});
 let tblResizeDrag=null;
+let tableOverflowFrame=0,tableOverflowTarget=null;
 function updateTableCellOverflow(table){
   if(!table?.isConnected)return;
   table.querySelectorAll('th,td').forEach(cell=>cell.classList.remove('cell-overflowing'));
+}
+function scheduleTableCellOverflow(table){
+  tableOverflowTarget=table;
+  if(tableOverflowFrame)return;
+  tableOverflowFrame=requestAnimationFrame(()=>{
+    tableOverflowFrame=0;
+    const target=tableOverflowTarget;tableOverflowTarget=null;
+    updateTableCellOverflow(target);
+  });
 }
 const tableFilterStates=new WeakMap();
 function snapshotTableFilterView(root){
@@ -3616,7 +3629,7 @@ function addTableResize(container){
     if(!table.style.width)table.style.width='100%';
     if(!table.style.minWidth)table.style.minWidth='520px';
     const updateOuterHandles=()=>table.querySelectorAll('.tbl-row-resize-handle').forEach(handle=>{handle.style.width=table.offsetWidth+'px'});
-    const MIN_COLUMN_WIDTH=120;
+    const MIN_COLUMN_WIDTH=40;
     function lockTableColumns(){
       const firstRow=table.querySelector('tr');
       if(!firstRow)return[];
@@ -3825,7 +3838,7 @@ document.addEventListener('pointermove',e=>{
       if(cells[colIdx+1])cells[colIdx+1].style.width=(startNextW-appliedDx)+'px';
     });
     tblResizeDrag.updateOuterHandles?.();
-    updateTableCellOverflow(table);
+    scheduleTableCellOverflow(table);
   }else if(tblResizeDrag.type==='row'){
     const dy=e.clientY-tblResizeDrag.startY;
     if(!tblResizeDrag.started){
@@ -3841,7 +3854,7 @@ document.addEventListener('pointermove',e=>{
     const appliedDy=Math.max(tblResizeDrag.minH-tblResizeDrag.startH,dy);
     tblResizeDrag.table.style.height=Math.max(56,tblResizeDrag.startTableH+appliedDy)+'px';
     tblResizeDrag.row.style.height=(tblResizeDrag.startH+appliedDy)+'px';
-    updateTableCellOverflow(tblResizeDrag.table);
+    scheduleTableCellOverflow(tblResizeDrag.table);
   }else if(tblResizeDrag.type==='table'){
     const dx=e.clientX-tblResizeDrag.startX;
     const dy=e.clientY-tblResizeDrag.startY;
@@ -3862,7 +3875,7 @@ document.addEventListener('pointermove',e=>{
       const base=tblResizeDrag.rowBaseHeights[index]||row.offsetHeight;
       row.style.height=Math.max(28,base*scale)+'px';
     });
-    updateTableCellOverflow(tblResizeDrag.table);
+    scheduleTableCellOverflow(tblResizeDrag.table);
   }
 });
 function finishTableResize(e){
@@ -3884,7 +3897,7 @@ document.addEventListener('pointerup',finishTableResize);
 document.addEventListener('pointercancel',finishTableResize);
 let resetTableInteractionState=()=>{};
 (function(){
-  let ctx=null,ctxTarget=null,selectedTable=null,copiedTableHtml='',cellAnchor=null,cellFocus=null,cellDragging=false,ctxActionTaken=false;
+  let ctx=null,ctxTarget=null,ctxSecondary=false,selectedTable=null,copiedTableHtml='',cellAnchor=null,cellFocus=null,cellDragging=false,ctxActionTaken=false;
   function getMenu(){
     if(!ctx){
       ctx=document.createElement('div');ctx.id='tbl-ctx';
@@ -4212,7 +4225,10 @@ let resetTableInteractionState=()=>{};
       row.replaceWith(...outputRows);
     });
     table.style.tableLayout='fixed';table.style.minWidth='0';
-    syncFromPreview();renderMarkdown(els.editor.value);pushHistory(true);return true;
+    table.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle').forEach(handle=>handle.remove());
+    table.removeAttribute('data-resize-ready');
+    addTableResize(table);addMovableElements(table);
+    syncFromPreview();pushHistory(true);return true;
   }
   function requestCellSplit(){
     const selected=selectedCells(),merged=selected.length===1&&(selected[0].rowSpan>1||selected[0].colSpan>1);
@@ -4294,7 +4310,6 @@ let resetTableInteractionState=()=>{};
     table.remove();
     selectedTable=null;clearCellSelection();
     syncFromPreview();
-    renderMarkdown(els.editor.value);
     pushHistory(true);
     return true;
   }
@@ -4345,7 +4360,15 @@ let resetTableInteractionState=()=>{};
     if(op==='cut-cells'){copyCellRange();clearCellRange();hideMenu();return}
     if(op==='clear-cells'){clearCellRange();hideMenu();return}
     if(op==='merge-cells'){hideMenu();mergeCellRange();return}
-    if(op==='split-cells'){hideMenu();requestCellSplit().then(value=>{if(value)splitCellRange(value.rows,value.cols)});return}
+    if(op==='split-cells'){
+      hideMenu();
+      requestCellSplit().then(value=>{
+        if(!value)return;
+        if(ctxSecondary){setDocumentActivePane('secondary');const entered=beginSecondaryFormatContext();try{splitCellRange(value.rows,value.cols)}finally{if(entered)endSecondaryFormatContext()}}
+        else splitCellRange(value.rows,value.cols);
+      });
+      return;
+    }
     if(op==='equal-height'||op==='equal-width'){equalizeTableCells(table,op==='equal-height'?'height':'width');hideMenu();return}
     if(op==='paste-cells'){
       hideMenu();
@@ -4432,8 +4455,14 @@ let resetTableInteractionState=()=>{};
       const targetColumn=op==='col-left'?cStart:cEnd+1;
       insertedColumn=targetColumn;
       preserveTableGeometry(table);
-      const firstRowBefore=Array.from(table.rows?.[0]?.cells||[]);
-      const priorWidths=firstRowBefore.map(cell=>cell.getBoundingClientRect().width);
+      const layoutBefore=tableLogicalLayout(table);
+      const priorWidths=Array.from({length:layoutBefore.columnCount},(_,column)=>{
+        const samples=[];
+        layoutBefore.placements.forEach((placement,cell)=>{
+          if(column>=placement.c&&column<placement.c+placement.colSpan)samples.push(cell.getBoundingClientRect().width/placement.colSpan);
+        });
+        return samples.length?samples.reduce((sum,value)=>sum+value,0)/samples.length:48;
+      });
       const tableWidth=table.getBoundingClientRect().width||priorWidths.reduce((sum,width)=>sum+width,0);
       const tableHeight=table.getBoundingClientRect().height;
       const rowHeights=Array.from(table.rows).map(row=>row.getBoundingClientRect().height);
@@ -4443,17 +4472,20 @@ let resetTableInteractionState=()=>{};
       // new blank column a full duplicate width shrank every existing column
       // and changed wrapping/row height across the whole table.
       const insertedBase=Math.max(24,Math.min(96,adjacentWidth*.25));
-      // Resolve each insertion point from the live row instead of the stale
-      // selection matrix. This keeps "add left/right" deterministic for a
-      // whole-column selection and for tables containing nested tables.
-      Array.from(table.rows).forEach(rowElement=>{
-        const countBefore=rowElement.cells.length;
-        const cells=Array.from(rowElement.cells),before=cells[targetColumn]||null;
+      const extended=new Set();
+      layoutBefore.placements.forEach((placement,cell)=>{
+        if(placement.c<targetColumn&&placement.c+placement.colSpan>targetColumn){cell.colSpan+=1;extended.add(cell)}
+      });
+      Array.from(table.rows).forEach((rowElement,rowIndex)=>{
+        const covering=layoutBefore.occupied[rowIndex]?.[targetColumn];
+        if(covering&&extended.has(covering))return;
+        const placement=covering&&layoutBefore.placements.get(covering);
+        if(placement&&placement.r<rowIndex&&placement.c===targetColumn)return;
+        const before=Array.from(rowElement.cells).find(cell=>(layoutBefore.placements.get(cell)?.c??Infinity)>=targetColumn)||null;
         const tag=rowElement.parentElement?.tagName==='THEAD'?'th':'td';
-        rowElement.insertBefore(makeEmptyCell(tag),before);
-        // Structural invariant: a column command adds exactly one cell to
-        // every row, even if a browser dispatches an unusual duplicate event.
-        while(rowElement.cells.length>countBefore+1)rowElement.cells[targetColumn+1]?.remove();
+        const inserted=makeEmptyCell(tag);
+        if(placement?.r===rowIndex&&placement.c===targetColumn&&placement.rowSpan>1)inserted.rowSpan=placement.rowSpan;
+        rowElement.insertBefore(inserted,before);
       });
       // The table already occupies its intended width. Reallocate that width
       // among all columns so the inserted blank column is visible without
@@ -4462,9 +4494,11 @@ let resetTableInteractionState=()=>{};
       bases[adjacentIndex]=Math.max(24,adjacentWidth-insertedBase);
       bases.splice(targetColumn,0,insertedBase);
       const baseTotal=bases.reduce((sum,width)=>sum+width,0)||1;
-      Array.from(table.rows).forEach(row=>Array.from(row.cells).forEach((cell,index)=>{
-        if(index<bases.length){cell.style.width=`${(bases[index]/baseTotal*100).toFixed(4)}%`;cell.style.minWidth='0'}
-      }));
+      const layoutAfter=tableLogicalLayout(table);
+      layoutAfter.placements.forEach((placement,cell)=>{
+        const width=bases.slice(placement.c,placement.c+placement.colSpan).reduce((sum,value)=>sum+value,0);
+        cell.style.width=`${(width/baseTotal*100).toFixed(4)}%`;cell.style.minWidth='0';
+      });
       table.style.width=`${tableWidth}px`;
       if(tableHeight)table.style.height=`${tableHeight}px`;
       Array.from(table.rows).forEach((row,index)=>{
@@ -4513,13 +4547,15 @@ let resetTableInteractionState=()=>{};
     }else{hideMenu();return}
     clearCellSelection();
     syncFromPreview();
-    renderMarkdown(els.editor.value);
+    table.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle').forEach(handle=>handle.remove());
+    table.removeAttribute('data-resize-ready');
+    addTableResize(table);addMovableElements(table);
     if(insertedColumn>=0){
-      const renderedTable=[...els.preview.querySelectorAll('table')][tableIndex];
-      const renderedRows=tableCells(renderedTable);
-      if(renderedTable&&renderedRows.length&&renderedRows.every(row=>row[insertedColumn])){
-        cellAnchor={table:renderedTable,r:0,c:insertedColumn};
-        cellFocus={table:renderedTable,r:renderedRows.length-1,c:insertedColumn};
+      const renderedTable=[...els.preview.querySelectorAll('table')][tableIndex]||table;
+      const logical=tableLogicalLayout(renderedTable),columnCells=logical.occupied.map(row=>row[insertedColumn]).filter(Boolean);
+      if(columnCells.length){
+        cellAnchor={table:renderedTable,r:0,c:insertedColumn,cell:columnCells[0]};
+        cellFocus={table:renderedTable,r:logical.rowCount-1,c:insertedColumn,cell:columnCells[columnCells.length-1]};
         paintCellSelection();
       }
     }
@@ -4528,7 +4564,7 @@ let resetTableInteractionState=()=>{};
   }
   function showMenu(e,target){
     e.preventDefault();
-    const menu=getMenu();ctxTarget=target;ctxActionTaken=false;
+    const menu=getMenu();ctxTarget=target;ctxSecondary=!!target.closest?.('#secondary-preview');ctxActionTaken=false;
     const hasCells=selectedCells().length>0;
     const submenu=(label,items,danger=false)=>`<div class="tbl-ctx-submenu-row"><button type="button" data-tbl-submenu class="${danger?'danger':''}"><span>${label}</span><span class="tbl-ctx-arrow">›</span></button><div class="tbl-ctx-submenu">${items}</div></div>`;
     menu.innerHTML=`
@@ -4540,7 +4576,11 @@ let resetTableInteractionState=()=>{};
       if(ctxActionTaken)return;
       ctxActionTaken=true;
       menu.querySelectorAll('button').forEach(button=>button.disabled=true);
-      doOp(btn.dataset.op);
+      if(ctxSecondary){
+        setDocumentActivePane('secondary');
+        const entered=beginSecondaryFormatContext();
+        try{doOp(btn.dataset.op)}finally{if(entered)endSecondaryFormatContext()}
+      }else doOp(btn.dataset.op);
     });
     menu.querySelectorAll('.tbl-ctx-submenu-row').forEach(row=>{
       const button=row.querySelector('[data-tbl-submenu]');
@@ -4574,14 +4614,18 @@ let resetTableInteractionState=()=>{};
   }
   document.addEventListener('contextmenu',e=>{
     const table=e.target.closest('table');
-    const inPreview=e.target.closest('#preview,#convert-preview');
+    const inPreview=e.target.closest('#preview,#secondary-preview,#convert-preview');
     if(table&&inPreview){
+      const secondary=inPreview===els.secondaryPreview;
+      if(secondary)setDocumentActivePane('secondary');
+      const entered=secondary?beginSecondaryFormatContext():false;
       if(els.preview.contains(table)){
         const cell=e.target.closest('td,th'),current=selectedCells();
         if(cell&&!(cellAnchor?.table===table&&current.includes(cell)))setCellSelection(cell);
         else if(!cell)selectTable(table);
       }
       showMenu(e,e.target);
+      if(entered)endSecondaryFormatContext();
     }
   });
   const handleTableSelectionMouseDown=e=>{
@@ -4934,7 +4978,7 @@ function schedulePostRenderEnhancements(text){
   const enhance=()=>{
     postRenderEnhancementIdle=0;
     if(token!==postRenderEnhancementToken||lastRenderedMarkdownText!==text)return;
-    if(stage===0&&document.querySelector('.modal-backdrop,.edit-guide-overlay,.form-insert-panel')){
+    if(stage===0&&document.querySelector('.modal-backdrop:not([hidden]),.edit-guide-overlay:not([hidden]),.form-insert-panel:not([hidden])')){
       postRenderEnhancementDelay=setTimeout(()=>{
         postRenderEnhancementDelay=0;
         if(token!==postRenderEnhancementToken)return;
@@ -6279,8 +6323,18 @@ function downloadSidebarFile(index){
   setStatus(`${file.originalName||file.name||path} 파일을 다운로드했습니다.`);
 }
 const MERGE_ORDER_STORAGE_KEY='md-merge-order-v1';
+const MERGE_INCLUDE_NAMES_KEY='md-merge-include-names-v1';
 let mergeOrderKeys=(()=>{try{const saved=JSON.parse(localStorage.getItem(MERGE_ORDER_STORAGE_KEY)||'[]');return Array.isArray(saved)?saved.filter(value=>typeof value==='string'):[]}catch{return[]}})();
 let mergeSelectedKeys=new Set(),mergeSelectionInitialized=false,draggedMergeRow=null;
+const mergeIncludeNames=$('merge-include-names');
+if(mergeIncludeNames){
+  mergeIncludeNames.checked=savedOption(MERGE_INCLUDE_NAMES_KEY,true);
+  mergeIncludeNames.addEventListener('change',()=>{
+    localStorage.setItem(MERGE_INCLUDE_NAMES_KEY,mergeIncludeNames.checked?'1':'0');
+    mergePreviewSnapshot=[];updateMergePreview();
+  });
+}
+function mergeNamesEnabled(){return mergeIncludeNames?.checked!==false}
 function mergeOrderKey(file){return String(file?.path||file?.name||'')}
 function mergeDisplayName(file){
   const value=String(file?.displayName||file?.name||'');
@@ -6396,7 +6450,7 @@ function disconnectLazyPreview(container){
   lazyPreviewObservers.delete(container);
 }
 function lazyPreviewMarkdown(file,kind){
-  if(kind==='merge')return `<!-- ${file.path} -->\n\n# ${file.name.replace(mdExt,'')}\n\n${(file.text||'').trim()}`;
+  if(kind==='merge')return mergeNamesEnabled()?`<!-- ${file.path} -->\n\n# ${file.name.replace(mdExt,'')}\n\n${(file.text||'').trim()}`:(file.text||'').trim();
   return `# ${file.displayName||file.name||'문서'}\n\n${file.text||''}`;
 }
 function enhanceLazyPreviewSection(section,jobIsCurrent){
@@ -7088,7 +7142,14 @@ function cleanPreviewHtml(root,{preserveMath=false}={}){
   });
   if(!preserveMath)root.querySelectorAll('.zz-math[data-latex]').forEach(math=>{
     const marker=math.dataset.display==='block'?'$$':'$';
-    math.replaceWith(document.createTextNode(`${marker}${math.dataset.latex}${marker}`));
+    const source=document.createTextNode(`${marker}${math.dataset.latex}${marker}`);
+    const color=math.style.color,background=math.style.backgroundColor;
+    if(color||background){
+      const wrapper=document.createElement(math.dataset.display==='block'?'div':'span');
+      if(color)wrapper.style.color=color;
+      if(background)wrapper.style.backgroundColor=background;
+      wrapper.appendChild(source);math.replaceWith(wrapper);
+    }else math.replaceWith(source);
   });
   root.querySelectorAll('.zz-wikilink[data-wiki-file]').forEach(link=>{
     const file=link.dataset.wikiFile||'';
@@ -7765,15 +7826,15 @@ async function extractPdfWithLayout(file){
     state.stayHomeAfterConvert=false;
   }
 }
-function buildMerged(files){return files.map(f=>`<!-- ${f.path} -->\n\n# ${f.name.replace(mdExt,'')}\n\n${f.text.trim()}`).join('\n\n---\n\n')+'\n'}
+function buildMerged(files){return files.map(f=>mergeNamesEnabled()?`<!-- ${f.path} -->\n\n# ${f.name.replace(mdExt,'')}\n\n${f.text.trim()}`:f.text.trim()).join('\n\n---\n\n')+'\n'}
 function addMerged(text){const existing=state.files.findIndex(f=>f.path==='merged-markdown.md'),previous=existing>=0?state.files[existing]:null,item={name:'merged-markdown.md',path:'merged-markdown.md',dir:'',text,savedText:previous?.savedText||'',source:'local'};existing>=0?state.files[existing]=item:state.files.push(item);renderAll()}
 function selectedMergeFiles(){
   const byKey=new Map(state.files.map(file=>[mergeOrderKey(file),file]));
   return [...els.mergeOrderList.querySelectorAll('.merge-order-row')].map(row=>byKey.get(row.dataset.mergeKey)).filter(Boolean);
 }
-let mergePreviewSnapshot=[],mergePreviewTheme='',mergePreviewJob=0;
+let mergePreviewSnapshot=[],mergePreviewTheme='',mergePreviewIncludeNames=true,mergePreviewJob=0;
 function sameMergePreview(files){
-  return mergePreviewTheme===state.theme&&files.length===mergePreviewSnapshot.length&&files.every((file,i)=>{
+  return mergePreviewTheme===state.theme&&mergePreviewIncludeNames===mergeNamesEnabled()&&files.length===mergePreviewSnapshot.length&&files.every((file,i)=>{
     const previous=mergePreviewSnapshot[i];
     return previous?.file===file&&previous.text===file.text&&previous.path===file.path;
   });
@@ -7792,6 +7853,7 @@ function updateMergePreview(){
   if(sameMergePreview(selected))return;
   mergePreviewSnapshot=selected.map(file=>({file,text:file.text,path:file.path}));
   mergePreviewTheme=state.theme;
+  mergePreviewIncludeNames=mergeNamesEnabled();
   const job=++mergePreviewJob;
   setupLazyDocumentPreview(els.mergeResult,selected,'merge',()=>job===mergePreviewJob);
 }
@@ -10147,7 +10209,6 @@ els.imageInput.onchange=e=>{
 };
 $('home-convert-upload').onclick=()=>{state.stayHomeAfterConvert=true;els.fileInput.click()};
 $('pdf-drop').onclick=()=>els.pdfInput.click();
-$('merge-drop').onclick=()=>els.fileInput.click();
 els.pdfInput.onchange=e=>addFiles(e.target.files);
 document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>setMode(b.dataset.mode,false));
 document.querySelectorAll('.home [data-mode]').forEach(b=>b.onclick=e=>{
@@ -10421,12 +10482,12 @@ function insertPreviewTableSpace(e){
   const origin=range.startContainer.nodeType===Node.ELEMENT_NODE?range.startContainer:range.startContainer.parentElement;
   const cell=origin?.closest?.('td,th');
   if(!cell||!els.preview.contains(cell))return false;
-  const prefix=document.createRange();
-  try{prefix.selectNodeContents(cell);prefix.setEnd(range.startContainer,range.startOffset)}catch{return false}
   e.preventDefault();
   e.stopImmediatePropagation();
   pushHistory(true);
-  const text=document.createTextNode(prefix.toString().replace(/[\u200b\u00a0]/g,'').length?' ':'\u00a0');
+  // Use a real space even at the start of a cell. NBSP made the first press
+  // look ineffective and forced users to press Space twice in merged cells.
+  const text=document.createTextNode(' ');
   range.insertNode(text);
   range.setStartAfter(text);range.collapse(true);
   selection.removeAllRanges();selection.addRange(range);
@@ -10477,10 +10538,43 @@ function handlePreviewListBackspace(e){
 }
 els.preview.addEventListener('keydown',handlePreviewListBackspace,true);
 els.secondaryPreview.addEventListener('keydown',e=>{
-  if(e.key!=='Backspace')return;
   setDocumentActivePane('secondary');
   const entered=beginSecondaryFormatContext();
-  try{handlePreviewListBackspace(e)}finally{if(entered)endSecondaryFormatContext()}
+  try{
+    if(e.key==='Backspace'){
+      if(!e.defaultPrevented)preserveTableInlineFormatOnDelete(e);
+      if(!e.defaultPrevented)handlePreviewListBackspace(e);
+    }
+    if(!e.defaultPrevented&&e.key==='Enter')insertPlainPreviewParagraph(e);
+  }finally{if(entered)endSecondaryFormatContext()}
+},true);
+els.secondaryPreview.addEventListener('beforeinput',e=>{
+  if(e.defaultPrevented)return;
+  setDocumentActivePane('secondary');
+  const entered=beginSecondaryFormatContext();
+  try{insertPreviewTableSpace(e)}finally{if(entered)endSecondaryFormatContext()}
+},true);
+els.secondaryPreview.addEventListener('beforeinput',e=>{
+  if(e.defaultPrevented||!/^delete/i.test(e.inputType||''))return;
+  setDocumentActivePane('secondary');
+  const entered=beginSecondaryFormatContext();
+  try{preserveTableInlineFormatOnDelete(e)}finally{if(entered)endSecondaryFormatContext()}
+},true);
+els.secondaryPreview.addEventListener('click',e=>{
+  const math=e.target.closest?.('.zz-math[data-latex]');
+  if(!math||!els.secondaryPreview.contains(math))return;
+  e.preventDefault();e.stopPropagation();
+  setDocumentActivePane('secondary');
+  const entered=beginSecondaryFormatContext();
+  try{
+    if(clickMoveElement===math){selectMathNode(math);return}
+    clearClickMove();
+    clickMoveElement=math;
+    math.classList.add('move-selected');
+    math.setAttribute('aria-selected','true');
+    els.preview.focus({preventScroll:true});
+    selectMathNode(math);
+  }finally{if(entered)endSecondaryFormatContext()}
 },true);
 els.preview.addEventListener('beforeinput',()=>{
   if(activeSourceChipEdit)keepSourceChipCaretInside();
@@ -11116,11 +11210,11 @@ function endSecondaryFormatContext(){
   secondaryFormatContext=null;
   if(file&&sourceChanged)commitSecondaryHistory(file);
   if(sourceChanged&&surface!=='preview')renderSecondaryPreview({defer:true});
-  secondaryFormatAsyncPending=!!document.querySelector('.modal-backdrop,.form-insert-panel');
+  secondaryFormatAsyncPending=!!document.querySelector('.modal-backdrop:not([hidden]),.form-insert-panel:not([hidden])');
   updateUndoRedoButtons();
   if(sourceChanged)scheduleWorkspaceSave();
 }
-const secondaryFormatUiSelector='#format-tools,#fmt-heading-menu,#fmt-size-menu,#fmt-line-height-menu,#text-color-panel,#bg-color-panel,#table-size-panel,#ins-menu,#syntax-menu,.custom-format-panel,.saved-custom-format-window,.find-replace-panel';
+const secondaryFormatUiSelector='#format-tools,#fmt-heading-menu,#fmt-size-menu,#fmt-line-height-menu,#text-color-panel,#bg-color-panel,#table-size-panel,#ins-menu,#syntax-menu,.custom-format-panel,.saved-custom-format-window,.saved-color-window,.find-replace-panel';
 let formatScrollSnapshot=null,formatMenuScrollSnapshot=null,formatSelectionScrollSnapshot=null,formatScrollRestoreFrame=0,formatScrollRestoreToken=0;
 function captureFormatScrollSnapshot(){
   const secondary=documentSplitState.activePane==='secondary'&&documentSplitState.secondaryFile;
@@ -11185,7 +11279,12 @@ for(const eventName of ['mousedown','pointerdown'])document.addEventListener(eve
 document.addEventListener('click',event=>{
   if(!event.target.closest?.(secondaryFormatUiSelector))return;
   formatScrollSnapshot=formatScrollSnapshot||captureFormatScrollSnapshot();
-  documentFormatScrollLock=true;syncScrollLock=true;
+  if(formatScrollSnapshot){
+    documentFormatScrollLock=true;syncScrollLock=true;
+    // A panel can be removed before its follow-up change/click bubbles. Never
+    // leave scrolling or pane editing in a permanently locked state.
+    setTimeout(()=>{documentFormatScrollLock=false;syncScrollLock=false},700);
+  }
 },true);
 for(const eventName of ['click','change'])document.addEventListener(eventName,event=>{
   if(!event.target.closest?.(secondaryFormatUiSelector))return;
@@ -11485,6 +11584,12 @@ documentScrollSurfaces.forEach(surface=>{
     if(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key))markDocumentScrollIntent(surface);
   },true);
 });
+document.addEventListener('pointerdown',event=>{
+  if(!event.target.closest?.('.saved-color-window'))return;
+  const secondary=documentSplitState.activePane==='secondary'&&documentSplitState.secondaryFile;
+  const entered=secondary&&beginSecondaryFormatContext();
+  try{captureColorTarget()}finally{if(entered)endSecondaryFormatContext()}
+},true);
 function resetDocumentScrollSync(){
   if(documentSyncScrollFrame)cancelAnimationFrame(documentSyncScrollFrame);
   if(documentScrollAnimationFrame)cancelAnimationFrame(documentScrollAnimationFrame);
@@ -12058,6 +12163,19 @@ function toggleSelectedMathWrapper(math,tags,tagName){
 }
 function styleSelectedMath(math,styleName,value){
   pushHistory(true);
+  if(styleName==='color'||styleName==='background-color'){
+    // Keep equation colors on the atomic math node itself. KaTeX inherits the
+    // text color, and serialization preserves these properties around $...$.
+    for(let parent=math.parentElement;parent&&parent!==els.preview&&parent.childNodes.length===1;parent=parent.parentElement){
+      if(!parent.hasAttribute('style'))continue;
+      parent.style.removeProperty(styleName);
+      if(!parent.getAttribute('style'))parent.removeAttribute('style');
+    }
+    if(value==='')math.style.removeProperty(styleName);
+    else math.style.setProperty(styleName,value);
+    if(!math.getAttribute('style'))math.removeAttribute('style');
+    return finishMathFormat(math);
+  }
   let wrapper=math.parentElement;
   const wrapperTag=math.matches('.zz-math-block')?'div':'span';
   if(wrapper?.tagName.toLowerCase()!==wrapperTag||!wrapper.hasAttribute('style')||wrapper.childNodes.length!==1){
@@ -15088,6 +15206,7 @@ function preservePreviewFormatOnDelete(e){
   return true;
 }
 function deleteTableCellBackwardWithoutBlock(e,range,cell){
+  const wasSingleLine=!cell.querySelector('br,p,div,h1,h2,h3,h4,h5,h6,li,ul,ol,blockquote');
   const marker=document.createComment('table-backspace-caret');
   range.insertNode(marker);
   const candidates=[],walker=document.createTreeWalker(cell,NodeFilter.SHOW_TEXT|NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_COMMENT);let node;
@@ -15113,6 +15232,15 @@ function deleteTableCellBackwardWithoutBlock(e,range,cell){
     while(target.data.endsWith('\u200b'))target.deleteData(target.length-1,1);
     const character=Array.from(target.data).at(-1)||'';
     if(character)target.deleteData(target.length-character.length,character.length);
+  }
+  // contenteditable occasionally creates a block/BR boundary while handling
+  // Backspace in a table cell even after the key event was cancelled. Flatten
+  // that transient boundary before restoring the caret so a one-line cell
+  // always remains one line.
+  normalizeTableCellInlineBlocks(cell);
+  if(wasSingleLine&&(cell.textContent||'').replace(/[\u200b\u00a0\s]/g,'')){
+    cell.querySelectorAll('br').forEach(br=>br.remove());
+    cell.normalize();
   }
   const next=document.createRange();next.setStartBefore(marker);next.collapse(true);marker.remove();
   const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);
@@ -15237,11 +15365,8 @@ function insertPlainPreviewParagraph(e){
   }
   const quote=origin?.closest?.('blockquote');
   const quoteBlock=closestPreviewBlock(range.startContainer);
-  if(!e.shiftKey&&quote&&quoteBlock&&quoteBlock!==quote&&previewBlockIsEmpty(quoteBlock)){
+  if(!e.shiftKey&&quote){
     e.preventDefault();
-    // Remove the empty line used as the exit gesture, then place a normal
-    // paragraph immediately outside the outermost quote.
-    quoteBlock.remove();
     return exitPreviewStructuredBlock(quote);
   }
   if(e.shiftKey){
@@ -16999,7 +17124,7 @@ const SHORTCUT_DEFINITIONS=[
   {id:'modeMerge',name:'병합 화면',description:'문서 병합 화면으로 이동',defaultKey:'Ctrl+F3'},
   {id:'save',name:'저장',description:'현재 작업 결과 저장',defaultKey:'Ctrl+S'},
   {id:'saveAs',name:'다른 이름으로 저장',description:'편집 문서를 새 이름으로 저장',defaultKey:'Ctrl+Shift+S'},
-  {id:'open',name:'파일 열기',description:'파일 또는 폴더 불러오기',defaultKey:'Ctrl+O'},
+  {id:'open',name:'문서 열기',description:'파일 또는 폴더 불러오기',defaultKey:'Ctrl+O'},
   {id:'runSelection',name:'선택 작업 실행',description:'변환·병합 화면의 선택 작업 실행',defaultKey:'Ctrl+Enter'},
   {id:'find',name:'찾기',description:'현재 화면에서 내용 찾기',defaultKey:'Ctrl+F'},
   {id:'replace',name:'찾기 및 바꾸기',description:'편집 화면에서 내용 바꾸기',defaultKey:'Ctrl+H'},
@@ -17028,7 +17153,8 @@ function shortcutConflict(id,value){
 }
 function loadShortcutSettings(){
   let saved={};try{saved=JSON.parse(localStorage.getItem(SHORTCUT_SETTINGS_KEY)||'{}')||{}}catch{}
-  return Object.fromEntries(SHORTCUT_DEFINITIONS.map(item=>[item.id,typeof saved[item.id]==='string'?saved[item.id]:item.defaultKey]));
+  const valid=value=>typeof value==='string'&&/^(?:(?:Ctrl|Alt|Shift)\+)*(?:Ctrl|Alt|Shift|Esc|Space|Left|Right|Up|Down|F(?:[1-9]|1[0-2])|[A-Z0-9])$/.test(value);
+  return Object.fromEntries(SHORTCUT_DEFINITIONS.map(item=>[item.id,valid(saved[item.id])?saved[item.id]:item.defaultKey]));
 }
 let shortcutSettings=loadShortcutSettings();
 function shortcutKeyName(key){
@@ -17047,7 +17173,10 @@ function shortcutFromEvent(event){
   if(event.ctrlKey||event.metaKey)parts.push('Ctrl');
   if(event.altKey)parts.push('Alt');
   if(event.shiftKey)parts.push('Shift');
-  parts.push(shortcutKeyName(event.key));
+  // IME composition can report a Hangul character for Ctrl+B/Ctrl+S. The
+  // physical code stays KeyB/KeyS, so command shortcuts use it when present.
+  const physical=/^Key[A-Z]$/.test(event.code||'')?event.code.slice(3):/^Digit[0-9]$/.test(event.code||'')?event.code.slice(5):event.key;
+  parts.push(shortcutKeyName(physical));
   return parts.join('+');
 }
 function shortcutMatches(event,id){return shortcutSettings[id]&&shortcutFromEvent(event)===shortcutSettings[id]}
@@ -17308,7 +17437,7 @@ const EN_TEXT={
   '파일을 선택하기 전에 내용을 빠르게 확인합니다.':'Quickly inspect content before selecting a file.',
   '미니 프리뷰를 켜고 항목 위에 마우스를 올립니다.':'Turn on Mini preview and hover over an item.',
   '작은 미리보기에서 문서 내용을 확인한 뒤 선택합니다.':'Review the document in the small preview before selecting it.',
-  '병합할 파일 선택':'Select files to merge','합칠 문서와 순서를 왼쪽 목록에서 정합니다.':'Choose the documents and their order in the list on the left.','병합 순서':'Merge order','순서 설정':'Set order','끌어서 순서를 바꾸거나 화살표 버튼을 사용하세요.':'Drag to reorder, or use the arrow buttons.','현재 문서에 파일 삽입':'Insert file into current document','0개 선택':'0 selected','병합 문서 검색':'Search merge documents','문서 찾기':'Find a document','문서명':'Document name','병합 문서명 검색':'Search merge document names',
+  '병합할 파일 선택':'Select files to merge','합칠 문서와 순서를 왼쪽 목록에서 정합니다.':'Choose the documents and their order in the list on the left.','병합 순서':'Merge order','순서 설정':'Set order','끌어서 순서를 바꾸거나 화살표 버튼을 사용하세요.':'Drag to reorder, or use the arrow buttons.','현재 문서에 파일 삽입':'Insert file into current document','문서명 포함':'Include document names','0개 선택':'0 selected','병합 문서 검색':'Search merge documents','문서 찾기':'Find a document','문서명':'Document name','병합 문서명 검색':'Search merge document names',
   '체크한 문서만 병합 결과에 포함됩니다.':'Only checked documents are included in the merged result.',
   '전체 선택 버튼으로 모든 항목을 한 번에 바꿀 수 있습니다.':'Use Select all to change every item at once.',
   '병합 결과 확인':'Review merge results','선택한 문서를 하나로 합친 결과를 오른쪽에서 확인합니다.':'Review the combined result on the right.',
@@ -17381,7 +17510,7 @@ const EN_TEXT={
   '이미지나 첨부 파일을 문서 본문에 바로 표시합니다.':'Displays an image or attachment directly in the document.','![[화면 구성.png]]':'![[Layout.png]]','이미지 미리보기':'Image preview','화면 구성.png':'Layout.png',
   '문장 중 강조할 부분에 형광펜처럼 배경색을 표시합니다.':'Highlights part of a sentence with a marker-like background.','회의는 ==오후 3시==에 시작합니다.':'The meeting starts at ==3 PM==.','회의는':'The meeting starts at','오후 3시':'3 PM','에 시작합니다.':'.',
   '찾을 내용':'Find','바꿀 내용':'Replace with','비워두면 찾은 내용을 삭제합니다':'Leave blank to delete matches','대소문자 구분':'Match case','단어 전체':'Whole words','다음 찾기':'Find next','바꾸기':'Replace','모두 바꾸기':'Replace all','일치 항목 없음':'No matches','원문에서 바꿀 위치를 찾지 못했습니다':'Could not locate the match in the source'
-  ,'파일 열기':'Open file','폴더 열기':'Open folder','문서로 저장':'Save as document','PDF 저장':'Save PDF','MD 저장':'Save MD','Word 저장 (.docx)':'Save as Word (.docx)','한글 저장 (.hwpx)':'Save as Hangul (.hwpx)','ZIP 저장':'Save ZIP','변경된 문서만':'Changed documents only','문서 선택…':'Select documents…','폴더 전체':'Entire folder',
+  ,'파일 열기':'Open file','문서 열기':'Open document','폴더 열기':'Open folder','문서로 저장':'Save as document','PDF 저장':'Save PDF','MD 저장':'Save MD','Word 저장 (.docx)':'Save as Word (.docx)','한글 저장 (.hwpx)':'Save as Hangul (.hwpx)','ZIP 저장':'Save ZIP','변경된 문서만':'Changed documents only','문서 선택…':'Select documents…','폴더 전체':'Entire folder',
   '문서 저장 중':'Saving document','현재 문서 변환이 끝난 뒤 다시 시도해 주세요.':'Wait for the current conversion to finish, then try again.',
   'PDF는 한 번에 문서 하나를 선택해 주세요.':'Select one document at a time when saving as PDF.','목차 수정 실패':'Could not update table of contents','원문에서 선택한 목차를 찾지 못했습니다. 미리보기를 새로 고친 뒤 다시 시도해 주세요.':'Could not find the selected table of contents in the source. Refresh Preview and try again.',
   '미리보기 축소':'Zoom Preview out','미리보기 확대':'Zoom Preview in','배율 낮추기':'Zoom out','배율 높이기':'Zoom in','배율 5% 낮추기':'Decrease zoom by 5%','배율 5% 높이기':'Increase zoom by 5%','PDF 파일에는 적용되지 않는 보기 배율':'Preview zoom does not affect PDF files',
@@ -17581,7 +17710,7 @@ function scheduleModeGuideWelcome(mode=state.mode,force=false){
   if(!force&&(!featureGuideEnabled||localStorage.getItem(modeGuideKey(mode))==='1'))return;
   if(!force&&mode==='home'&&localStorage.getItem(FEATURE_GUIDE_WELCOME_KEY)!=='1')return;
   editGuideWelcomeTimer=setTimeout(()=>{
-    if(document.querySelector('.modal-backdrop,.form-insert-panel'))return;
+    if(document.querySelector('.modal-backdrop:not([hidden]),.form-insert-panel:not([hidden])'))return;
     const visible=mode==='home'?!els.home.classList.contains('hidden'):state.mode===mode&&els.home.classList.contains('hidden');
     if(visible)showModeGuideWelcome(mode,force);
   },500);
@@ -19748,10 +19877,10 @@ $('edit-close-doc').onclick=closeDocument;
     });
   }
   const openMenu=makeMenu([
-    {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 1.2h4.5l2.5 2.5v8.1H3a1 1 0 01-1-1V2.2a1 1 0 011-1z"/><path d="M7.5 1.2v2.5H10"/><path d="M5.2 7.2h4M7.8 5.8l1.4 1.4-1.4 1.4"/></svg> 파일 열기',action:()=>els.fileInput.click()},
+    {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 1.2h4.5l2.5 2.5v8.1H3a1 1 0 01-1-1V2.2a1 1 0 011-1z"/><path d="M7.5 1.2v2.5H10"/><path d="M4.6 7.2h3.8M6.8 5.8l1.4 1.4-1.4 1.4"/></svg> 문서 열기',action:()=>els.fileInput.click()},
     {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4.5h11v6a1 1 0 01-1 1H2a1 1 0 01-1-1v-6z"/><path d="M1 4.5l1.5-3h3.3l1.3 1.4H12"/><path d="M5 8h3.8M7.4 6.6L8.8 8 7.4 9.4"/></svg> 폴더 열기',action:()=>els.folderInput.click()},
     '-',
-    {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 9V2"/><path d="M4 4.5L6.5 2 9 4.5"/><path d="M2 8v2.5A1.5 1.5 0 003.5 12h6a1.5 1.5 0 001.5-1.5V8"/></svg> 현재 문서에 파일 삽입',action:()=>$('insert-file-input').click()},
+    {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><path d="M2.8 1.2h4.4l2.7 2.7v7.9H2.8a.9.9 0 01-.9-.9V2.1a.9.9 0 01.9-.9z"/><path d="M7.2 1.2v2.7h2.7"/><path d="M6 6v3.3M4.35 7.65h3.3"/></svg> 현재 문서에 파일 삽입',action:()=>$('insert-file-input').click()},
   ]);
   const saveMenu=makeMenu([
     {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 10l4-7 4 7"/><line x1="3.5" y1="7.5" x2="8.5" y2="7.5"/></svg> MD 저장',action:()=>openDocumentFiles().length>1?saveOpenDocuments('md'):saveCurrent()},
@@ -19858,25 +19987,30 @@ for(const list of [els.convertList,els.mergeList]){
   list.tabIndex=0;
   list.addEventListener('mousedown',e=>{if(!e.target.closest('input,button'))list.focus({preventScroll:true})});
 }
-document.addEventListener('keydown',e=>{
-  if(e.isComposing||e.defaultPrevented)return;
-  const modifier=e.ctrlKey||e.metaKey,key=e.key.toLowerCase(),command=shortcutCommand(e);
+window.addEventListener('keydown',e=>{
+  const command=shortcutCommand(e);
+  // Korean IME and some embedded browsers keep isComposing set while Ctrl is
+  // held, or mark reserved key combinations as defaultPrevented before this
+  // late global handler runs. A recognized app shortcut must still win; only
+  // discard an ordinary composing/already-consumed keystroke.
+  if((e.isComposing||e.defaultPrevented)&&!command)return;
+  const modifier=e.ctrlKey||e.metaKey,key=e.key.toLowerCase();
   const customFormatPreset=customFormatPresetForShortcut(e);
   if(customFormatPreset){
     e.preventDefault();e.stopImmediatePropagation();
-    if(e.repeat||document.querySelector('.modal-backdrop'))return;
+    if(e.repeat||document.querySelector('.modal-backdrop:not([hidden])'))return;
     if(state.mode!=='edit'){showInfoNotice('사용자 지정 서식','편집 화면에서 텍스트를 선택한 뒤 사용해 주세요.');return}
     rememberPreviewRange();applyCustomFormatPreset(customFormatPreset,{deferSync:true});return;
   }
   if(command==='customFormat'){
-    e.preventDefault();e.stopImmediatePropagation();if(e.repeat||document.querySelector('.modal-backdrop'))return;
+    e.preventDefault();e.stopImmediatePropagation();if(e.repeat||document.querySelector('.modal-backdrop:not([hidden])'))return;
     if(state.mode!=='edit')setMode('edit');rememberPreviewRange();toggleCustomFormatPanel(true);return;
   }
   if(e.altKey&&!command)return;
   const target=e.target,dialog=target.closest?.('.modal-backdrop,[role="dialog"],.find-replace-panel');
   const editorSurface=target===els.editor||target===els.secondaryEditor||els.preview.contains(target)||els.secondaryPreview.contains(target);
   const auxiliary=!editorSurface&&target.closest?.('textarea,input:not([type="checkbox"]),[contenteditable="true"]');
-  const modal=document.querySelector('.modal-backdrop');
+  const modal=document.querySelector('.modal-backdrop:not([hidden])');
   const consume=()=>{e.preventDefault();e.stopImmediatePropagation()};
   if(command==='previewPin'){
     if(els.hoverPreview.style.display==='block'){consume();setHoverPreviewPinned(true)}

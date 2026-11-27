@@ -152,6 +152,9 @@ function auditLifecycleStability(mainSource){
   assert(indexSource.includes('id="merge-order-open"')&&indexSource.includes('id="merge-order-dialog"')&&styleSource.includes('.merge-order-dialog-card'),'Merge order is not available as a clean dialog beside the merge action.');
   assert(!indexSource.includes('id="insert-file-toggle"')&&mainSource.includes('현재 문서에 파일 삽입'),'The document insert upload is still a misleading standalone toolbar icon.');
   assert(mainSource.includes('function renderMergeOrderList()')&&mainSource.includes('mergeSelectedKeys'),'Selected merge documents do not have an independent order queue.');
+  assert(indexSource.includes('id="merge-include-names"')&&mainSource.includes('function mergeNamesEnabled()')&&mainSource.includes('MERGE_INCLUDE_NAMES_KEY'),'Merge output cannot include or omit document-name headings.');
+  assert(mainSource.includes("if(styleName==='color'||styleName==='background-color')")&&mainSource.includes('const color=math.style.color,background=math.style.backgroundColor'),'Equation text/background colors are not persisted through Preview serialization.');
+  assert(mainSource.includes('data-zz-token="${id}"'),'Enhanced Markdown placeholders can still be auto-linked and corrupt rendered equations or embedded controls.');
   assert(mainSource.includes("const root={name:'문서',children:new Map(),files:[]}")&&mainSource.includes("file.source==='local'?'로컬':'업로드된 파일'")&&!mainSource.includes("return'루트';return file.dir||'단일문서'"),'Merge documents are not organized under a single document tree matching the file sidebar.');
   assert(mainSource.includes('hoverPreviewShowTimer=setTimeout(()=>renderMergeHoverPreview(anchor,file,context),240)')&&mainSource.includes('const fullText=String(file.text||\'\'),limit=18000')&&mainSource.includes('requestIdleCallback'),'Merge hover previews still render full documents synchronously as soon as the pointer enters a row.');
   assert(mainSource.includes("document.visibilityState==='hidden')flushWorkspaceForLifecycle()"),'Hidden tabs do not flush pending workspace recovery data.');
@@ -205,9 +208,18 @@ function auditLifecycleStability(mainSource){
   assert(mainSource.includes('if(customFormatSavedWindow?.isConnected){event.preventDefault();event.stopPropagation();return}'),'An open saved custom-format window does not suppress single-click panel toggles.');
   assert(mainSource.includes('if(customFormatSavedWindow?.isConnected){closeCustomFormatSavedWindow();return}'),'Double-click does not close an open saved custom-format window.');
   assert(mainSource.includes('btn.ondblclick=event=>{event.preventDefault();event.stopPropagation();showRenameFileDialog(index)}'),'Sidebar files cannot be renamed by double-clicking their list row.');
-  assert(mainSource.includes('function insertPreviewTableSpace(e)')&&mainSource.includes("e.inputType!=='insertText'||e.data!==' '")&&mainSource.includes("?' ':'\\u00a0'"),'Leading spaces in preview table cells can still create a second block or line.');
+  assert(mainSource.includes('function insertPreviewTableSpace(e)')&&mainSource.includes("e.inputType!=='insertText'||e.data!==' '")&&mainSource.includes("document.createTextNode(' ')")&&mainSource.includes('e.stopImmediatePropagation()'),'Preview table spaces can still be swallowed or create a second block.');
   assert(mainSource.includes("e.key==='Backspace'&&!e.defaultPrevented")&&mainSource.includes("!before.toString().replace(/[\\u200b\\u00a0\\s]/g,'')"),'Backspace at the start of a table cell can still split its text into two lines.');
   assert(mainSource.includes('function deleteTableCellBackwardWithoutBlock(e,range,cell)')&&mainSource.includes('if(backward)return deleteTableCellBackwardWithoutBlock(e,range,cell)'),'Backspace inside a one-line table cell can still invoke native block splitting.');
+  assert(mainSource.includes("els.secondaryPreview.addEventListener('beforeinput',e=>")&&mainSource.includes('try{insertPreviewTableSpace(e)}finally'),'The secondary document pane does not share the table-space stability path.');
+  assert(mainSource.includes("e.target.closest('#preview,#secondary-preview,#convert-preview')")&&mainSource.includes("ctxSecondary=!!target.closest?.('#secondary-preview')"),'Table context-menu actions are not routed through the secondary document pane.');
+  assert(mainSource.includes("if(!e.shiftKey&&quote){")&&mainSource.includes('return exitPreviewStructuredBlock(quote);'),'Enter inside a quote can still create another quoted line.');
+  assert(mainSource.includes('scheduleTableCellOverflow(table)')&&mainSource.includes('requestAnimationFrame(()=>{'),'Table resizing still performs overflow layout work on every pointer event.');
+  assert(mainSource.includes("if(placement.c<targetColumn&&placement.c+placement.colSpan>targetColumn){cell.colSpan+=1"),'Adding a column inside a merged region can still split the merged cell.');
+  assert(mainSource.includes('setTimeout(()=>{documentFormatScrollLock=false;syncScrollLock=false},700)'),'A disappearing formatting panel can still leave editing or split scrolling locked.');
+  assert(mainSource.includes("if((e.isComposing||e.defaultPrevented)&&!command)return"),'Recognized shortcuts can still be discarded wholesale by IME/default-prevented key events.');
+  assert(/window\.addEventListener\('keydown',e=>\{\r?\n\s*const command=shortcutCommand\(e\)/.test(mainSource),'The central shortcut dispatcher can still be preempted by document-level capture handlers.');
+  assert(!/document\.querySelector\('\.modal-backdrop(?:,|'\))/.test(mainSource),'A hidden persistent modal can still be mistaken for an open dialog and disable shortcuts/features.');
 }
 
 function auditEmbeddedObjectEditing(mainSource,styleSource){

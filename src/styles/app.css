@@ -4214,10 +4214,10 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
 .merge-list .folder-title:hover { color: var(--t1); background: var(--s2); }
 .merge-list .folder-count { margin-left:3px;background:none;border:0;color:var(--t3); }
 .merge-list .folder-files { border-left-color: var(--b2); }
-.merge-document-root > .folder-title { min-height:40px;padding:0 11px;border:1px solid var(--b1);border-radius:8px;background:var(--s2);color:var(--t1); }
-.merge-document-root > .folder-title:hover { background:var(--s3); }
+.merge-document-root > .folder-title { min-height:34px;padding:0 8px;border:0;border-radius:6px;background:transparent;color:var(--t1); }
+.merge-document-root > .folder-title:hover { background:var(--s2); }
 .merge-document-root > .folder-files { margin-top:7px;margin-left:9px;padding-left:10px; }
-.merge-document-group:not(.merge-document-root) > .folder-title { min-height:34px;padding:0 8px;border-radius:6px;color:var(--t2); }
+.merge-document-group:not(.merge-document-root) > .folder-title { min-height:34px;padding:0 8px;border-radius:6px;background:transparent;color:var(--t2); }
 .merge-document-group:not(.merge-document-root) > .folder-files { margin-left:8px;padding-left:9px; }
 .merge-document-group .folder-label { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
 .merge-order-panel { margin-bottom:12px;min-width:0; }
@@ -4267,36 +4267,41 @@ body:not(.dark):not(.custom-theme) .zz-source-chip:hover { background:#e2f2fb; b
   width:28px;
   height:28px;
   padding:0;
-  border:1px solid transparent;
+  border:0;
   border-radius:var(--r3);
   background:transparent;
   color:var(--t2);
   cursor:pointer;
 }
-.merge-order-actions button:hover:not(:disabled) { border-color:var(--b1);background:var(--s3);color:var(--t1); }
+.merge-order-actions button:hover:not(:disabled) { background:var(--s3);color:var(--t1); }
 .merge-order-actions button:disabled { opacity:.25;cursor:default; }
 .merge-choice-row { min-width:0;padding:7px 8px;border-color:transparent;border-radius:6px;background:transparent;align-items:center; }
 .merge-choice-row:hover { border-color:transparent;background:var(--s2); }
 .merge-choice-row > .merge-name { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600; }
 .merge-result-actions { display:inline-flex;align-items:center;gap:6px; }
+.merge-include-names { display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:0 8px;color:var(--t2);font-size:12px;font-weight:650;line-height:1;white-space:nowrap;cursor:pointer; }
+.merge-include-names input { display:block;flex:0 0 auto;width:15px;height:15px;margin:0;accent-color:var(--accent); }
+.merge-include-names span { display:block;line-height:15px; }
 .merge-order-dialog[hidden] { display:none; }
 .merge-order-dialog { background:rgba(0,0,0,.48);backdrop-filter:blur(3px); }
-.merge-order-dialog-card { width:min(620px,calc(100vw - 32px));padding:0;overflow:hidden;border-radius:12px; }
-.merge-order-dialog-head { display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding:18px 20px 15px;border-bottom:1px solid var(--b1); }
-.merge-order-dialog-head h3 { margin:0 0 4px;font-size:17px; }
-.merge-order-dialog-head p { margin:0;font-size:12px; }
-.merge-order-dialog-close { display:grid;place-items:center;width:30px;height:30px;margin:-4px -5px 0 0;border-radius:7px;color:var(--t2);font-size:21px;line-height:1; }
+.merge-order-dialog-card { width:min(700px,calc(100vw - 32px));padding:0;overflow:hidden;border-radius:12px; }
+.merge-order-dialog-head { display:flex;align-items:flex-start;justify-content:space-between;gap:18px;padding:22px 24px 18px;border-bottom:1px solid var(--b1); }
+.merge-order-dialog-head h3 { margin:0 0 6px;font-size:21px; }
+.merge-order-dialog-head p { margin:0;color:var(--t2);font-size:13.5px; }
+.merge-order-dialog-close { display:grid;place-items:center;width:36px;height:36px;margin:-4px -5px 0 0;border-radius:7px;color:var(--t1);font-size:24px;line-height:1; }
 .merge-order-dialog-close:hover { background:var(--s2);color:var(--t1); }
-.merge-order-summary { display:flex;align-items:center;justify-content:space-between;padding:12px 20px 8px;color:var(--t2);font-size:12px; }
-.merge-order-summary strong { color:var(--t1);font-size:12px; }
-.merge-order-dialog .merge-order-list { max-height:min(440px,55vh);margin:0 20px;border-color:var(--b1);border-radius:8px; }
-.merge-order-dialog .merge-order-row { min-height:44px;padding:4px 8px;gap:6px; }
-.merge-order-dialog .merge-order-grip { flex-basis:22px;border-radius:5px;font-size:11px;letter-spacing:-3px; }
+.merge-order-summary { display:flex;align-items:center;justify-content:space-between;padding:16px 24px 10px;color:var(--t2);font-size:13.5px; }
+.merge-order-summary strong { color:var(--t1);font-size:13.5px; }
+.merge-order-dialog .merge-order-list { max-height:min(480px,58vh);margin:0 24px;border-color:var(--b1);border-radius:8px; }
+.merge-order-dialog .merge-order-row { min-height:54px;padding:6px 10px;gap:8px; }
+.merge-order-dialog .merge-order-grip { flex-basis:34px;border-radius:6px;color:var(--t2);font-size:14px;letter-spacing:-3px; }
 .merge-order-dialog .merge-order-grip:hover,.merge-order-dialog .merge-order-grip:focus-visible { background:var(--s3);color:var(--t1); }
-.merge-order-dialog .merge-order-number { flex-basis:24px;font-variant-numeric:tabular-nums; }
-.merge-order-dialog .merge-order-name { font-size:13px;font-weight:650; }
-.merge-order-dialog .merge-order-actions button { width:30px;height:30px; }
-.merge-order-dialog .modal-actions { margin:0;padding:14px 20px 18px; }
+.merge-order-dialog .merge-order-number { flex-basis:28px;color:var(--t1);font-size:14px;font-weight:800;font-variant-numeric:tabular-nums; }
+.merge-order-dialog .merge-order-name { font-size:15px;font-weight:700; }
+.merge-order-dialog .merge-order-actions button { width:36px;height:36px;border:0;background:transparent;color:var(--t1);font-size:17px; }
+.merge-order-dialog .merge-order-actions button:hover:not(:disabled) { background:var(--s3); }
+.merge-order-dialog .modal-actions { margin:0;padding:18px 24px 22px; }
+.merge-order-dialog .modal-actions .tool { width:auto;min-width:64px;min-height:34px;padding:7px 16px;font-size:13px; }
 
 .merge-options {
   display: flex;
