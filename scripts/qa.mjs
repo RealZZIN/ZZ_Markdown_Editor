@@ -143,6 +143,17 @@ function auditPerformanceGuards(mainSource){
 function auditLifecycleStability(mainSource){
   assert(mainSource.includes("loadMermaidRuntime().then(runtime=>")&&mainSource.includes("console.warn('Mermaid render failed',error)"),'Async Mermaid failures are not contained.');
   assert(mainSource.includes('Preview enhancement stage ${currentStage+1} failed'),'Preview enhancement stages are not isolated.');
+  assert(mainSource.includes('sandbox="allow-forms allow-scripts"')&&!mainSource.includes('sandbox="allow-forms allow-scripts allow-same-origin"'),'Uploaded HTML must run inside an opaque-origin sandbox.');
+  assert(styleSource.includes('.zz-html-frame { display:block; width:100%; height:calc(100% - 35px); min-height:220px; border:0; background:#fff; pointer-events:auto; }'),'Uploaded HTML interactions are disabled by the preview stylesheet.');
+  assert(mainSource.includes("const MERGE_ORDER_STORAGE_KEY='md-merge-order-v1'")&&mainSource.includes('function commitMergeListOrder()'),'Merge order cannot be rearranged or restored.');
+  assert(mainSource.includes('data-merge-shift="-1"')&&mainSource.includes("grip.addEventListener('dragstart'"),'Merge order is missing pointer and keyboard-friendly controls.');
+  assert(indexSource.includes('id="merge-order-list"')&&indexSource.includes('id="merge-search"'),'Merge selection and merge order are not separated for large document sets.');
+  assert(indexSource.indexOf('id="merge-drop"')<indexSource.indexOf('id="merge-search"')&&indexSource.indexOf('id="merge-search"')<indexSource.indexOf('id="merge-list"'),'Merge upload, search, and document selection are not arranged in the requested order.');
+  assert(indexSource.includes('id="merge-order-open"')&&indexSource.includes('id="merge-order-dialog"')&&styleSource.includes('.merge-order-dialog-card'),'Merge order is not available as a clean dialog beside the merge action.');
+  assert(!indexSource.includes('id="insert-file-toggle"')&&mainSource.includes('현재 문서에 파일 삽입'),'The document insert upload is still a misleading standalone toolbar icon.');
+  assert(mainSource.includes('function renderMergeOrderList()')&&mainSource.includes('mergeSelectedKeys'),'Selected merge documents do not have an independent order queue.');
+  assert(mainSource.includes("const root={name:'문서',children:new Map(),files:[]}")&&mainSource.includes("file.source==='local'?'로컬':'업로드된 파일'")&&!mainSource.includes("return'루트';return file.dir||'단일문서'"),'Merge documents are not organized under a single document tree matching the file sidebar.');
+  assert(mainSource.includes('hoverPreviewShowTimer=setTimeout(()=>renderMergeHoverPreview(anchor,file,context),240)')&&mainSource.includes('const fullText=String(file.text||\'\'),limit=18000')&&mainSource.includes('requestIdleCallback'),'Merge hover previews still render full documents synchronously as soon as the pointer enters a row.');
   assert(mainSource.includes("document.visibilityState==='hidden')flushWorkspaceForLifecycle()"),'Hidden tabs do not flush pending workspace recovery data.');
   assert(mainSource.includes('mutateQuoteDesign(quote,()=>quote.style.removeProperty(property))'),'Resetting quote colors bypasses the scroll-safe mutation path.');
   assert(mainSource.includes('|(?:>[ \\t]*)+\\S|'),'Nested quote markers are not recognized by live preview Markdown.');
@@ -157,10 +168,11 @@ function auditLifecycleStability(mainSource){
   assert(styleSource.includes('.saved-custom-format-resizer.right')&&styleSource.includes('.saved-custom-format-resizer.bottom'),'Saved custom style resize handles are not visible on both edges.');
   assert(mainSource.includes('matchingHosts.forEach(item=>'),'Background reset does not clear every matching nested wrapper in one pass.');
   assert(mainSource.includes("styleName==='background-color'||meaningful(element.textContent)===meaningful(range.toString())"),'Background reset can still split a highlighted run and leave colored side caps.');
+  assert(mainSource.includes("if(styled&&(styleName==='background-color'||meaningful(element.textContent)===meaningful(range.toString())))"),'Text color reset still fails when bold or underline changes the selection boundary.');
   assert(!mainSource.includes('<p>현재 문서에 저장되지 않은 수정사항이 있습니다. 계속하기 전에 어떻게 처리할까요?</p>'),'The unwanted unsaved-changes prompt sentence is still present.');
   assert(styleSource.includes('#tbl-ctx .tbl-ctx-group'),'The table context menu is not visually grouped.');
   assert(!mainSource.includes('class="tbl-ctx-label"'),'The table context menu still shows small section labels.');
-  assert(mainSource.includes("submenu('셀 편집'")&&mainSource.includes("submenu('행 · 열 추가'")&&mainSource.includes("submenu('삭제'"),'The table context menu is missing progressive submenus.');
+  assert(mainSource.includes("submenu('합치기 · 나누기'")&&mainSource.includes("submenu('정렬'")&&mainSource.includes("submenu('행 · 열 추가'")&&mainSource.includes("submenu('삭제'"),'The table context menu is missing progressive submenus.');
   assert(!mainSource.includes("submenu('표 작업'")&&mainSource.includes('<button data-op="reset-shape">표 형태 초기화</button>'),'Duplicate table cut/copy actions still occupy a submenu instead of a direct shape reset.');
   assert(styleSource.includes('width:168px')&&styleSource.includes('left:calc(100% + 8px)'),'Table submenus do not open beside the main menu.');
   assert(mainSource.includes("row.addEventListener('mouseenter',open)"),'Table submenus still require a click instead of pointer hover.');
@@ -192,11 +204,17 @@ function auditLifecycleStability(mainSource){
   assert(mainSource.includes('function closeCustomFormatSavedWindow()'),'Saved custom-format windows have no single close path.');
   assert(mainSource.includes('if(customFormatSavedWindow?.isConnected){event.preventDefault();event.stopPropagation();return}'),'An open saved custom-format window does not suppress single-click panel toggles.');
   assert(mainSource.includes('if(customFormatSavedWindow?.isConnected){closeCustomFormatSavedWindow();return}'),'Double-click does not close an open saved custom-format window.');
+  assert(mainSource.includes('btn.ondblclick=event=>{event.preventDefault();event.stopPropagation();showRenameFileDialog(index)}'),'Sidebar files cannot be renamed by double-clicking their list row.');
+  assert(mainSource.includes('function insertPreviewTableSpace(e)')&&mainSource.includes("e.inputType!=='insertText'||e.data!==' '")&&mainSource.includes("?' ':'\\u00a0'"),'Leading spaces in preview table cells can still create a second block or line.');
+  assert(mainSource.includes("e.key==='Backspace'&&!e.defaultPrevented")&&mainSource.includes("!before.toString().replace(/[\\u200b\\u00a0\\s]/g,'')"),'Backspace at the start of a table cell can still split its text into two lines.');
+  assert(mainSource.includes('function deleteTableCellBackwardWithoutBlock(e,range,cell)')&&mainSource.includes('if(backward)return deleteTableCellBackwardWithoutBlock(e,range,cell)'),'Backspace inside a one-line table cell can still invoke native block splitting.');
 }
 
 function auditEmbeddedObjectEditing(mainSource,styleSource){
   assert(mainSource.includes(".zz-sheet[data-embed-source],.zz-html-embed[data-embed-source],.zz-doc-embed[data-embed-source]"),'Embedded HTML, spreadsheets, and documents do not share object editing behavior.');
-  assert(mainSource.includes('clickMoveElement.matches(atomicPreviewObjectSelector)'),'Backspace/Delete can leave an empty embedded-object frame behind.');
+  assert(mainSource.includes("(e.key==='Delete'||e.key==='Backspace')&&clickMoveElement&&els.preview.contains(clickMoveElement)")&&mainSource.includes('deleteSelectedPreviewElement();'),'Backspace/Delete can leave an empty embedded-object frame behind.');
+  assert(mainSource.includes('function uploadDocumentName(file)')&&mainSource.includes('function openDocumentWithName(name)')&&mainSource.includes('기존 문서는 덮어쓰지 않았습니다.'),'Opening a same-named document can still overwrite an existing open file.');
+  assert(mainSource.includes('e.stopImmediatePropagation();')&&mainSource.includes('deleteSelectedPreviewElement();')&&mainSource.includes('removeHorizontalRule(selectedHorizontalRule)'),'Selected preview objects cannot be removed consistently with Delete or Backspace.');
   assert(mainSource.includes("block?.dataset.referenceSource"),'Reference blocks cannot preserve their source during copy and paste.');
   assert(mainSource.includes('class="zz-sheet" contenteditable="false"')&&mainSource.includes('class="zz-html-embed" contenteditable="false"'),'Read-only embedded objects can still be partially edited or leave an empty shell.');
   assert(styleSource.includes('.zz-html-frame')&&styleSource.includes('pointer-events:none'),'Read-only HTML iframe content still intercepts selection and context-menu input.');

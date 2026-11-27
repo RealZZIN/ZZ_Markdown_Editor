@@ -46,7 +46,7 @@ const codeLanguageByExt={
   vue:'vue',svelte:'svelte',gradle:'gradle',properties:'properties',env:'bash'
 };
 const codeLanguageByName={dockerfile:'dockerfile',makefile:'makefile'};
-const els={app:$('app'),sidebar:$('sidebar'),list:$('file-list'),outline:$('outline-list'),count:$('file-count'),status:$('status'),editor:$('editor'),markdownHighlight:$('markdown-highlight'),preview:$('preview'),convertPreview:$('convert-preview'),convertList:$('convert-list'),home:$('home'),homeMergeList:$('home-merge-list'),homeImageSummary:$('home-image-summary'),mergeList:$('merge-list'),mergeResult:$('merge-result'),editSplit:$('edit-split'),documentSplit:$('document-split'),primaryDocumentPane:$('primary-document-pane'),secondaryDocumentPane:$('secondary-document-pane'),secondaryEditor:$('secondary-editor'),secondaryPreview:$('secondary-preview'),secondaryEditSplit:$('secondary-edit-split'),hoverPreview:$('hover-preview'),lineGutter:$('line-gutter'),previewLineGutter:$('preview-line-gutter'),folderInput:$('folder-input'),fileInput:$('file-input'),imageInput:$('image-input'),pdfInput:$('pdf-input'),homeSource:$('home-source-name'),homeOutput:$('home-output-name'),homeOutputExt:$('home-output-ext')};
+const els={app:$('app'),sidebar:$('sidebar'),list:$('file-list'),outline:$('outline-list'),count:$('file-count'),status:$('status'),editor:$('editor'),markdownHighlight:$('markdown-highlight'),preview:$('preview'),convertPreview:$('convert-preview'),convertList:$('convert-list'),home:$('home'),homeMergeList:$('home-merge-list'),homeImageSummary:$('home-image-summary'),mergeList:$('merge-list'),mergeOrderList:$('merge-order-list'),mergeOrderCount:$('merge-order-count'),mergeSearch:$('merge-search'),mergeResult:$('merge-result'),editSplit:$('edit-split'),documentSplit:$('document-split'),primaryDocumentPane:$('primary-document-pane'),secondaryDocumentPane:$('secondary-document-pane'),secondaryEditor:$('secondary-editor'),secondaryPreview:$('secondary-preview'),secondaryEditSplit:$('secondary-edit-split'),hoverPreview:$('hover-preview'),lineGutter:$('line-gutter'),previewLineGutter:$('preview-line-gutter'),folderInput:$('folder-input'),fileInput:$('file-input'),imageInput:$('image-input'),pdfInput:$('pdf-input'),homeSource:$('home-source-name'),homeOutput:$('home-output-name'),homeOutputExt:$('home-output-ext')};
 function installMobilePreviewScrollDrag(preview){
   const body=preview?.parentElement;if(!body)return;
   const horizontal=document.createElement('div'),vertical=document.createElement('div');
@@ -159,6 +159,16 @@ function fencedCodeMarkdown(source,language){
   const content=String(source).replace(/^\uFEFF/,'');
   return `${fence}${language||''}\n${content}${content.endsWith('\n')?'':'\n'}${fence}\n`;
 }
+function uploadDocumentName(file){
+  if(mdExt.test(file?.name||''))return file.name;
+  if(/\.pdf$/i.test(file?.name||''))return file.name.replace(/\.pdf$/i,'.md');
+  if(codeLanguageFor(file?.name||''))return `${file.name}.md`;
+  return'';
+}
+function openDocumentWithName(name){
+  const key=String(name||'').trim().toLocaleLowerCase();
+  return key?state.files.find(file=>String(file.name||'').trim().toLocaleLowerCase()===key):null;
+}
 async function addCodeFile(file){
   const sourcePath=pathOf(file);
   const payload=await codeFilePayload(file);
@@ -177,8 +187,8 @@ async function addCodeFile(file){
     originalName:file.name,
     codeLanguage:language
   };
-  const old=state.files.findIndex(entry=>entry.path===path);
-  old>=0?state.files[old]=item:state.files.push(item);
+  if(openDocumentWithName(item.name))return null;
+  state.files.push(item);
   state.lastInput={type:'md',name:item.name};
   return item;
 }
@@ -381,7 +391,7 @@ function storeImageAsset(file){
   addImage(file);
   return path;
 }
-async function addMd(f){const path=pathOf(f),text=await readText(f),item={name:f.name,path,dir:dirOf(path),text,savedText:text,source:'uploaded'};const old=state.files.findIndex(x=>x.path===path);old>=0?state.files[old]=item:state.files.push(item);state.lastInput={type:'md',name:f.name};return item}
+async function addMd(f){const path=pathOf(f);if(openDocumentWithName(f.name))return null;const text=await readText(f);if(openDocumentWithName(f.name))return null;const item={name:f.name,path,dir:dirOf(path),text,savedText:text,source:'uploaded'};state.files.push(item);state.lastInput={type:'md',name:f.name};return item}
 function imageKeysFor(src,file){
   const clean=(()=>{try{return decodeURIComponent(src)}catch{return src}})().trim().replace(/^<|>$/g,'').replace(/^\.?\//,'').split(/[?#]/)[0];
   const local=normalizeSidebarPath(file&&file.dir?`${file.dir}/${clean}`:clean);
@@ -408,15 +418,19 @@ async function addFiles(files){
   const finishBusy=beginBusyNotice(uiLanguage==='en'?'Uploading files…':'파일을 불러오는 중…');
   await waitForBusyNoticePaint();
   try{
-  const arr=[...files],jobs=[];
+  const arr=[...files],jobs=[],skippedOpenFiles=[];
   const activeFileBeforeSort=state.files[state.active]||null;
   const activePreviewNeedsAssetRefresh=state.mode==='edit'&&arr.some(file=>imageExt.test(file.name));
   const inlineCodeFiles=canInsertCodeIntoActiveDocument()?arr.filter(file=>codeLanguageFor(file.name)):[];
   if(inlineCodeFiles.length)await insertCodeFilesIntoActiveDocument(inlineCodeFiles);
   const inlineSet=new Set(inlineCodeFiles);
+  const reservedNames=new Set(state.files.map(file=>String(file.name||'').trim().toLocaleLowerCase()).filter(Boolean));
   arr.forEach(f=>{
     const path=pathOf(f);
     if(inlineSet.has(f))return;
+    const documentName=uploadDocumentName(f),documentKey=documentName.trim().toLocaleLowerCase();
+    if(documentKey&&reservedNames.has(documentKey)){skippedOpenFiles.push(documentName);return}
+    if(documentKey)reservedNames.add(documentKey);
     if(imageExt.test(f.name))storeImageAsset(f);
     else{
       if(path)state.assets.set(path,f);
@@ -425,6 +439,10 @@ async function addFiles(files){
       else if(codeLanguageFor(f.name))jobs.push(addCodeFile(f));
     }
   });
+  if(skippedOpenFiles.length){
+    const names=[...new Set(skippedOpenFiles)];
+    showInfoNotice(uiLanguage==='en'?'File already open':'이미 열려 있는 파일',uiLanguage==='en'?`${names.join(', ')} is already open. The existing document was not overwritten.`:`${names.join(', ')} 파일은 이미 열려 있습니다. 기존 문서는 덮어쓰지 않았습니다.`);
+  }
   if(!jobs.length&&inlineCodeFiles.length===arr.length)return;
   const addedDocs=(await Promise.all(jobs)).filter(Boolean);
   state.files.sort((a,b)=>a.path.localeCompare(b.path,'ko'));
@@ -548,10 +566,14 @@ function renderEmbeddedSheet(attrsRaw,payload){
 }
 function renderEmbeddedHtml(attrsRaw,payload){
   const attrs=parseZzAttributes(attrsRaw),source=`<!-- zz:html${attrsRaw} -->\n${payload}\n<!-- /zz:html -->`;
-  const html=zzDecodePayload(payload).replace(/<\/script/gi,'<\\/script');
+  // srcdoc is escaped as an attribute below, so rewriting closing script tags
+  // only corrupts otherwise valid uploaded pages. The iframe remains isolated:
+  // scripts and forms may work, but without allow-same-origin they cannot read
+  // the editor's DOM, storage, or cookies.
+  const html=zzDecodePayload(payload);
   const width=Math.max(280,Number(attrs.width)||720),height=Math.max(180,Number(attrs.height)||420);
   const title=attrs.name||previewUiText('HTML 미리보기','HTML preview');
-  return `<div class="zz-html-embed" contenteditable="false" aria-readonly="true" tabindex="0" role="group" aria-label="${htmlEsc(title)}" data-embed-source="${htmlEsc(encodeURIComponent(source))}" style="width:${width}px;height:${height}px"><div class="zz-embed-head"><span>${htmlEsc(title)}</span><span>${previewUiText('읽기 전용','Read only')}</span></div><iframe class="zz-html-frame" sandbox="allow-forms" srcdoc="${htmlEsc(html)}" title="${htmlEsc(title)}"></iframe></div>`;
+  return `<div class="zz-html-embed" contenteditable="false" aria-readonly="true" tabindex="0" role="group" aria-label="${htmlEsc(title)}" data-embed-source="${htmlEsc(encodeURIComponent(source))}" style="width:${width}px;height:${height}px"><div class="zz-embed-head"><span>${htmlEsc(title)}</span><span>${previewUiText('격리 실행','Sandboxed')}</span></div><iframe class="zz-html-frame" sandbox="allow-forms allow-scripts" srcdoc="${htmlEsc(html)}" title="${htmlEsc(title)}"></iframe></div>`;
 }
 function renderEmbeddedDocument(name,mode,start=1,end=20){
   const file=state.files.find(item=>item.name===name||item.path===name||item.name.replace(/\.md$/i,'')===name.replace(/\.md$/i,''));
@@ -3309,20 +3331,20 @@ document.addEventListener('keydown',e=>{
       deleteSelectedPreviewElement();
       return;
     }
-    const selection=window.getSelection();
-    const range=selection?.rangeCount?selection.getRangeAt(0):null;
-    const selectedObject=clickMoveElement.matches(atomicPreviewObjectSelector);
-    if(!selectedObject&&e.target===els.preview&&range&&els.preview.contains(range.commonAncestorContainer)){
-      clearClickMove();
-      return;
-    }
     e.preventDefault();
+    e.stopImmediatePropagation();
     deleteSelectedPreviewElement();
     return;
   }
   if((e.key==='Delete'||e.key==='Backspace')&&selectedPreviewImage&&els.preview.contains(selectedPreviewImage)){
     e.preventDefault();
     deleteSelectedPreviewImage();
+    return;
+  }
+  if((e.key==='Delete'||e.key==='Backspace')&&selectedHorizontalRule&&els.preview.contains(selectedHorizontalRule)){
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    removeHorizontalRule(selectedHorizontalRule);
   }
 });
 els.preview.addEventListener('beforeinput',e=>{
@@ -4512,7 +4534,7 @@ let resetTableInteractionState=()=>{};
     menu.innerHTML=`
       <section class="tbl-ctx-group"><button data-op="select-all">전체 선택</button><button data-op="clear-selection">선택 해제</button></section>
       ${hasCells?`<section class="tbl-ctx-group"><button data-op="cut-cells">잘라내기</button><button data-op="copy-cells">복사</button><button data-op="paste-cells">붙여넣기</button><button data-op="clear-cells">내용 지우기</button></section>
-      <section class="tbl-ctx-group">${submenu('셀 편집','<button data-op="merge-cells">셀 합치기</button><button data-op="split-cells">셀 나누기…</button>')}${submenu('크기 맞춤','<button data-op="equal-height">셀 높이를 같게</button><button data-op="equal-width">셀 너비를 같게</button>')}</section>`:''}
+      <section class="tbl-ctx-group">${submenu('합치기 · 나누기','<button data-op="merge-cells">셀 합치기</button><button data-op="split-cells">셀 나누기…</button>')}${submenu('정렬','<button data-op="equal-height">셀 높이를 같게</button><button data-op="equal-width">셀 너비를 같게</button>')}</section>`:''}
       <section class="tbl-ctx-group">${submenu('행 · 열 추가','<button data-op="row-above">위에 행 추가</button><button data-op="row-below">아래에 행 추가</button><button data-op="col-left">왼쪽에 열 추가</button><button data-op="col-right">오른쪽에 열 추가</button>')}<button data-op="reset-shape">표 형태 초기화</button>${submenu('삭제','<button class="danger" data-op="del-row">현재 행 삭제</button><button class="danger" data-op="del-col">현재 열 삭제</button><button class="danger" data-op="del-table">표 삭제</button>',true)}</section>`;
     menu.querySelectorAll('[data-op]').forEach(btn=>btn.onclick=()=>{
       if(ctxActionTaken)return;
@@ -4987,21 +5009,35 @@ function renderMarkdown(text){
   schedulePostRenderEnhancements(text);
 }
 function htmlEsc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function groupName(file){if(file.source==='local')return'루트';return file.dir||'단일문서'}
-function groupedFiles(){const groups=new Map();state.files.forEach(f=>{const key=groupName(f);groups.set(key,[...(groups.get(key)||[]),f])});return [...groups.entries()].sort(([a],[b])=>{const rank=x=>x==='단일문서'?0:x==='루트'?1:2;return rank(a)-rank(b)||a.localeCompare(b,'ko')})}
-function renderFileGroup(parent,dir,files,renderFile,collapsedState){
-  const collapsed=!!collapsedState[dir],wrap=document.createElement('div');
-  wrap.className='folder-group'+(collapsed?' collapsed':'');
-  wrap.innerHTML=`<button class="folder-title" type="button"><span class="folder-label">${htmlEsc(dir)} <span class="folder-count">[${files.length}]</span></span></button><div class="folder-files"></div>`;
+function mergeDocumentTree(files){
+  const root={name:'문서',children:new Map(),files:[]};
+  files.forEach(file=>{
+    const source=file.source==='local'?'로컬':'업로드된 파일';
+    const path=String(file.path||file.name||'').replace(/\\/g,'/');
+    const folders=path.split('/').slice(0,-1).filter(Boolean);
+    addTreeFile(root,[source,...folders],file);
+  });
+  return root;
+}
+function renderMergeTreeNode(parent,node,key,renderFile,isRoot=false){
+  const collapsed=!!state.collapsedMergeGroups[key],wrap=document.createElement('div'),count=fileTreeCount(node);
+  wrap.className='folder-group merge-document-group'+(isRoot?' merge-document-root':'')+(collapsed?' collapsed':'');
+  wrap.innerHTML=`<button class="folder-title" type="button" aria-expanded="${!collapsed}"><span class="sidebar-root-chevron" aria-hidden="true"></span><span class="folder-label">${htmlEsc(node.name)} <span class="folder-count">[${count}]</span></span></button><div class="folder-files"></div>`;
   const box=wrap.querySelector('.folder-files');
   let populated=false;
-  const populate=()=>{if(populated)return;files.forEach(file=>renderFile(box,file));populated=true};
+  const populate=()=>{
+    if(populated)return;
+    [...node.children.values()].sort((a,b)=>a.name.localeCompare(b.name,'ko')).forEach(child=>renderMergeTreeNode(box,child,`${key}/${child.name}`,renderFile));
+    [...node.files].sort((a,b)=>mergeDisplayName(a).localeCompare(mergeDisplayName(b),'ko')).forEach(file=>renderFile(box,file));
+    populated=true;
+  };
   if(!collapsed)populate();
   wrap.querySelector('.folder-title').onclick=()=>{
     const next=!wrap.classList.contains('collapsed');
-    collapsedState[dir]=next;
+    state.collapsedMergeGroups[key]=next;
     if(!next)populate();
     wrap.classList.toggle('collapsed',next);
+    wrap.querySelector('.folder-title').setAttribute('aria-expanded',String(!next));
   };
   parent.appendChild(wrap);
 }
@@ -5298,7 +5334,11 @@ function renderSidebarContents(parent,node,pathKey,depth=0){
       warning.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();showMissing(event)}};
     }
     if(file.assetOnly){btn.onclick=()=>{};btn.oncontextmenu=e=>showSidebarAssetMenu(e,file.path,file.assetFile)}
-    else{btn.onclick=()=>openFileInActivePane(index);btn.oncontextmenu=e=>showFileContextMenu(e,index)}
+    else{
+      btn.onclick=()=>openFileInActivePane(index);
+      btn.ondblclick=event=>{event.preventDefault();event.stopPropagation();showRenameFileDialog(index)};
+      btn.oncontextmenu=e=>showFileContextMenu(e,index);
+    }
     enableSidebarDrag(btn,{kind:'file',key:pathKey+'/'+name,file});parent.appendChild(btn);
   });
 }
@@ -6238,7 +6278,92 @@ function downloadSidebarFile(index){
   else download(file.originalName||file.name||path.split('/').pop()||'download',file.text||'','text/plain;charset=utf-8');
   setStatus(`${file.originalName||file.name||path} 파일을 다운로드했습니다.`);
 }
-function renderMergeList(skipPreview=false){if(!state.files.length){els.mergeList.innerHTML='<div class="muted">병합할 MD 파일이 없습니다.</div>';updateMergeToggleAll();if(!skipPreview)updateMergePreview();return}const checkedBefore=new Set([...els.mergeList.querySelectorAll('input:checked')].map(i=>i.value));const hadChecks=els.mergeList.querySelectorAll('input').length>0;els.mergeList.innerHTML='';groupedFiles().forEach(([dir,files])=>renderFileGroup(els.mergeList,dir,files,(box,file)=>{const i=state.files.indexOf(file),row=document.createElement('label');row.className='check-row';row.dataset.index=i;row.innerHTML=`<input type="checkbox" ${!hadChecks||checkedBefore.has(String(i))?'checked':''} value="${i}"><span><span class="merge-name">${htmlEsc(file.displayName||file.name)}</span><span class="merge-path">${htmlEsc(documentLocationLabel(file))}</span></span>`;row.querySelector('input').addEventListener('change',()=>{updateMergeToggleAll();updateMergePreview()});row.addEventListener('mouseenter',showMergePreview);row.addEventListener('mouseleave',scheduleHideMergePreview);box.appendChild(row)},state.collapsedMergeGroups,()=>renderMergeList(true)));updateMergeToggleAll();if(!skipPreview)updateMergePreview()}
+const MERGE_ORDER_STORAGE_KEY='md-merge-order-v1';
+let mergeOrderKeys=(()=>{try{const saved=JSON.parse(localStorage.getItem(MERGE_ORDER_STORAGE_KEY)||'[]');return Array.isArray(saved)?saved.filter(value=>typeof value==='string'):[]}catch{return[]}})();
+let mergeSelectedKeys=new Set(),mergeSelectionInitialized=false,draggedMergeRow=null;
+function mergeOrderKey(file){return String(file?.path||file?.name||'')}
+function mergeDisplayName(file){
+  const value=String(file?.displayName||file?.name||'');
+  try{return decodeURIComponent(value)}catch{return value}
+}
+function orderedMergeFiles(){
+  const available=new Map(state.files.map(file=>[mergeOrderKey(file),file]));
+  const ordered=[];
+  mergeOrderKeys.forEach(key=>{const file=available.get(key);if(file){ordered.push(file);available.delete(key)}});
+  state.files.forEach(file=>{if(available.delete(mergeOrderKey(file)))ordered.push(file)});
+  mergeOrderKeys=ordered.map(mergeOrderKey);
+  return ordered;
+}
+function reconcileMergeSelection(){
+  const valid=new Set(state.files.map(mergeOrderKey));
+  if(!mergeSelectionInitialized&&valid.size){mergeSelectedKeys=new Set(valid);mergeSelectionInitialized=true}
+  else mergeSelectedKeys.forEach(key=>{if(!valid.has(key))mergeSelectedKeys.delete(key)});
+}
+function commitMergeListOrder(){
+  const selectedOrder=[...els.mergeOrderList.querySelectorAll('.merge-order-row')].map(row=>row.dataset.mergeKey).filter(Boolean);
+  const selectedSet=new Set(selectedOrder),queue=[...selectedOrder];
+  orderedMergeFiles();
+  mergeOrderKeys=mergeOrderKeys.map(key=>selectedSet.has(key)?queue.shift():key);
+  localStorage.setItem(MERGE_ORDER_STORAGE_KEY,JSON.stringify(mergeOrderKeys));
+  updateMergePreview();
+}
+function renderMergeOrderList(){
+  reconcileMergeSelection();
+  const selected=orderedMergeFiles().filter(file=>mergeSelectedKeys.has(mergeOrderKey(file)));
+  els.mergeOrderCount.textContent=uiLanguage==='en'?`${selected.length} selected`:`${selected.length}개 선택`;
+  els.mergeOrderList.innerHTML='';
+  if(!selected.length){els.mergeOrderList.innerHTML=`<div class="merge-order-empty">${uiLanguage==='en'?'Select documents below.':'아래 목록에서 병합할 문서를 선택하세요.'}</div>`;return}
+  selected.forEach((file,orderIndex)=>{
+    const row=document.createElement('div'),key=mergeOrderKey(file);
+    row.className='merge-order-row';row.dataset.mergeKey=key;
+    row.innerHTML=`<span class="merge-order-grip" draggable="true" role="button" tabindex="0" title="${uiLanguage==='en'?'Drag to change merge order':'드래그해서 병합 순서 변경'}" aria-label="${uiLanguage==='en'?'Drag to change merge order':'드래그해서 병합 순서 변경'}">⋮⋮</span><span class="merge-order-number">${orderIndex+1}</span><span class="merge-order-name" title="${htmlEsc(file.path||file.name)}">${htmlEsc(mergeDisplayName(file))}</span><span class="merge-order-actions"><button type="button" data-merge-shift="-1" aria-label="${uiLanguage==='en'?'Move up':'위로 이동'}" ${orderIndex===0?'disabled':''}>↑</button><button type="button" data-merge-shift="1" aria-label="${uiLanguage==='en'?'Move down':'아래로 이동'}" ${orderIndex===selected.length-1?'disabled':''}>↓</button><button type="button" data-merge-remove aria-label="${uiLanguage==='en'?'Remove from merge':'병합에서 제외'}">×</button></span>`;
+    const grip=row.querySelector('.merge-order-grip');
+    grip.addEventListener('dragstart',event=>{draggedMergeRow=row;row.classList.add('is-dragging');event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',key)});
+    row.addEventListener('dragover',event=>{
+      if(!draggedMergeRow||draggedMergeRow===row)return;
+      event.preventDefault();event.dataTransfer.dropEffect='move';
+      const rect=row.getBoundingClientRect();
+      row.parentNode.insertBefore(draggedMergeRow,event.clientY<rect.top+rect.height/2?row:row.nextSibling);
+    });
+    row.addEventListener('drop',event=>{if(!draggedMergeRow)return;event.preventDefault();commitMergeListOrder()});
+    grip.addEventListener('dragend',()=>{draggedMergeRow?.classList.remove('is-dragging');draggedMergeRow=null;commitMergeListOrder();renderMergeOrderList()});
+    row.querySelectorAll('[data-merge-shift]').forEach(button=>button.addEventListener('click',event=>{
+      event.preventDefault();event.stopPropagation();
+      const rows=[...els.mergeOrderList.querySelectorAll('.merge-order-row')],position=rows.indexOf(row),next=position+Number(button.dataset.mergeShift);
+      if(next<0||next>=rows.length)return;
+      if(next<position)row.parentNode.insertBefore(row,rows[next]);else row.parentNode.insertBefore(row,rows[next].nextSibling);
+      commitMergeListOrder();renderMergeOrderList();
+    }));
+    row.querySelector('[data-merge-remove]').addEventListener('click',()=>{mergeSelectedKeys.delete(key);renderMergeList()});
+    els.mergeOrderList.appendChild(row);
+  });
+}
+function renderMergeList(skipPreview=false){
+  reconcileMergeSelection();
+  renderMergeOrderList();
+  if(!state.files.length){els.mergeList.innerHTML='<div class="muted">병합할 MD 파일이 없습니다.</div>';updateMergeToggleAll();if(!skipPreview)updateMergePreview();return}
+  const query=String(els.mergeSearch?.value||'').trim().toLocaleLowerCase();
+  els.mergeList.innerHTML='';
+  const filtered=state.files.filter(file=>!query||`${mergeDisplayName(file)} ${file.path||''}`.toLocaleLowerCase().includes(query));
+  if(filtered.length){
+    const tree=mergeDocumentTree(filtered);
+    renderMergeTreeNode(els.mergeList,tree,'문서',(box,file)=>{
+      const index=state.files.indexOf(file),key=mergeOrderKey(file),row=document.createElement('label');
+      row.className='check-row merge-choice-row';row.dataset.index=index;
+      row.innerHTML=`<input type="checkbox" ${mergeSelectedKeys.has(key)?'checked':''} value="${index}"><span class="merge-name">${htmlEsc(mergeDisplayName(file))}</span>`;
+      row.querySelector('input').addEventListener('change',event=>{event.target.checked?mergeSelectedKeys.add(key):mergeSelectedKeys.delete(key);renderMergeOrderList();updateMergeToggleAll();updateMergePreview()});
+      row.addEventListener('mouseenter',showMergePreview);row.addEventListener('mouseleave',scheduleHideMergePreview);box.appendChild(row);
+    },true);
+  }else els.mergeList.innerHTML=`<div class="muted merge-search-empty">${uiLanguage==='en'?'No matching documents.':'일치하는 문서가 없습니다.'}</div>`;
+  updateMergeToggleAll();if(!skipPreview)updateMergePreview();
+}
+els.mergeSearch?.addEventListener('input',()=>renderMergeList(true));
+const mergeOrderDialog=$('merge-order-dialog');
+function closeMergeOrderDialog(){if(mergeOrderDialog)mergeOrderDialog.hidden=true}
+$('merge-order-open')?.addEventListener('click',()=>{renderMergeOrderList();mergeOrderDialog.hidden=false;requestAnimationFrame(()=>mergeOrderDialog.querySelector('.merge-order-grip')?.focus())});
+mergeOrderDialog?.querySelectorAll('[data-merge-order-close]').forEach(button=>button.addEventListener('click',closeMergeOrderDialog));
+mergeOrderDialog?.addEventListener('click',event=>{if(event.target===mergeOrderDialog)closeMergeOrderDialog()});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!mergeOrderDialog?.hidden)closeMergeOrderDialog()});
 const selectionRequiredMessage='문서를 하나 이상 선택해 주세요.';
 function showSelectionNotice(){
   document.querySelector('.selection-notice')?.remove();
@@ -6356,7 +6481,7 @@ function updateConvertPreview(){
 }
 function conversionDirectionFor(file){return /\.pdf$/i.test(file?.originalName||file?.name||'')||file?.convertedFromPdf?'pdf-to-md':'md-to-pdf'}
 function renderConvertList(skipPreview=false){if(!els.convertList)return;if(!state.files.length){els.convertList.innerHTML='';if(!skipPreview)updateConvertPreview();return}els.convertList.innerHTML='';state.files.forEach((file,i)=>{const row=document.createElement('label');row.className='convert-item';row.dataset.index=i;const direction=conversionDirectionFor(file);const status=direction==='pdf-to-md'?'PDF → MD 자동 선택':file.convertedFromCode?`${file.codeLanguage||'text'} 코드블록 → MD 준비됨`:'MD → PDF 자동 선택';row.innerHTML=`<input type="checkbox" value="${i}" checked><span><span class="convert-name">${htmlEsc(file.displayName||file.name)}</span><div class="convert-meta">${status} · ${htmlEsc(file.path)}</div></span>`;row.querySelector('input').addEventListener('change',updateConvertPreview);row.addEventListener('mouseenter',showMergePreview);row.addEventListener('mouseleave',scheduleHideMergePreview);row.ondblclick=()=>openFile(i);els.convertList.appendChild(row)});if(!skipPreview)updateConvertPreview()}
-function renderHomeMergeList(){if(!els.homeMergeList)return;const checkedBefore=new Set([...els.homeMergeList.querySelectorAll('input:checked')].map(i=>i.value));const hadChecks=els.homeMergeList.querySelectorAll('input').length>0;els.homeMergeList.innerHTML='';if(state.homeMergeNotice){const note=document.createElement('div');note.className='muted';note.textContent=state.homeMergeNotice;els.homeMergeList.appendChild(note)}if(!state.files.length){const empty=document.createElement('div');empty.className='muted home-merge-empty';empty.textContent='왼쪽에서 MD 파일을 추가하면 여기에 표시됩니다.';els.homeMergeList.appendChild(empty);return}state.files.forEach((file,i)=>{const row=document.createElement('label');row.className='home-merge-item';row.innerHTML=`<input type="checkbox" ${!hadChecks||checkedBefore.has(String(i))?'checked':''} value="${i}"><span>${htmlEsc(file.displayName||file.name)}</span>`;els.homeMergeList.appendChild(row)})}
+function renderHomeMergeList(){if(!els.homeMergeList)return;const checkedBefore=new Set([...els.homeMergeList.querySelectorAll('input:checked')].map(i=>i.value));const hadChecks=els.homeMergeList.querySelectorAll('input').length>0;els.homeMergeList.innerHTML='';if(state.homeMergeNotice){const note=document.createElement('div');note.className='muted';note.textContent=state.homeMergeNotice;els.homeMergeList.appendChild(note)}if(!state.files.length){const empty=document.createElement('div');empty.className='muted home-merge-empty';empty.textContent='왼쪽에서 MD 파일을 추가하면 여기에 표시됩니다.';els.homeMergeList.appendChild(empty);return}orderedMergeFiles().forEach(file=>{const i=state.files.indexOf(file),row=document.createElement('label');row.className='home-merge-item';row.innerHTML=`<input type="checkbox" ${!hadChecks||checkedBefore.has(String(i))?'checked':''} value="${i}"><span>${htmlEsc(file.displayName||file.name)}</span>`;els.homeMergeList.appendChild(row)})}
 function renderAll({forcePreview=false,deferPreview=false,visibleOnly=false}={}){const activeText=state.active>=0?(state.files[state.active]?.text||''):els.editor.value;if(state.active>=0&&els.editor.value!==activeText)els.editor.value=activeText;renderList();if(!visibleOnly||state.mode==='merge')renderMergeList(true);if(!visibleOnly||state.mode==='convert')renderConvertList(true);if(!visibleOnly||!els.home.classList.contains('hidden'))renderHomeMergeList();if(state.mode==='edit'&&currentEditView()!=='md'&&(forcePreview||lastRenderedMarkdownText!==activeText)){if(deferPreview)scheduleModePreview('edit');else renderMarkdown(activeText)}if(!visibleOnly||!els.home.classList.contains('hidden'))updateHomeConvert();updateLineNumbers();const activePanel=document.querySelector('.panel.active');if(activePanel?.id==='panel-convert')scheduleModePreview('convert');else if(activePanel?.id==='panel-merge')scheduleModePreview('merge')}
 function updateHomeImageSummary(file){
   if(!els.homeImageSummary)return;
@@ -6735,7 +6860,6 @@ function setMode(mode,showHome=false){
     findReplaceButton.title=uiLanguage==='en'?(findOnly?'Find':'Find and replace'):(findOnly?'찾기':'찾기 및 바꾸기');
     findReplaceButton.setAttribute('aria-label',findReplaceButton.title);
   }
-  $('insert-file-toggle').hidden=showHome||mode!=='edit';
   if(showHome||previousMode!==mode){
     document.querySelector('.find-replace-panel [data-find-action="close"]')?.click();
     clearPreviewFindHighlights();
@@ -7643,7 +7767,10 @@ async function extractPdfWithLayout(file){
 }
 function buildMerged(files){return files.map(f=>`<!-- ${f.path} -->\n\n# ${f.name.replace(mdExt,'')}\n\n${f.text.trim()}`).join('\n\n---\n\n')+'\n'}
 function addMerged(text){const existing=state.files.findIndex(f=>f.path==='merged-markdown.md'),previous=existing>=0?state.files[existing]:null,item={name:'merged-markdown.md',path:'merged-markdown.md',dir:'',text,savedText:previous?.savedText||'',source:'local'};existing>=0?state.files[existing]=item:state.files.push(item);renderAll()}
-function selectedMergeFiles(){return[...els.mergeList.querySelectorAll('input:checked')].map(i=>state.files[Number(i.value)]).filter(Boolean)}
+function selectedMergeFiles(){
+  const byKey=new Map(state.files.map(file=>[mergeOrderKey(file),file]));
+  return [...els.mergeOrderList.querySelectorAll('.merge-order-row')].map(row=>byKey.get(row.dataset.mergeKey)).filter(Boolean);
+}
 let mergePreviewSnapshot=[],mergePreviewTheme='',mergePreviewJob=0;
 function sameMergePreview(files){
   return mergePreviewTheme===state.theme&&files.length===mergePreviewSnapshot.length&&files.every((file,i)=>{
@@ -7721,11 +7848,11 @@ async function mergeSelected(){
   if(output==='download'||output==='both')download('merged-markdown.md',text);
   if(output==='add'||output==='both')addMerged(text);
 }
-function homeMergeFiles(onlyChecked=false){if(!state.files.length)return[];if(!onlyChecked||!els.homeMergeList)return state.files;return[...els.homeMergeList.querySelectorAll('input:checked')].map(i=>state.files[Number(i.value)]).filter(Boolean)}
+function homeMergeFiles(onlyChecked=false){if(!state.files.length)return[];if(!onlyChecked||!els.homeMergeList)return orderedMergeFiles();return[...els.homeMergeList.querySelectorAll('input:checked')].map(i=>state.files[Number(i.value)]).filter(Boolean)}
 function runHomeMerge(onlyChecked=false){const selected=homeMergeFiles(onlyChecked);if(!selected.length){state.homeMergeNotice=selectionRequiredMessage;renderHomeMergeList();showSelectionNotice();return}const text=buildMerged(selected);els.mergeResult.innerHTML=markdownHtml(text);fixSpanColors(els.mergeResult);runHighlight(els.mergeResult);decorateCodeBlocks(els.mergeResult);stripReadOnlyTableResizeArtifacts(els.mergeResult);state.homeMergeNotice=`${selected.length}개 문서를 병합해서 루트 목록에 추가했습니다.`;addMerged(text);setMode(state.mode,true)}
 function mergeAllFromHome(){runHomeMerge(false)}
 function mergeSelectedFromHome(){runHomeMerge(true)}
-let hoverPreviewCache={file:null,text:null,theme:null},hoverPreviewPinned=false,hoverPreviewPinKeyDown=false,hoverPreviewHideTimer=0;
+let hoverPreviewCache={file:null,text:null,theme:null},hoverPreviewPinned=false,hoverPreviewPinKeyDown=false,hoverPreviewHideTimer=0,hoverPreviewShowTimer=0;
 function setHoverPreviewPinned(pinned){
   hoverPreviewPinned=!!pinned;
   els.hoverPreview.classList.toggle('pinned',hoverPreviewPinned);
@@ -7738,26 +7865,41 @@ function setHoverPreviewPinned(pinned){
 }
 function showMergePreview(e){
   clearTimeout(hoverPreviewHideTimer);
+  clearTimeout(hoverPreviewShowTimer);
   if(hoverPreviewPinned)return;
-  const context=e.currentTarget.closest('#convert-list')?'convert':'merge';
+  const anchor=e.currentTarget,context=anchor.closest('#convert-list')?'convert':'merge';
   const toggle=$(context==='convert'?'enable-convert-hover-preview':'enable-hover-preview');
   if(!toggle?.checked)return;
-  const file=state.files[Number(e.currentTarget.dataset.index)];
+  const file=state.files[Number(anchor.dataset.index)];
   if(!file)return;
+  if(hoverPreviewCache.file===file&&hoverPreviewCache.text===file.text&&hoverPreviewCache.theme===state.theme){
+    els.hoverPreview.dataset.context=context;
+    els.hoverPreview.style.display='block';
+    positionHoverPreview(anchor);
+    return;
+  }
+  hoverPreviewShowTimer=setTimeout(()=>renderMergeHoverPreview(anchor,file,context),240);
+}
+function renderMergeHoverPreview(anchor,file,context){
+  hoverPreviewShowTimer=0;
+  if(!anchor.isConnected||hoverPreviewPinned)return;
   els.hoverPreview.dataset.source='file';
   els.hoverPreview.dataset.context=context;
   els.hoverPreview.classList.add('preview');
   if(hoverPreviewCache.file!==file||hoverPreviewCache.text!==file.text||hoverPreviewCache.theme!==state.theme){
-    els.hoverPreview.innerHTML=markdownHtml(file.text||'');
+    const fullText=String(file.text||''),limit=18000;
+    let previewText=fullText;
+    if(fullText.length>limit){const cut=fullText.lastIndexOf('\n',limit);previewText=fullText.slice(0,cut>limit*.65?cut:limit)+'\n\n---\n\n…'}
+    els.hoverPreview.innerHTML=markdownHtml(previewText);
     fixSpanColors(els.hoverPreview);
-    runHighlight(els.hoverPreview);
     decorateCodeBlocks(els.hoverPreview);
     stripReadOnlyTableResizeArtifacts(els.hoverPreview);
-    addImageResize(els.hoverPreview);
     hoverPreviewCache={file,text:file.text,theme:state.theme};
+    const enhance=()=>{if(hoverPreviewCache.file===file&&els.hoverPreview.style.display==='block')runHighlight(els.hoverPreview)};
+    if('requestIdleCallback' in window)window.requestIdleCallback(enhance,{timeout:600});else setTimeout(enhance,40);
   }
   els.hoverPreview.style.display='block';
-  positionHoverPreview(e.currentTarget);
+  positionHoverPreview(anchor);
   if(hoverPreviewPinKeyDown)setHoverPreviewPinned(true);
 }
 function positionHoverPreview(anchor){
@@ -7773,6 +7915,7 @@ function positionHoverPreview(anchor){
 }
 function hideMergePreview(force=false){
   if(hoverPreviewPinned&&!force)return;
+  clearTimeout(hoverPreviewShowTimer);hoverPreviewShowTimer=0;
   clearTimeout(hoverPreviewHideTimer);hoverPreviewHideTimer=0;
   setHoverPreviewPinned(false);delete els.hoverPreview.dataset.source;els.hoverPreview.style.display='none';
   // A hidden quick preview is still a live DOM tree. Preserve the fast cache
@@ -7783,6 +7926,7 @@ function hideMergePreview(force=false){
   }
 }
 function scheduleHideMergePreview(){
+  clearTimeout(hoverPreviewShowTimer);hoverPreviewShowTimer=0;
   clearTimeout(hoverPreviewHideTimer);
   if(!hoverPreviewPinned){hideMergePreview(true);return}
   hoverPreviewHideTimer=setTimeout(()=>{
@@ -10212,8 +10356,8 @@ els.editor.addEventListener('keydown',e=>{
 $('run-merge').onclick=mergeSelected;
 $('home-run-merge').onclick=mergeAllFromHome;
 $('find-replace-toggle').onclick=showFindReplaceDialog;
-function updateMergeToggleAll(){const btn=$('merge-toggle-all');if(!btn)return;const inputs=[...els.mergeList.querySelectorAll('input')];btn.textContent=inputs.length&&inputs.every(i=>i.checked)?'전체 해제':'전체 선택'}
-$('merge-toggle-all').onclick=()=>{const inputs=[...els.mergeList.querySelectorAll('input')];const shouldCheck=!(inputs.length&&inputs.every(i=>i.checked));inputs.forEach(i=>i.checked=shouldCheck);updateMergeToggleAll();updateMergePreview()};
+function updateMergeToggleAll(){const btn=$('merge-toggle-all');if(!btn)return;reconcileMergeSelection();btn.textContent=state.files.length&&mergeSelectedKeys.size===state.files.length?'전체 해제':'전체 선택'}
+$('merge-toggle-all').onclick=()=>{reconcileMergeSelection();const shouldCheck=!(state.files.length&&mergeSelectedKeys.size===state.files.length);mergeSelectedKeys=shouldCheck?new Set(state.files.map(mergeOrderKey)):new Set();mergeSelectionInitialized=true;renderMergeList()};
 $('convert-select-all').onclick=()=>{els.convertList.querySelectorAll('input').forEach(i=>i.checked=true);updateConvertPreview()};
 $('convert-clear-all').onclick=()=>{els.convertList.querySelectorAll('input').forEach(i=>i.checked=false);updateConvertPreview()};
 $('convert-remove-selected').onclick=removeSelectedConvert;
@@ -10268,6 +10412,30 @@ function previewCodeAtSelection(){
   return node?.closest?.('pre code')||activePreviewCodePre?.querySelector('code')||null;
 }
 els.preview.addEventListener('beforeinput',inheritPreviewInlineFormatBeforeInput);
+function insertPreviewTableSpace(e){
+  if(e.inputType!=='insertText'||e.data!==' '||e.isComposing)return false;
+  const selection=window.getSelection();
+  if(!selection?.rangeCount)return false;
+  const range=selection.getRangeAt(0);
+  if(!range.collapsed)return false;
+  const origin=range.startContainer.nodeType===Node.ELEMENT_NODE?range.startContainer:range.startContainer.parentElement;
+  const cell=origin?.closest?.('td,th');
+  if(!cell||!els.preview.contains(cell))return false;
+  const prefix=document.createRange();
+  try{prefix.selectNodeContents(cell);prefix.setEnd(range.startContainer,range.startOffset)}catch{return false}
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  pushHistory(true);
+  const text=document.createTextNode(prefix.toString().replace(/[\u200b\u00a0]/g,'').length?' ':'\u00a0');
+  range.insertNode(text);
+  range.setStartAfter(text);range.collapse(true);
+  selection.removeAllRanges();selection.addRange(range);
+  state.savedPreviewRange=range.cloneRange();
+  syncFromPreview();
+  pushHistory(true);
+  return true;
+}
+els.preview.addEventListener('beforeinput',insertPreviewTableSpace);
 els.preview.addEventListener('beforeinput',e=>{
   if(!['insertParagraph','insertLineBreak'].includes(e.inputType))return;
   const selection=window.getSelection();if(!selection?.rangeCount)return;
@@ -10294,6 +10462,9 @@ els.preview.addEventListener('click',e=>{
   els.preview.focus({preventScroll:true});selection.removeAllRanges();selection.addRange(next);rememberPreviewRange();
 });
 els.preview.addEventListener('beforeinput',e=>{if(!e.defaultPrevented)preserveTableInlineFormatOnDelete(e)},true);
+els.preview.addEventListener('keydown',e=>{
+  if(e.key==='Backspace'&&!e.defaultPrevented)preserveTableInlineFormatOnDelete(e);
+},true);
 els.preview.addEventListener('beforeinput',e=>{if(!e.defaultPrevented)preservePreviewFormatOnDelete(e)});
 function handlePreviewListBackspace(e){
   if(e.key!=='Backspace'||e.ctrlKey||e.metaKey||e.altKey)return;
@@ -11538,10 +11709,39 @@ function showFontSizeMenu(){
   menu.style.left=Math.max(8,Math.min(r.left,window.innerWidth-w-8))+'px';
 }
 function hideFontSizeMenu(){$('fmt-size-menu').classList.add('hidden')}
-$('fmt-size').addEventListener('change',applyFontSizeInput);
-$('fmt-size').addEventListener('focus',showFontSizeMenu);
-$('fmt-size').addEventListener('click',e=>{e.stopPropagation();showFontSizeMenu()});
-$('fmt-size').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();applyFontSizeInput();hideFontSizeMenu()}});
+const fontSizeInput=$('fmt-size');
+let fontSizeInputValue='';
+fontSizeInput.addEventListener('pointerdown',()=>{
+  fontSizeInputValue=fontSizeInput.value;
+  if(document.activeElement!==fontSizeInput)requestAnimationFrame(()=>fontSizeInput.select());
+});
+fontSizeInput.addEventListener('focus',()=>{
+  fontSizeInputValue=fontSizeInput.value;
+  showFontSizeMenu();
+});
+fontSizeInput.addEventListener('click',e=>{e.stopPropagation();showFontSizeMenu()});
+fontSizeInput.addEventListener('input',()=>{
+  const digits=fontSizeInput.value.replace(/\D/g,'').slice(0,2);
+  if(fontSizeInput.value!==digits)fontSizeInput.value=digits;
+});
+fontSizeInput.addEventListener('blur',()=>{
+  if(fontSizeInput.value&&fontSizeInput.value!==fontSizeInputValue)applyFontSizeInput();
+  else fontSizeInput.value=fontSizeInputValue;
+});
+fontSizeInput.addEventListener('keydown',e=>{
+  if(e.key==='Enter'){
+    e.preventDefault();
+    applyFontSizeInput();
+    fontSizeInputValue=fontSizeInput.value;
+    hideFontSizeMenu();
+    fontSizeInput.blur();
+  }else if(e.key==='Escape'){
+    e.preventDefault();
+    fontSizeInput.value=fontSizeInputValue;
+    hideFontSizeMenu();
+    fontSizeInput.blur();
+  }
+});
 $('fmt-size-toggle').onclick=e=>{e.stopPropagation();$('fmt-size-menu').classList.contains('hidden')?showFontSizeMenu():hideFontSizeMenu()};
 $('fmt-size-up').onclick=()=>stepFontSize(1);
 $('fmt-size-down').onclick=()=>stepFontSize(-1);
@@ -12290,15 +12490,24 @@ function clearPreviewInlineStyle(range,styleName){
   const boundary=closestPreviewBlock(range.commonAncestorContainer)?.parentElement||els.preview;
   const meaningful=value=>String(value||'').replace(/[\u200b\u00a0\s]/g,'');
   const matchingHosts=[];
+  const containingColorHosts=[];
   for(let element=range.startContainer.nodeType===1?range.startContainer:range.startContainer.parentElement;element&&element!==boundary;element=element.parentElement){
     const styled=styleName==='color'&&element.matches?.('font[color]')||element.style?.getPropertyValue(styleName)||(styleName==='background-color'&&(element.style?.background||element.matches?.('mark')));
+    if(styleName==='color'&&styled&&element.contains(range.endContainer))containingColorHosts.push(element);
     // A background highlight is one visual run. Clearing only the selected
     // middle used to split that run and leave colored caps on both sides.
     // Remove every containing background run as a unit; text color keeps the
     // narrower, selection-only behavior.
-    if(styled&&element.contains(range.endContainer)&&(styleName==='background-color'||meaningful(element.textContent)===meaningful(range.toString())))matchingHosts.push(element);
+    if(styled&&(styleName==='background-color'||meaningful(element.textContent)===meaningful(range.toString())))matchingHosts.push(element);
   }
-  const host=matchingHosts[0]||inlineStyleHost(range.startContainer,styleName,boundary);
+  // Color can be nested below bold/underline wrappers or inside another
+  // colored span. Split the outermost color host once, then clear every color
+  // declaration inside the selected clone. Otherwise the first click only
+  // removes the innermost color and the inherited outer color remains until a
+  // second click.
+  const host=styleName==='color'&&containingColorHosts.length
+    ?containingColorHosts.at(-1)
+    :matchingHosts[0]||inlineStyleHost(range.startContainer,styleName,boundary);
   if(host&&host.contains(range.endContainer)){
     pushPreviewFormatHistory();
     // Selecting visible text commonly excludes the styled wrapper's leading
@@ -12323,6 +12532,7 @@ function clearPreviewInlineStyle(range,styleName){
     }
     const cleared=splitInlineStyleHost(host,range.startContainer,range.startOffset,range.endContainer,range.endOffset,styleName);
     if(!cleared)return false;
+    if(styleName==='color')removeNestedInlineStyle(cleared,'color');
     const next=document.createRange();next.selectNodeContents(cleared);
     const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);
     state.savedPreviewRange=next.cloneRange();syncFromPreview();return true;
@@ -14877,17 +15087,56 @@ function preservePreviewFormatOnDelete(e){
   pushHistory(true);
   return true;
 }
+function deleteTableCellBackwardWithoutBlock(e,range,cell){
+  const marker=document.createComment('table-backspace-caret');
+  range.insertNode(marker);
+  const candidates=[],walker=document.createTreeWalker(cell,NodeFilter.SHOW_TEXT|NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_COMMENT);let node;
+  while((node=walker.nextNode())){
+    if(node===marker)break;
+    if(node.nodeType===Node.TEXT_NODE||node.nodeName==='BR')candidates.push(node);
+  }
+  let target=null;
+  for(let index=candidates.length-1;index>=0;index--){
+    const candidate=candidates[index];
+    if(candidate.nodeName==='BR'||candidate.data?.replace(/\u200b/g,'').length){target=candidate;break}
+  }
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  if(!target){
+    const next=document.createRange();next.setStartBefore(marker);next.collapse(true);marker.remove();
+    const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);state.savedPreviewRange=next.cloneRange();
+    return true;
+  }
+  pushHistory(true);
+  if(target.nodeName==='BR')target.remove();
+  else{
+    while(target.data.endsWith('\u200b'))target.deleteData(target.length-1,1);
+    const character=Array.from(target.data).at(-1)||'';
+    if(character)target.deleteData(target.length-character.length,character.length);
+  }
+  const next=document.createRange();next.setStartBefore(marker);next.collapse(true);marker.remove();
+  const selection=window.getSelection();selection.removeAllRanges();selection.addRange(next);
+  state.savedPreviewRange=next.cloneRange();cell.normalize();syncFromPreview();pushHistory(true);
+  return true;
+}
 function preserveTableInlineFormatOnDelete(e){
-  const backward=e.inputType==='deleteContentBackward',forward=e.inputType==='deleteContentForward';
+  const backward=e.key==='Backspace'||e.inputType==='deleteContentBackward',forward=e.key==='Delete'||e.inputType==='deleteContentForward';
   if((!backward&&!forward)||e.ctrlKey||e.metaKey||e.altKey)return false;
   const range=previewRange();
   if(!range?.collapsed)return false;
   const origin=range.startContainer.nodeType===Node.ELEMENT_NODE?range.startContainer:range.startContainer.parentElement;
   const cell=origin?.closest?.('td,th');
   if(!cell||!els.preview.contains(cell))return false;
+  if(backward)return deleteTableCellBackwardWithoutBlock(e,range,cell);
   if(backward){
     const before=document.createRange();
     try{before.selectNodeContents(cell);before.setEnd(range.startContainer,range.startOffset)}catch{return false}
+    if(!before.toString().replace(/[\u200b\u00a0\s]/g,'')){
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      state.savedPreviewRange=range.cloneRange();
+      return true;
+    }
     if(before.toString().endsWith('-')){
       const walker=document.createTreeWalker(cell,NodeFilter.SHOW_TEXT),nodes=[];let node;
       while((node=walker.nextNode()))nodes.push(node);
@@ -17059,7 +17308,7 @@ const EN_TEXT={
   '파일을 선택하기 전에 내용을 빠르게 확인합니다.':'Quickly inspect content before selecting a file.',
   '미니 프리뷰를 켜고 항목 위에 마우스를 올립니다.':'Turn on Mini preview and hover over an item.',
   '작은 미리보기에서 문서 내용을 확인한 뒤 선택합니다.':'Review the document in the small preview before selecting it.',
-  '병합할 파일 선택':'Select files to merge','합칠 문서와 순서를 왼쪽 목록에서 정합니다.':'Choose the documents and their order in the list on the left.',
+  '병합할 파일 선택':'Select files to merge','합칠 문서와 순서를 왼쪽 목록에서 정합니다.':'Choose the documents and their order in the list on the left.','병합 순서':'Merge order','순서 설정':'Set order','끌어서 순서를 바꾸거나 화살표 버튼을 사용하세요.':'Drag to reorder, or use the arrow buttons.','현재 문서에 파일 삽입':'Insert file into current document','0개 선택':'0 selected','병합 문서 검색':'Search merge documents','문서 찾기':'Find a document','문서명':'Document name','병합 문서명 검색':'Search merge document names',
   '체크한 문서만 병합 결과에 포함됩니다.':'Only checked documents are included in the merged result.',
   '전체 선택 버튼으로 모든 항목을 한 번에 바꿀 수 있습니다.':'Use Select all to change every item at once.',
   '병합 결과 확인':'Review merge results','선택한 문서를 하나로 합친 결과를 오른쪽에서 확인합니다.':'Review the combined result on the right.',
@@ -17154,7 +17403,7 @@ const EN_TEXT={
   '붙여넣기 실패':'Paste failed','클립보드의 텍스트를 읽을 수 없습니다.':'Could not read text from the clipboard.','제목 없음':'Untitled','문서 맨 아래에 배치':'Place at bottom of document','문서 맨 위에 배치':'Place at top of document','이 블록 위에 배치':'Place above this block','이 글자 위치에 삽입':'Insert at this text position','첫 번째 양식 위치에 배치':'Place at the first form position','이 양식 앞에 배치':'Place before this form','이 양식 뒤에 배치':'Place after this form','고정됨':'Pinned',
   '올바른 링크 주소를 입력해 주세요.':'Enter a valid link URL.','연결 문서 없음':'No linked documents','이 열 필터 및 정렬':'Filter and sort this column','오름차순 정렬':'Sort ascending','내림차순 정렬':'Sort descending','이 표 필터·정렬 초기화':'Reset filtering and sorting for this table','값 필터':'Value filter','값 검색':'Search values','전체 선택 / 해제':'Select / clear all','(빈 값)':'(Empty)','서식 필터':'Formatting filter','서식 없는 셀만':'Unformatted cells only','굵게, 기울임, 밑줄, 글자색, 배경색이 없는 셀만 표시합니다.':'Show only cells without bold, italic, underline, text color, or background color.','글자색 선택':'Choose text color','배경색 선택':'Choose background color',
   '셀 합치기':'Merge cells','이미 합쳐진 셀이 포함된 범위는 먼저 셀 나누기를 해주세요.':'Split existing merged cells before merging this range.','셀 나누기':'Split cells','선택한 셀을 지정한 행과 열로 나눕니다.':'Split the selected cell into the specified rows and columns.',
-  '전체 선택':'Select all','선택 해제':'Clear selection','선택':'Selection','선택한 셀':'Selected cells','내용 지우기':'Clear contents','셀 나누기…':'Split cells…','높이 같게':'Equal height','너비 같게':'Equal width','표':'Table','형태 초기화':'Reset shape','셀 편집':'Edit cells','크기 맞춤':'Match size','표 작업':'Table actions','행 · 열 추가':'Add rows · columns','위에 행':'Row above','아래에 행':'Row below','왼쪽에 열':'Column left','오른쪽에 열':'Column right','현재 행':'Current row','현재 열':'Current column','표 전체':'Entire table','목록 기호':'List marker','선택 셀 잘라내기':'Cut selected cells','선택 셀 복사':'Copy selected cells','선택 셀에 붙여넣기':'Paste into selected cells','선택 셀 내용 지우기':'Clear selected cells','선택 셀 합치기':'Merge selected cells','선택 셀 나누기…':'Split selected cells…','셀 높이를 같게':'Distribute rows evenly','셀 너비를 같게':'Distribute columns evenly','표 잘라내기':'Cut table','표 복사':'Copy table','위에 행 추가':'Insert row above','아래에 행 추가':'Insert row below','왼쪽에 열 추가':'Insert column left','오른쪽에 열 추가':'Insert column right','현재 행 삭제':'Delete current row','현재 열 삭제':'Delete current column','표 삭제':'Delete table','표 형태 초기화':'Reset table shape',
+  '전체 선택':'Select all','선택 해제':'Clear selection','선택':'Selection','선택한 셀':'Selected cells','내용 지우기':'Clear contents','셀 나누기…':'Split cells…','높이 같게':'Equal height','너비 같게':'Equal width','표':'Table','형태 초기화':'Reset shape','셀 편집':'Edit cells','크기 맞춤':'Match size','합치기 · 나누기':'Merge · split','정렬':'Align','표 작업':'Table actions','행 · 열 추가':'Add rows · columns','위에 행':'Row above','아래에 행':'Row below','왼쪽에 열':'Column left','오른쪽에 열':'Column right','현재 행':'Current row','현재 열':'Current column','표 전체':'Entire table','목록 기호':'List marker','선택 셀 잘라내기':'Cut selected cells','선택 셀 복사':'Copy selected cells','선택 셀에 붙여넣기':'Paste into selected cells','선택 셀 내용 지우기':'Clear selected cells','선택 셀 합치기':'Merge selected cells','선택 셀 나누기…':'Split selected cells…','셀 높이를 같게':'Distribute rows evenly','셀 너비를 같게':'Distribute columns evenly','표 잘라내기':'Cut table','표 복사':'Copy table','위에 행 추가':'Insert row above','아래에 행 추가':'Insert row below','왼쪽에 열 추가':'Insert column left','오른쪽에 열 추가':'Insert column right','현재 행 삭제':'Delete current row','현재 열 삭제':'Delete current column','표 삭제':'Delete table','표 형태 초기화':'Reset table shape',
   '잘라내기':'Cut','복사':'Copy','붙여넣기':'Paste','제거':'Remove','삭제':'Delete','순서…':'Order…','수식 변경':'Edit equation','서식 복사':'Copy formatting','서식 붙여넣기':'Paste formatting','서식 제거':'Clear formatting','이미지 대체':'Replace image','이미지 삭제':'Delete image','행 수':'Rows','열 수':'Columns','나누기':'Split','합쳐진 셀을 풀고 다시 나눕니다.':'Unmerge the cell, then split it again.','다른 합쳐진 셀이 있는 표에서는 해당 셀도 먼저 나눠 주세요.':'Split the other merged cells in this table first.','빈틈 없이 직사각형으로 선택한 셀만 합칠 수 있습니다.':'Only a complete rectangular cell selection can be merged.',
   '루트':'Root','단일문서':'Single document','폴더 이름을 입력해 주세요.':'Enter a folder name.','같은 이름의 폴더가 있습니다.':'A folder with that name already exists.','폴더 복제':'Duplicate folder','폴더 이름 변경':'Rename folder','이동할 수 없음':'Cannot move','대상 위치에 같은 이름의 파일 또는 폴더가 있습니다.':'A file or folder with the same name exists at the destination.',
   '업로드된 MD에서 참조를 찾지 못했습니다.':'No references were found in the uploaded Markdown.','문서를 열면 제목과 문단 탐색이 표시됩니다.':'Open a document to browse its headings and paragraphs.','펼치기':'Expand','접기':'Collapse','제목 서식이 없습니다.':'No heading styles.','해시태그':'Hashtags','사용된 해시태그가 없습니다.':'No hashtags used.','해시태그 제거':'Remove hashtag',
@@ -19437,7 +19686,6 @@ async function insertFilesIntoDocument(fileList){
   syncActive();
   scheduleWorkspaceSave();
 }
-$('insert-file-toggle').onclick=()=>$('insert-file-input').click();
 $('insert-file-input').onchange=e=>{insertFilesIntoDocument(e.target.files);e.target.value=''};
 window.addEventListener('pagehide',()=>{
   flushWorkspaceForLifecycle();
@@ -19502,6 +19750,8 @@ $('edit-close-doc').onclick=closeDocument;
   const openMenu=makeMenu([
     {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 1.2h4.5l2.5 2.5v8.1H3a1 1 0 01-1-1V2.2a1 1 0 011-1z"/><path d="M7.5 1.2v2.5H10"/><path d="M5.2 7.2h4M7.8 5.8l1.4 1.4-1.4 1.4"/></svg> 파일 열기',action:()=>els.fileInput.click()},
     {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4.5h11v6a1 1 0 01-1 1H2a1 1 0 01-1-1v-6z"/><path d="M1 4.5l1.5-3h3.3l1.3 1.4H12"/><path d="M5 8h3.8M7.4 6.6L8.8 8 7.4 9.4"/></svg> 폴더 열기',action:()=>els.folderInput.click()},
+    '-',
+    {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 9V2"/><path d="M4 4.5L6.5 2 9 4.5"/><path d="M2 8v2.5A1.5 1.5 0 003.5 12h6a1.5 1.5 0 001.5-1.5V8"/></svg> 현재 문서에 파일 삽입',action:()=>$('insert-file-input').click()},
   ]);
   const saveMenu=makeMenu([
     {label:'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 10l4-7 4 7"/><line x1="3.5" y1="7.5" x2="8.5" y2="7.5"/></svg> MD 저장',action:()=>openDocumentFiles().length>1?saveOpenDocuments('md'):saveCurrent()},
@@ -19645,8 +19895,8 @@ document.addEventListener('keydown',e=>{
   const list=state.mode==='convert'?els.convertList:state.mode==='merge'?els.mergeList:null;
   if(list&&list.contains(target)&&((modifier&&key==='a')||(!modifier&&key==='delete'))){
     consume();if(key==='delete'){shortcutRemoveChecked(list);return}
-    list.querySelectorAll('input[type="checkbox"]').forEach(input=>input.checked=true);
-    if(state.mode==='merge'){updateMergeToggleAll();updateMergePreview()}else updateConvertPreview();return;
+    if(state.mode==='merge'){mergeSelectedKeys=new Set(state.files.map(mergeOrderKey));mergeSelectionInitialized=true;renderMergeList();return}
+    list.querySelectorAll('input[type="checkbox"]').forEach(input=>input.checked=true);updateConvertPreview();return;
   }
   if(!command)return;
   if(command==='save'||command==='saveAs'){consume();if(e.repeat)return;command==='saveAs'&&state.mode==='edit'?shortcutSaveAs():shortcutSaveResult();return}
