@@ -216,6 +216,9 @@ function auditLifecycleStability(mainSource){
   assert(mainSource.includes("if(!e.shiftKey&&quote){")&&mainSource.includes('return exitPreviewStructuredBlock(quote);'),'Enter inside a quote can still create another quoted line.');
   assert(mainSource.includes('scheduleTableCellOverflow(table)')&&mainSource.includes('requestAnimationFrame(()=>{'),'Table resizing still performs overflow layout work on every pointer event.');
   assert(mainSource.includes("if(placement.c<targetColumn&&placement.c+placement.colSpan>targetColumn){cell.colSpan+=1"),'Adding a column inside a merged region can still split the merged cell.');
+  assert(mainSource.includes('resolve({rows:boundedValue(columnInput),cols:boundedValue(rowInput)})'),'Cell split row/column controls do not follow the editor\'s displayed orientation.');
+  assert(mainSource.includes("handle.contentEditable='false'")&&mainSource.includes("handle.setAttribute('aria-hidden','true')"),'Table resize handles can still inherit contenteditable and steal the caret at a table corner.');
+  assert(mainSource.includes('const firstResult=targets.find(cell=>cell.isConnected)')&&mainSource.includes('state.savedPreviewRange=null;'),'Cell splitting can leave a stale range on a detached row and jump the caret to a table corner.');
   assert(mainSource.includes('setTimeout(()=>{documentFormatScrollLock=false;syncScrollLock=false},700)'),'A disappearing formatting panel can still leave editing or split scrolling locked.');
   assert(mainSource.includes("if((e.isComposing||e.defaultPrevented)&&!command)return"),'Recognized shortcuts can still be discarded wholesale by IME/default-prevented key events.');
   assert(/window\.addEventListener\('keydown',e=>\{\r?\n\s*const command=shortcutCommand\(e\)/.test(mainSource),'The central shortcut dispatcher can still be preempted by document-level capture handlers.');

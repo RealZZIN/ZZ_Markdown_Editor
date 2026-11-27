@@ -3630,6 +3630,16 @@ function addTableResize(container){
     if(!table.style.minWidth)table.style.minWidth='520px';
     const updateOuterHandles=()=>table.querySelectorAll('.tbl-row-resize-handle').forEach(handle=>{handle.style.width=table.offsetWidth+'px'});
     const MIN_COLUMN_WIDTH=40;
+    const prepareResizeHandle=handle=>{
+      // Resize controls live inside contenteditable cells. If they inherit
+      // contenteditable, the browser can collapse the caret onto a handle at
+      // the table's upper-right edge after a structural edit or pointer move.
+      handle.contentEditable='false';
+      handle.draggable=false;
+      handle.tabIndex=-1;
+      handle.setAttribute('aria-hidden','true');
+      return handle;
+    };
     function lockTableColumns(){
       const firstRow=table.querySelector('tr');
       if(!firstRow)return[];
@@ -3694,7 +3704,7 @@ function addTableResize(container){
       cell.style.position='relative';
       const colIdx=cellColumnIndexes.get(cell)??-1;
       if(colIdx<0||colIdx>=columnCount-1)return;
-      const h=document.createElement('span');
+      const h=prepareResizeHandle(document.createElement('span'));
       h.className='tbl-resize-handle';
       h.dataset.resizeCol=String(colIdx);
       h.addEventListener('mouseenter',()=>highlightColumn(colIdx,true));
@@ -3715,7 +3725,7 @@ function addTableResize(container){
       const rowCells=Array.from(row.children).filter(cell=>cell.matches&&cell.matches('th,td'));
       const host=rowCells[0];
       if(!host||rowIdx>=resizeRows.length-1)return;
-      const h=document.createElement('span');
+      const h=prepareResizeHandle(document.createElement('span'));
       h.className='tbl-row-resize-handle';
       h.addEventListener('pointerdown',e=>{
         if(e.button!==0)return;
@@ -3727,7 +3737,7 @@ function addTableResize(container){
       });
       host.appendChild(h);
     });
-    const corner=document.createElement('span');
+    const corner=prepareResizeHandle(document.createElement('span'));
     corner.className='tbl-table-resize-handle';
     corner.addEventListener('pointerdown',e=>{
       if(e.button!==0)return;
@@ -3826,7 +3836,7 @@ document.addEventListener('pointermove',e=>{
       tblResizeDrag.started=true;
     }
     const{startW,startNextW,startTableW,colIdx,table}=tblResizeDrag;
-    const minWidth=120;
+    const minWidth=40;
     const appliedDx=Math.max(minWidth-startW,Math.min(startNextW-minWidth,dx));
     const newW=startW+appliedDx;
     table.style.width=startTableW+'px';
@@ -4228,11 +4238,36 @@ let resetTableInteractionState=()=>{};
     table.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle').forEach(handle=>handle.remove());
     table.removeAttribute('data-resize-ready');
     addTableResize(table);addMovableElements(table);
+    // The old selection points into rows that were replaced above. Leaving it
+    // alive lets Chromium relocate the caret to an arbitrary table corner.
+    // Keep the first produced cell selected, but do not leave a text caret on
+    // a detached node or a resize handle.
+    const firstResult=targets.find(cell=>cell.isConnected)||table.querySelector('th,td');
+    clearCellSelection();
+    if(firstResult)setCellSelection(firstResult);
+    window.getSelection()?.removeAllRanges();
+    state.savedPreviewRange=null;
     syncFromPreview();pushHistory(true);return true;
   }
   function requestCellSplit(){
     const selected=selectedCells(),merged=selected.length===1&&(selected[0].rowSpan>1||selected[0].colSpan>1);
-    return new Promise(resolve=>{const wrap=document.createElement('div');wrap.className='modal-backdrop';wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true"><h3>셀 나누기</h3><p>${merged?'합쳐진 셀을 풀고 다시 나눕니다.':'선택한 셀을 지정한 행과 열로 나눕니다.'}</p><div class="insert-config-grid split-cell-config"><label><span>행 수</span><span class="split-number-control"><input type="number" min="1" max="20" value="1" data-split-rows><span class="size-stepper split-stepper"><button class="size-up" type="button" data-split-step="1"></button><button class="size-down" type="button" data-split-step="-1"></button></span></span></label><label><span>열 수</span><span class="split-number-control"><input type="number" min="1" max="20" value="2" data-split-cols><span class="size-stepper split-stepper"><button class="size-up" type="button" data-split-step="1"></button><button class="size-down" type="button" data-split-step="-1"></button></span></span></label></div><div class="modal-actions"><button class="tool" data-split-action="cancel">취소</button><button class="tool primary" data-split-action="apply">나누기</button></div></div>`;wrap.querySelectorAll('[data-split-step]').forEach(button=>button.onclick=event=>{event.preventDefault();event.stopPropagation();const input=button.closest('.split-number-control').querySelector('input');input.value=String(Math.max(1,Math.min(20,(Number(input.value)||1)+Number(button.dataset.splitStep))))});wrap.onclick=event=>{const action=event.target.closest('[data-split-action]')?.dataset.splitAction;if(!action)return;if(action==='apply')resolve({rows:wrap.querySelector('[data-split-rows]').value,cols:wrap.querySelector('[data-split-cols]').value});else resolve(null);wrap.remove()};document.body.appendChild(wrap);wrap.querySelector('[data-split-rows]').focus()});
+    return new Promise(resolve=>{const wrap=document.createElement('div');wrap.className='modal-backdrop';wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true"><h3>셀 나누기</h3><p>${merged?'합쳐진 셀을 풀고 다시 나눕니다.':'선택한 셀을 지정한 행과 열로 나눕니다.'}</p><div class="insert-config-grid split-cell-config"><label><span>행 수</span><span class="split-number-control"><input type="number" min="1" max="20" value="1" data-split-rows><span class="size-stepper split-stepper"><button class="size-up" type="button" data-split-step="1"></button><button class="size-down" type="button" data-split-step="-1"></button></span></span></label><label><span>열 수</span><span class="split-number-control"><input type="number" min="1" max="20" value="2" data-split-cols><span class="size-stepper split-stepper"><button class="size-up" type="button" data-split-step="1"></button><button class="size-down" type="button" data-split-step="-1"></button></span></span></label></div><div class="modal-actions"><button class="tool" data-split-action="cancel">취소</button><button class="tool primary" data-split-action="apply">나누기</button></div></div>`;
+      const rowInput=wrap.querySelector('[data-split-rows]'),columnInput=wrap.querySelector('[data-split-cols]');
+      const boundedValue=input=>Math.max(1,Math.min(20,Number(input.valueAsNumber)||1));
+      const apply=()=>{
+        // In this UI, 행 counts divisions across the row and 열 counts
+        // divisions down the column. Convert those labels to DOM rows/columns.
+        resolve({rows:boundedValue(columnInput),cols:boundedValue(rowInput)});
+        wrap.remove();
+      };
+      wrap.querySelectorAll('[data-split-step]').forEach(button=>button.onclick=event=>{event.preventDefault();event.stopPropagation();const input=button.closest('.split-number-control').querySelector('input');input.value=String(Math.max(1,Math.min(20,boundedValue(input)+Number(button.dataset.splitStep))))});
+      for(const input of [rowInput,columnInput]){
+        input.addEventListener('focus',()=>input.select());
+        input.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();apply()}});
+      }
+      wrap.onclick=event=>{const action=event.target.closest('[data-split-action]')?.dataset.splitAction;if(!action)return;if(action==='apply')apply();else{resolve(null);wrap.remove()}};
+      document.body.appendChild(wrap);rowInput.focus();
+    });
   }
   function parseClipboardGrid(e){
     const html=e?.clipboardData?.getData('text/html')||'',wrap=document.createElement('div');wrap.innerHTML=html;
