@@ -7,7 +7,7 @@
 <title>#ZZ.md</title>
 <meta name="application-name" content="#ZZ.md">
 <link id="app-favicon" rel="icon" type="image/svg+xml" href="">
-<link rel="stylesheet" href="/src/styles/app.css?v=20261128-split-orientation">
+<link rel="stylesheet" href="/src/styles/app.css">
 </head>
 <body>
 <div class="app" id="app">
@@ -367,7 +367,7 @@
           </div>
           <div class="convert-resizer" id="merge-resizer" role="separator" aria-orientation="vertical" title="병합 영역 너비 조절"></div>
           <div class="box">
-            <div class="box-head"><span>병합 결과</span><span class="merge-result-actions"><label class="merge-include-names"><input id="merge-include-names" type="checkbox" checked><span>문서명 포함</span></label><button class="tool no-print" id="merge-order-open" type="button">순서 설정</button><button class="tool primary no-print" id="run-merge">병합 실행</button></span></div>
+            <div class="box-head"><span>병합 결과</span><span class="merge-result-actions"><label class="merge-include-names"><input id="merge-include-names" type="checkbox" checked><span class="merge-checkbox-mark" aria-hidden="true"></span><span>문서명 포함</span></label><button class="tool no-print" id="merge-order-open" type="button">순서 설정</button><button class="tool primary no-print" id="run-merge">병합 실행</button></span></div>
             <div class="box-body">
               <article class="preview" id="merge-result"></article>
             </div>
@@ -389,6 +389,6 @@
   </section>
 </div>
 
-<script type="module" src="/src/main.js?v=20261128-split-orientation"></script>
+<script type="module" src="/src/main.js"></script>
 </body>
 </html>

@@ -96,6 +96,9 @@ function auditFormattingStability(mainSource,indexSource,styleSource){
   assert(styleSource.includes('.font-bg-opacity input { width:100%;margin:0;accent-color:var(--t1); }'),'Background opacity does not follow the active theme text color.');
   assert(styleSource.includes('.save-format-extension { align-self:stretch;display:grid;place-items:center;'),'Save-format extension labels are not centered within their column.');
   assert(styleSource.includes('.save-format-choice-copy b { font-size:15.5px;'),'Save-format title labels are too small.');
+  assert(mainSource.includes('DOCUMENT_DEFAULT_FONT_SIZE_KEY')&&mainSource.includes('data-document-default-preview')&&mainSource.includes('data-document-default-reset'),'Document default formatting settings are incomplete.');
+  assert(styleSource.includes('--document-base-font-size:14px')&&/font-size:\s*var\(--document-base-font-size\)/.test(styleSource),'Document default font size is not connected to Preview.');
+  assert(styleSource.includes('--document-line-height:1.8')&&/line-height:\s*var\(--document-line-height\)/.test(styleSource),'Document default line spacing is not connected to Preview.');
   const aboutStart=mainSource.indexOf('<section class="app-settings-group app-about"');
   const aboutEnd=mainSource.indexOf('</section>',aboutStart);
   const aboutSource=mainSource.slice(aboutStart,aboutEnd);
@@ -218,7 +221,13 @@ function auditLifecycleStability(mainSource){
   assert(mainSource.includes("if(placement.c<targetColumn&&placement.c+placement.colSpan>targetColumn){cell.colSpan+=1"),'Adding a column inside a merged region can still split the merged cell.');
   assert(mainSource.includes('resolve({rows:boundedValue(columnInput),cols:boundedValue(rowInput)})'),'Cell split row/column controls do not follow the editor\'s displayed orientation.');
   assert(mainSource.includes("handle.contentEditable='false'")&&mainSource.includes("handle.setAttribute('aria-hidden','true')"),'Table resize handles can still inherit contenteditable and steal the caret at a table corner.');
-  assert(mainSource.includes('const firstResult=targets.find(cell=>cell.isConnected)')&&mainSource.includes('state.savedPreviewRange=null;'),'Cell splitting can leave a stale range on a detached row and jump the caret to a table corner.');
+  assert(mainSource.includes('firstResult=targets.find(cell=>cell.isConnected)')&&mainSource.includes('{preserveSelection:false,selectCell:()=>firstResult}')&&mainSource.includes('window.getSelection()?.removeAllRanges();state.savedPreviewRange=null;'),'Cell splitting can leave a stale range on a detached row and jump the caret to a table corner.');
+  assert(mainSource.includes('function runTableTransaction(')&&mainSource.includes("console.error('Table transaction failed',error)")&&mainSource.includes('tableRollbackClone('),'Structural table edits do not share a rollback-safe transaction path.');
+  assert(mainSource.includes('function assertValidTableMutation(')&&mainSource.includes('syncFromPreview({throwOnError:true})')&&mainSource.includes('els.editor.value=sourceBefore'),'A failed table serialization can leave Preview and Markdown in different states.');
+  assert(!mainSource.includes("document.createComment('table-transaction')"),'An internal table transaction marker can leak into the document source.');
+  assert(mainSource.includes("crypto.subtle.digest('SHA-256',buffer)")&&mainSource.includes('normalizedCustomFontFileName')&&mainSource.includes('skipped.push(fileName)'),'Uploaded fonts can still be registered more than once.');
+  assert(indexSource.includes('merge-checkbox-mark')&&styleSource.includes('.merge-include-names input:checked + .merge-checkbox-mark'),'The merge-title checkbox still relies on inconsistent replaced-input pseudo rendering.');
+  assert(!indexSource.includes('main.js?v=')&&!indexSource.includes('app.css?v='),'Entry assets still rely on a manually maintained cache version instead of Vite content hashes.');
   assert(mainSource.includes('setTimeout(()=>{documentFormatScrollLock=false;syncScrollLock=false},700)'),'A disappearing formatting panel can still leave editing or split scrolling locked.');
   assert(mainSource.includes("if((e.isComposing||e.defaultPrevented)&&!command)return"),'Recognized shortcuts can still be discarded wholesale by IME/default-prevented key events.');
   assert(/window\.addEventListener\('keydown',e=>\{\r?\n\s*const command=shortcutCommand\(e\)/.test(mainSource),'The central shortcut dispatcher can still be preempted by document-level capture handlers.');

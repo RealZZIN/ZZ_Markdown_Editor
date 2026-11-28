@@ -13,6 +13,17 @@ const $=id=>document.getElementById(id);
 const state={files:[],images:{},assets:new Map(),active:-1,mode:'convert',theme:localStorage.getItem('md-theme')||'light',lastInput:null,history:[],future:[],restoring:false,editingPreview:false,insertingImage:false,savedSelection:null,lastEditorSelection:{start:0,end:0},lastInsertionSurface:'editor',savedPreviewRange:null,pendingInsertionContext:null,historyTimer:null,dirty:false,savedText:'',collapsedSidebarGroups:{},collapsedMergeGroups:{},stayHomeAfterConvert:false,homeMergeNotice:'',printScale:100,sidebarView:'files'};
 const LANGUAGE_KEY='zz-ui-language-v1';
 let uiLanguage=localStorage.getItem(LANGUAGE_KEY)==='en'?'en':'ko';
+const DOCUMENT_DEFAULT_FONT_SIZE_KEY='md-document-default-font-size-v1',DOCUMENT_DEFAULT_LINE_HEIGHT_KEY='md-document-default-line-height-v1';
+const BASE_DOCUMENT_FONT_SIZE=14,BASE_DOCUMENT_LINE_HEIGHT=1.8;
+const boundedDocumentFontSize=value=>Math.round(Math.max(6,Math.min(96,Number(value)||BASE_DOCUMENT_FONT_SIZE)));
+const boundedDocumentLineHeight=value=>Math.round(Math.max(.8,Math.min(4,Number(value)||BASE_DOCUMENT_LINE_HEIGHT))*10)/10;
+let defaultDocumentFontSize=boundedDocumentFontSize(localStorage.getItem(DOCUMENT_DEFAULT_FONT_SIZE_KEY));
+let defaultDocumentLineHeight=boundedDocumentLineHeight(localStorage.getItem(DOCUMENT_DEFAULT_LINE_HEIGHT_KEY));
+function applyDocumentDefaults(){
+  document.documentElement.style.setProperty('--document-base-font-size',`${defaultDocumentFontSize}px`);
+  document.documentElement.style.setProperty('--document-line-height',String(defaultDocumentLineHeight));
+}
+applyDocumentDefaults();
 let customTheme={
   background:localStorage.getItem('md-custom-theme-bg')||'#f7f7f5',
   text:localStorage.getItem('md-custom-theme-text')||'#111110'
@@ -4082,7 +4093,10 @@ let resetTableInteractionState=()=>{};
     }else navigator.clipboard?.writeText?.(text);
     return true;
   }
-  function clearCellRange(){const cells=selectedCells();if(!cells.length)return false;pushHistory(true);cells.forEach(cell=>cell.replaceChildren(document.createElement('br')));syncFromPreview();pushHistory(true);paintCellSelection();return true}
+  function clearCellRange(){
+    const cells=selectedCells();if(!cells.length)return false;
+    return runTableTransaction(cells[0].closest('table'),()=>{cells.forEach(cell=>cell.replaceChildren(document.createElement('br')));return true},{rebuild:false});
+  }
   function tableLogicalLayout(table){
     const rows=tableCells(table),occupied=[],placements=new Map();
     rows.forEach((row,rowIndex)=>{
@@ -4099,6 +4113,80 @@ let resetTableInteractionState=()=>{};
       });
     });
     return{rows,occupied,placements,rowCount:occupied.length,columnCount:Math.max(0,...occupied.map(row=>row.length))};
+  }
+  function tableSelectionBookmark(table){
+    if(!table||cellAnchor?.table!==table||cellFocus?.table!==table)return null;
+    const layout=tableLogicalLayout(table),anchor=layout.placements.get(cellAnchor.cell),focus=layout.placements.get(cellFocus.cell);
+    if(!anchor||!focus)return null;
+    return{anchor:{r:anchor.r,c:anchor.c},focus:{r:focus.r,c:focus.c}};
+  }
+  function tableCellAtLogicalPoint(table,point){
+    if(!table||!point)return null;
+    const layout=tableLogicalLayout(table);
+    if(!layout.rowCount||!layout.columnCount)return null;
+    const row=Math.max(0,Math.min(layout.rowCount-1,Number(point.r)||0));
+    const column=Math.max(0,Math.min(layout.columnCount-1,Number(point.c)||0));
+    return layout.occupied[row]?.[column]||layout.occupied.flat().find(Boolean)||null;
+  }
+  function rebuildTableInteractions(table){
+    if(!table?.isConnected)return;
+    table.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle').forEach(handle=>handle.remove());
+    table.removeAttribute('data-resize-ready');
+    addTableResize(table);addMovableElements(table);
+  }
+  function tableRollbackClone(table){
+    const clone=table.cloneNode(true);
+    clone.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.block-move-handle,.table-filter-button').forEach(node=>node.remove());
+    clone.removeAttribute('data-resize-ready');
+    clone.classList.remove('table-selected','table-cell-range-active');
+    clone.querySelectorAll('.table-cell-selected').forEach(cell=>cell.classList.remove('table-cell-selected'));
+    return clone;
+  }
+  function assertValidTableMutation(table){
+    if(!table?.rows?.length)throw new Error('Table mutation removed every row');
+    const cells=[...table.querySelectorAll('th,td')];
+    if(!cells.length)throw new Error('Table mutation removed every cell');
+    if(cells.some(cell=>!Number.isInteger(cell.rowSpan)||cell.rowSpan<1||!Number.isInteger(cell.colSpan)||cell.colSpan<1)){
+      throw new Error('Table mutation produced an invalid cell span');
+    }
+    const layout=tableLogicalLayout(table);
+    if(!layout.rowCount||!layout.columnCount||layout.placements.size!==cells.length){
+      throw new Error('Table mutation produced an invalid logical layout');
+    }
+  }
+  function runTableTransaction(table,mutate,{rebuild=true,preserveSelection=true,selectCell=null}={}){
+    if(!table?.isConnected||typeof mutate!=='function')return false;
+    const sourceBefore=els.editor.value,bookmark=tableSelectionBookmark(table),rollback=tableRollbackClone(table);
+    const parentBefore=table.parentNode,nextBefore=table.nextSibling;
+    pushHistory(true);
+    try{
+      const result=mutate();
+      if(result===false)return false;
+      const liveTable=table.isConnected?table:null;
+      if(liveTable)assertValidTableMutation(liveTable);
+      clearCellSelection();
+      window.getSelection()?.removeAllRanges();state.savedPreviewRange=null;
+      if(liveTable){
+        if(rebuild)rebuildTableInteractions(liveTable);
+        const explicit=typeof selectCell==='function'?selectCell(liveTable):selectCell;
+        const anchor=explicit?.isConnected?explicit:preserveSelection?tableCellAtLogicalPoint(liveTable,bookmark?.anchor):null;
+        const focus=preserveSelection&&!explicit?tableCellAtLogicalPoint(liveTable,bookmark?.focus):anchor;
+        if(anchor)setCellSelection(anchor,focus||anchor);
+      }
+      syncFromPreview({throwOnError:true});pushHistory(true);return result??true;
+    }catch(error){
+      const restored=tableRollbackClone(rollback);
+      if(table.isConnected)table.replaceWith(restored);
+      else if(parentBefore)parentBefore.insertBefore(restored,nextBefore?.parentNode===parentBefore?nextBefore:null);
+      els.editor.value=sourceBefore;
+      if(state.active>=0&&state.files[state.active])state.files[state.active].text=sourceBefore;
+      markDirty();scheduleLineNumbers();
+      clearCellSelection();window.getSelection()?.removeAllRanges();state.savedPreviewRange=null;
+      rebuildTableInteractions(restored);
+      console.error('Table transaction failed',error);
+      showInfoNotice('표 작업 실패','표를 변경하지 못해 작업 전 상태로 복구했습니다.');
+      return false;
+    }
   }
   function mergeCellRange(){
     if(!cellAnchor||!cellFocus)return false;
@@ -4124,32 +4212,24 @@ let resetTableInteractionState=()=>{};
       fragment.querySelectorAll?.('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle,.block-move-handle,.table-filter-button').forEach(node=>node.remove());
       return fragment;
     });
-    const keeper=ordered[0];pushHistory(true);keeper.replaceChildren();
-    let previousRow=placements.get(keeper).r;
-    contents.forEach((fragment,index)=>{
-      const row=placements.get(ordered[index]).r;
-      if(index)keeper.appendChild(row===previousRow?document.createTextNode('\t'):document.createElement('br'));
-      keeper.appendChild(fragment);
-      previousRow=row;
-    });
-    keeper.colSpan=logicalRight-logicalLeft+1;keeper.rowSpan=logicalBottom-logicalTop+1;
-    selected.forEach(cell=>{if(cell!==keeper)cell.remove()});
-    // Re-rendering immediately here round-trips through Markdown and flattens
-    // colspan/rowspan plus rich inline spans. Keep the edited preview DOM as
-    // the source of truth; syncFromPreview already records its HTML form.
-    syncFromPreview();
-    clearCellSelection();
-    setCellSelection(keeper);
-    // Structural merges can remove the cells that host the corner and move
-    // handles. Rebuild them once instead of leaving stale or missing controls.
-    table.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle').forEach(handle=>handle.remove());
-    table.removeAttribute('data-resize-ready');
-    addTableResize(table);addMovableElements(table);
-    pushHistory(true);return true;
+    const keeper=ordered[0];
+    return runTableTransaction(table,()=>{
+      keeper.replaceChildren();
+      let previousRow=placements.get(keeper).r;
+      contents.forEach((fragment,index)=>{
+        const row=placements.get(ordered[index]).r;
+        if(index)keeper.appendChild(row===previousRow?document.createTextNode('\t'):document.createElement('br'));
+        keeper.appendChild(fragment);previousRow=row;
+      });
+      keeper.colSpan=logicalRight-logicalLeft+1;keeper.rowSpan=logicalBottom-logicalTop+1;
+      selected.forEach(cell=>{if(cell!==keeper)cell.remove()});
+      return true;
+    },{preserveSelection:false,selectCell:()=>keeper});
   }
   function equalizeTableCells(table,axis){
     if(!table)return false;
     const layout=tableLogicalLayout(table),selected=selectedCells(),scope=selected.length>1?selected:[...layout.placements.keys()];
+    let applyEqualization=null;
     if(axis==='height'){
       let indexes=new Set();
       scope.forEach(cell=>{const item=layout.placements.get(cell);if(item)for(let r=item.r;r<item.r+item.rowSpan;r++)indexes.add(r)});
@@ -4157,12 +4237,13 @@ let resetTableInteractionState=()=>{};
       if(indexes.size<2)return false;
       const heights=Array.from({length:layout.rowCount},(_,row)=>table.rows[row]?.getBoundingClientRect().height||28);
       const equal=[...indexes].reduce((sum,index)=>sum+heights[index],0)/indexes.size;
-      pushHistory(true);
       const ordered=[...indexes].sort((a,b)=>a-b);
-      table.dataset.equalRows=ordered.join(',');
-      table.dataset.equalRowHeight=String(equal);
-      ordered.forEach(index=>{const row=table.rows[index];if(row)row.style.height=`${equal}px`});
-      maintainEqualTableRows(table);
+      applyEqualization=()=>{
+        table.dataset.equalRows=ordered.join(',');
+        table.dataset.equalRowHeight=String(equal);
+        ordered.forEach(index=>{const row=table.rows[index];if(row)row.style.height=`${equal}px`});
+        maintainEqualTableRows(table);
+      };
     }else{
       let indexes=new Set();
       scope.forEach(cell=>{const item=layout.placements.get(cell);if(item)for(let c=item.c;c<item.c+item.colSpan;c++)indexes.add(c)});
@@ -4177,15 +4258,16 @@ let resetTableInteractionState=()=>{};
       const equal=[...indexes].reduce((sum,index)=>sum+columnWidths[index],0)/indexes.size;
       indexes.forEach(index=>{columnWidths[index]=equal});
       const total=columnWidths.reduce((sum,width)=>sum+width,0)||1;
-      pushHistory(true);
-      table.dataset.equalColumns=[...indexes].sort((a,b)=>a-b).join(',');
-      preserveTableGeometry(table);table.style.tableLayout='fixed';
-      layout.placements.forEach((item,cell)=>{
-        const width=columnWidths.slice(item.c,item.c+item.colSpan).reduce((sum,value)=>sum+value,0);
-        cell.style.width=`${(width/total*100).toFixed(4)}%`;cell.style.minWidth='0';
-      });
+      applyEqualization=()=>{
+        table.dataset.equalColumns=[...indexes].sort((a,b)=>a-b).join(',');
+        preserveTableGeometry(table);table.style.tableLayout='fixed';
+        layout.placements.forEach((item,cell)=>{
+          const width=columnWidths.slice(item.c,item.c+item.colSpan).reduce((sum,value)=>sum+value,0);
+          cell.style.width=`${(width/total*100).toFixed(4)}%`;cell.style.minWidth='0';
+        });
+      };
     }
-    syncFromPreview();addTableResize(table);paintCellSelection();pushHistory(true);return true;
+    return runTableTransaction(table,()=>{applyEqualization?.();return true});
   }
   function unmergeCell(cell){
     const point=cellPoint(cell);if(!point)return[cell];const rs=cell.rowSpan||1,cs=cell.colSpan||1;
@@ -4206,48 +4288,35 @@ let resetTableInteractionState=()=>{};
       showInfoNotice('셀 나누기','다른 합쳐진 셀이 있는 표에서는 해당 셀도 먼저 나눠 주세요.');
       return false;
     }
-    pushHistory(true);
-    preserveTableGeometry(table);
-    targets=targets.flatMap(unmergeCell).filter(cell=>cell.isConnected);
-    const targetSet=new Set(targets),originalRows=Array.from(table.rows),selectedColumns=new Set();
-    originalRows.forEach(row=>Array.from(row.cells).forEach((cell,column)=>{if(targetSet.has(cell))selectedColumns.add(column)}));
-    originalRows.forEach(row=>{
-      const originalCells=Array.from(row.cells),splitThisRow=originalCells.some(cell=>targetSet.has(cell));
-      const outputRows=Array.from({length:splitThisRow?rowParts:1},()=>document.createElement('tr'));
-      originalCells.forEach((cell,column)=>{
-        const selected=targetSet.has(cell);
-        if(selected){
-          const cellWidth=cell.getBoundingClientRect().width;
-          for(let rr=0;rr<rowParts;rr++)for(let cc=0;cc<colParts;cc++){
-            const next=rr===0&&cc===0?cell:document.createElement(cell.tagName.toLowerCase());
-            next.rowSpan=1;next.colSpan=1;
-            next.style.width=`${Math.max(24,cellWidth/colParts)}px`;
-            next.style.minWidth='0';
-            if(next!==cell)next.appendChild(document.createElement('br'));
-            outputRows[rr].appendChild(next);
+    let firstResult=null;
+    return runTableTransaction(table,()=>{
+      preserveTableGeometry(table);
+      targets=targets.flatMap(unmergeCell).filter(cell=>cell.isConnected);
+      const targetSet=new Set(targets),originalRows=Array.from(table.rows),selectedColumns=new Set();
+      originalRows.forEach(row=>Array.from(row.cells).forEach((cell,column)=>{if(targetSet.has(cell))selectedColumns.add(column)}));
+      originalRows.forEach(row=>{
+        const originalCells=Array.from(row.cells),splitThisRow=originalCells.some(cell=>targetSet.has(cell));
+        const outputRows=Array.from({length:splitThisRow?rowParts:1},()=>document.createElement('tr'));
+        originalCells.forEach((cell,column)=>{
+          const selected=targetSet.has(cell);
+          if(selected){
+            const cellWidth=cell.getBoundingClientRect().width;
+            for(let rr=0;rr<rowParts;rr++)for(let cc=0;cc<colParts;cc++){
+              const next=rr===0&&cc===0?cell:document.createElement(cell.tagName.toLowerCase());
+              next.rowSpan=1;next.colSpan=1;next.style.width=`${Math.max(24,cellWidth/colParts)}px`;next.style.minWidth='0';
+              if(next!==cell)next.appendChild(document.createElement('br'));
+              outputRows[rr].appendChild(next);
+            }
+          }else{
+            cell.rowSpan=splitThisRow?rowParts:1;cell.colSpan=selectedColumns.has(column)?colParts:1;outputRows[0].appendChild(cell);
           }
-        }else{
-          cell.rowSpan=splitThisRow?rowParts:1;
-          cell.colSpan=selectedColumns.has(column)?colParts:1;
-          outputRows[0].appendChild(cell);
-        }
+        });
+        row.replaceWith(...outputRows);
       });
-      row.replaceWith(...outputRows);
-    });
-    table.style.tableLayout='fixed';table.style.minWidth='0';
-    table.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle').forEach(handle=>handle.remove());
-    table.removeAttribute('data-resize-ready');
-    addTableResize(table);addMovableElements(table);
-    // The old selection points into rows that were replaced above. Leaving it
-    // alive lets Chromium relocate the caret to an arbitrary table corner.
-    // Keep the first produced cell selected, but do not leave a text caret on
-    // a detached node or a resize handle.
-    const firstResult=targets.find(cell=>cell.isConnected)||table.querySelector('th,td');
-    clearCellSelection();
-    if(firstResult)setCellSelection(firstResult);
-    window.getSelection()?.removeAllRanges();
-    state.savedPreviewRange=null;
-    syncFromPreview();pushHistory(true);return true;
+      table.style.tableLayout='fixed';table.style.minWidth='0';
+      firstResult=targets.find(cell=>cell.isConnected)||table.querySelector('th,td');
+      return true;
+    },{preserveSelection:false,selectCell:()=>firstResult});
   }
   function requestCellSplit(){
     const selected=selectedCells(),merged=selected.length===1&&(selected[0].rowSpan>1||selected[0].colSpan>1);
@@ -4341,12 +4410,7 @@ let resetTableInteractionState=()=>{};
   }
   function deleteSelectedTable(table=selectedTable){
     if(!table||!els.preview.contains(table))return false;
-    pushHistory(true);
-    table.remove();
-    selectedTable=null;clearCellSelection();
-    syncFromPreview();
-    pushHistory(true);
-    return true;
+    return runTableTransaction(table,()=>{table.remove();selectedTable=null;return true},{rebuild:false,preserveSelection:false});
   }
   function findCell(el){return el.closest('td,th');}
   function getCellPos(cell){
@@ -4416,40 +4480,37 @@ let resetTableInteractionState=()=>{};
       return;
     }
     if(op==='reset-shape'){
-      pushHistory(true);
-      clearTableEqualization(table);
-      // Restore the same baseline used when a table first enters Preview.
-      // Clearing only cell sizes leaves the bottom-right whole-table resize
-      // width/height behind (or falls back to content width), so reset both
-      // the outer table and every cached row/cell constraint.
-      table.style.removeProperty('width');
-      table.style.removeProperty('height');
-      table.style.removeProperty('min-width');
-      table.style.removeProperty('min-height');
-      table.style.removeProperty('max-width');
-      table.style.removeProperty('max-height');
-      table.style.removeProperty('table-layout');
-      Array.from(table.rows).forEach(row=>{
-        row.style.removeProperty('width');
-        row.style.removeProperty('height');
-        row.style.removeProperty('min-width');
-        row.style.removeProperty('min-height');
-        delete row.dataset.baseH;
-        Array.from(row.cells).forEach(cell=>{
-          cell.style.removeProperty('width');
-          cell.style.removeProperty('height');
-          cell.style.removeProperty('min-width');
-          cell.style.removeProperty('min-height');
-          cell.style.removeProperty('max-width');
-          cell.style.removeProperty('max-height');
-          delete cell.dataset.baseH;
+      runTableTransaction(table,()=>{
+        clearTableEqualization(table);
+        // Restore the same baseline used when a table first enters Preview.
+        // Clearing only cell sizes leaves the bottom-right whole-table resize
+        // width/height behind (or falls back to content width), so reset both
+        // the outer table and every cached row/cell constraint.
+        table.style.removeProperty('width');
+        table.style.removeProperty('height');
+        table.style.removeProperty('min-width');
+        table.style.removeProperty('min-height');
+        table.style.removeProperty('max-width');
+        table.style.removeProperty('max-height');
+        table.style.removeProperty('table-layout');
+        Array.from(table.rows).forEach(row=>{
+          row.style.removeProperty('width');
+          row.style.removeProperty('height');
+          row.style.removeProperty('min-width');
+          row.style.removeProperty('min-height');
+          delete row.dataset.baseH;
+          Array.from(row.cells).forEach(cell=>{
+            cell.style.removeProperty('width');
+            cell.style.removeProperty('height');
+            cell.style.removeProperty('min-width');
+            cell.style.removeProperty('min-height');
+            cell.style.removeProperty('max-width');
+            cell.style.removeProperty('max-height');
+            delete cell.dataset.baseH;
+          });
         });
+        return true;
       });
-      table.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle').forEach(handle=>handle.remove());
-      table.removeAttribute('data-resize-ready');
-      addTableResize(table);
-      syncFromPreview();
-      pushHistory(true);
       hideMenu();
       return;
     }
@@ -4470,7 +4531,7 @@ let resetTableInteractionState=()=>{};
       if(now-previous.at<900){hideMenu();return}
       window.__zzTableColumnInsertGuard={at:now,op};
     }
-    pushHistory(true);
+    const changed=runTableTransaction(table,()=>{
     if(op==='row-above'||op==='row-below'){
       // Row commands belong to the row that opened the context menu. A stale
       // multi-cell selection elsewhere in the same table must not override it.
@@ -4579,13 +4640,10 @@ let resetTableInteractionState=()=>{};
           if(remaining<=0)cell.remove();else cell.colSpan=remaining;
         });
       }
-    }else{hideMenu();return}
-    clearCellSelection();
-    syncFromPreview();
-    table.querySelectorAll('.tbl-resize-handle,.tbl-row-resize-handle,.tbl-table-resize-handle').forEach(handle=>handle.remove());
-    table.removeAttribute('data-resize-ready');
-    addTableResize(table);addMovableElements(table);
-    if(insertedColumn>=0){
+    }else return false;
+    return true;
+    });
+    if(changed&&insertedColumn>=0){
       const renderedTable=[...els.preview.querySelectorAll('table')][tableIndex]||table;
       const logical=tableLogicalLayout(renderedTable),columnCells=logical.occupied.map(row=>row[insertedColumn]).filter(Boolean);
       if(columnCells.length){
@@ -4594,7 +4652,6 @@ let resetTableInteractionState=()=>{};
         paintCellSelection();
       }
     }
-    pushHistory(true);
     hideMenu();
   }
   function showMenu(e,target){
@@ -7320,7 +7377,7 @@ function pushPreviewFormatHistory(){
   pushHistory(true);
   cachePreviewHistorySnapshot();
 }
-function syncFromPreview(){
+function syncFromPreview({throwOnError=false}={}){
   clearTimeout(previewSyncTimer);
   previewSyncTimer=null;
   if(previewSyncIdle&&'cancelIdleCallback' in window)cancelIdleCallback(previewSyncIdle);
@@ -7345,6 +7402,7 @@ function syncFromPreview(){
     if(typeof scheduleWorkspaceSave==='function')scheduleWorkspaceSave();
     return true;
   }catch(error){
+    if(throwOnError)throw error;
     console.error('Preview sync failed',error);
     setStatus(uiLanguage==='en'?'Could not sync the preview. Your source was preserved.':'미리보기를 원문에 반영하지 못했습니다. 기존 원문은 보존되었습니다.');
     return false;
@@ -11907,7 +11965,14 @@ function resolveLineHeightTargetPane(){
 }
 function lineHeightPresetLabel(value){
   const numeric=Number(value),formatted=Number.isInteger(numeric)?numeric.toFixed(1):numeric.toFixed(2).replace(/0+$/,'').replace(/\.$/,'');
-  return Math.abs(numeric-1.8)<.01?(uiLanguage==='en'?`${formatted} (Default)`:`${formatted}(기본)`):formatted;
+  return Math.abs(numeric-defaultDocumentLineHeight)<.01?(uiLanguage==='en'?`${formatted} (Default)`:`${formatted}(기본)`):formatted;
+}
+function refreshDocumentDefaultLineHeightUi(){
+  const menu=$('fmt-line-height-menu');if(!menu)return;
+  menu.querySelectorAll('[data-line-height]').forEach(button=>{
+    button.querySelector('small')?.remove();
+    if(Math.abs(Number(button.dataset.lineHeight)-defaultDocumentLineHeight)<.01){const small=document.createElement('small');small.textContent=uiLanguage==='en'?'Default':'기본';button.appendChild(small)}
+  });
 }
 function previewLineHeightBlocks(range){
   const blocks=new Set(),add=node=>{const block=closestPreviewBlock(node);if(block)blocks.add(block)};
@@ -11947,6 +12012,8 @@ $('fmt-line-height-menu').onclick=e=>{e.stopPropagation();const button=e.target.
 $('fmt-line-height-menu').querySelectorAll('[data-line-height-step]').forEach(button=>button.onclick=e=>{e.preventDefault();e.stopPropagation();const input=$('fmt-line-height-custom'),next=Math.round(Math.max(.8,Math.min(4,(Number(input.value)||1.8)+Number(button.dataset.lineHeightStep)))*10)/10;input.value=String(next);applyLineHeight(next)});
 $('fmt-line-height-apply').onclick=()=>{applyLineHeight($('fmt-line-height-custom').value);hideLineHeightMenu()};
 $('fmt-line-height-custom').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();applyLineHeight(e.currentTarget.value);hideLineHeightMenu()}};
+refreshDocumentDefaultLineHeightUi();
+setLineHeightUi(defaultDocumentLineHeight);
 document.addEventListener('click',e=>{
   if(!$('fmt-size-combo').contains(e.target))hideFontSizeMenu();
   if(!$('fmt-heading-combo').contains(e.target))hideHeadingMenu();
@@ -13337,7 +13404,7 @@ function openCustomFormatSavedWindow(anchor){
 function requestCustomFormatName(title,value='',label='이름'){
   return new Promise(resolve=>{
     const wrap=document.createElement('div');
-    wrap.className='modal-backdrop';
+    wrap.className=`modal-backdrop${label==='폴더명'?' custom-format-folder-dialog':''}`;
     wrap.innerHTML=`<div class="modal-card" role="dialog" aria-modal="true"><h3>${htmlEsc(title)}</h3><label><span>${htmlEsc(label)}</span><input type="text" value="${htmlEsc(value)}" maxlength="60"></label><div class="modal-actions"><button class="tool" type="button" data-name-action="cancel">취소</button><button class="tool primary" type="button" data-name-action="save">확인</button></div></div>`;
     const input=wrap.querySelector('input');
     const close=result=>{wrap.remove();resolve(result)};
@@ -17391,6 +17458,7 @@ const EN_TEXT={
   '라이트':'Light','다크':'Dark','사용자 지정':'Custom','테마 설정':'Theme settings','화면에 사용할 테마를 선택하세요.':'Choose a theme for the interface.',
   '사용자 지정 테마 편집':'Edit custom theme','배경색과 글자색을 직접 설정합니다.':'Set the background and text colors manually.',
   '언어':'Language','화면에 표시할 언어를 선택합니다.':'Choose the language used in the interface.','한국어':'한국어','영어':'English','프로그램 정보':'About','Markdown 작업을 더 빠르고 간결하게.':'A faster, simpler way to work with Markdown.','작성·미리보기부터 변환·병합까지 한곳에서 처리하세요.':'Write, preview, convert, and merge—all in one place.','GitHub 저장소로 이동':'Open GitHub repository',
+  '기본 서식':'Default formatting','기본 글자 크기':'Default font size','기본 줄 간격':'Default line spacing','설정 미리보기':'Settings preview','문서의 기본 글자 크기와 줄 간격을 확인합니다.':'Preview the document’s default font size and line spacing.','개별 서식이 있는 글은 기존 모양을 유지합니다.':'Text with explicit formatting keeps its existing appearance.',
   '문서 폰트':'Document font','업로드 폰트 사용':'Use uploaded font','선택한 폰트를 미리보기와 PDF 문서에 적용합니다.':'Apply the selected font to the preview and exported PDFs.','이미지 검사':'Image check','누락 이미지 경고':'Missing image warnings','MD에서 참조하지만 업로드되지 않은 이미지가 있으면 파일 목록에 경고를 표시합니다.':'Show a warning in the file list when an MD file references an image that has not been uploaded.','누락된 이미지':'Missing images','파일 목록':'File list','스크롤 시 하위 폴더 고정':'Keep subfolder visible while scrolling','파일 목록을 스크롤할 때 현재 하위 폴더 이름을 위쪽에 표시합니다.':'Show the current subfolder name at the top while scrolling through the file list.',
   '문서 폰트 선택':'Select document font','폰트 업로드':'Upload font','삭제':'Delete','업로드한 폰트 없음':'No uploaded fonts',
   'TTF, OTF, WOFF, WOFF2 파일을 업로드할 수 있습니다.':'Upload TTF, OTF, WOFF, or WOFF2 font files.','폰트를 확인하고 저장하는 중...':'Checking and saving fonts...','폰트를 불러오지 못했습니다.':'Could not load the font.',
@@ -17545,6 +17613,7 @@ const EN_TEXT={
   '이미지나 첨부 파일을 문서 본문에 바로 표시합니다.':'Displays an image or attachment directly in the document.','![[화면 구성.png]]':'![[Layout.png]]','이미지 미리보기':'Image preview','화면 구성.png':'Layout.png',
   '문장 중 강조할 부분에 형광펜처럼 배경색을 표시합니다.':'Highlights part of a sentence with a marker-like background.','회의는 ==오후 3시==에 시작합니다.':'The meeting starts at ==3 PM==.','회의는':'The meeting starts at','오후 3시':'3 PM','에 시작합니다.':'.',
   '찾을 내용':'Find','바꿀 내용':'Replace with','비워두면 찾은 내용을 삭제합니다':'Leave blank to delete matches','대소문자 구분':'Match case','단어 전체':'Whole words','다음 찾기':'Find next','바꾸기':'Replace','모두 바꾸기':'Replace all','일치 항목 없음':'No matches','원문에서 바꿀 위치를 찾지 못했습니다':'Could not locate the match in the source'
+  ,'표 작업 실패':'Table operation failed','표를 변경하지 못해 작업 전 상태로 복구했습니다.':'The table could not be changed and was restored to its previous state.'
   ,'파일 열기':'Open file','문서 열기':'Open document','폴더 열기':'Open folder','문서로 저장':'Save as document','PDF 저장':'Save PDF','MD 저장':'Save MD','Word 저장 (.docx)':'Save as Word (.docx)','한글 저장 (.hwpx)':'Save as Hangul (.hwpx)','ZIP 저장':'Save ZIP','변경된 문서만':'Changed documents only','문서 선택…':'Select documents…','폴더 전체':'Entire folder',
   '문서 저장 중':'Saving document','현재 문서 변환이 끝난 뒤 다시 시도해 주세요.':'Wait for the current conversion to finish, then try again.',
   'PDF는 한 번에 문서 하나를 선택해 주세요.':'Select one document at a time when saving as PDF.','목차 수정 실패':'Could not update table of contents','원문에서 선택한 목차를 찾지 못했습니다. 미리보기를 새로 고친 뒤 다시 시도해 주세요.':'Could not find the selected table of contents in the source. Refresh Preview and try again.',
@@ -17926,6 +17995,14 @@ async function showAppSettings(initialCategory='general'){
         <button type="button" data-ui-language="en" class="${uiLanguage==='en'?'active':''}">English</button>
       </div>
     </section>
+    <section class="app-settings-group" data-settings-panel="document" ${settingsCategory==='document'?'':'hidden'}><h4>기본 서식</h4>
+      <div class="app-settings-document-defaults">
+        <label><span>기본 글자 크기</span><span class="app-settings-number-field"><input type="number" min="6" max="96" step="1" value="${defaultDocumentFontSize}" data-document-default-size><b>px</b></span></label>
+        <label><span>기본 줄 간격</span><span class="app-settings-number-field"><input type="number" min="0.8" max="4" step="0.1" value="${defaultDocumentLineHeight}" data-document-default-line-height></span></label>
+      </div>
+      <div class="app-settings-document-preview" data-document-default-preview style="--settings-preview-size:${defaultDocumentFontSize}px;--settings-preview-line-height:${defaultDocumentLineHeight}"><strong>설정 미리보기</strong><p>문서의 기본 글자 크기와 줄 간격을 확인합니다.<br>개별 서식이 있는 글은 기존 모양을 유지합니다.</p></div>
+      <div class="app-settings-document-default-actions"><button type="button" data-document-default-reset>초기화</button></div>
+    </section>
     <section class="app-settings-group" data-settings-panel="document" ${settingsCategory==='document'?'':'hidden'}><h4>문서 폰트</h4>
       <div class="app-settings-section"><div><strong>업로드 폰트 사용</strong><p>선택한 폰트를 미리보기와 PDF 문서에 적용합니다.</p></div><label class="app-settings-switch"><input type="checkbox" data-custom-font-enabled ${customFontEnabled&&customFonts.length?'checked':''} ${customFonts.length?'':'disabled'}><span></span></label></div>
       <input type="file" data-custom-font-input accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" multiple hidden>
@@ -17978,6 +18055,30 @@ async function showAppSettings(initialCategory='general'){
     localStorage.setItem(STICKY_SUBFOLDER_KEY,stickySubfolderEnabled?'1':'0');
     els.list.classList.toggle('sticky-subfolders-enabled',stickySubfolderEnabled);
   };
+  const defaultSizeInput=wrap.querySelector('[data-document-default-size]');
+  const defaultLineHeightInput=wrap.querySelector('[data-document-default-line-height]');
+  const defaultPreview=wrap.querySelector('[data-document-default-preview]');
+  const updateDocumentDefaults=({normalize=false}={})=>{
+    if(defaultSizeInput.value.trim()===''||defaultLineHeightInput.value.trim()===''){
+      if(normalize){defaultSizeInput.value=String(defaultDocumentFontSize);defaultLineHeightInput.value=String(defaultDocumentLineHeight)}
+      return;
+    }
+    defaultDocumentFontSize=boundedDocumentFontSize(defaultSizeInput.value);
+    defaultDocumentLineHeight=boundedDocumentLineHeight(defaultLineHeightInput.value);
+    if(normalize){defaultSizeInput.value=String(defaultDocumentFontSize);defaultLineHeightInput.value=String(defaultDocumentLineHeight)}
+    localStorage.setItem(DOCUMENT_DEFAULT_FONT_SIZE_KEY,String(defaultDocumentFontSize));
+    localStorage.setItem(DOCUMENT_DEFAULT_LINE_HEIGHT_KEY,String(defaultDocumentLineHeight));
+    defaultPreview.style.setProperty('--settings-preview-size',`${defaultDocumentFontSize}px`);
+    defaultPreview.style.setProperty('--settings-preview-line-height',String(defaultDocumentLineHeight));
+    applyDocumentDefaults();refreshDocumentDefaultLineHeightUi();setLineHeightUi(defaultDocumentLineHeight);updatePreviewFontSize();
+  };
+  defaultSizeInput.addEventListener('input',updateDocumentDefaults);
+  defaultLineHeightInput.addEventListener('input',updateDocumentDefaults);
+  defaultSizeInput.addEventListener('change',()=>updateDocumentDefaults({normalize:true}));
+  defaultLineHeightInput.addEventListener('change',()=>updateDocumentDefaults({normalize:true}));
+  wrap.querySelector('[data-document-default-reset]').onclick=()=>{
+    defaultSizeInput.value=String(BASE_DOCUMENT_FONT_SIZE);defaultLineHeightInput.value=String(BASE_DOCUMENT_LINE_HEIGHT);updateDocumentDefaults({normalize:true});
+  };
   const fontInput=wrap.querySelector('[data-custom-font-input]');
   const fontStatus=wrap.querySelector('[data-custom-font-status]');
   wrap.querySelector('[data-custom-font-enabled]').onchange=event=>{
@@ -17994,10 +18095,14 @@ async function showAppSettings(initialCategory='general'){
     if(!fontInput.files?.length)return;
     fontStatus.textContent='폰트를 확인하고 저장하는 중...';
     try{
-      const added=await importCustomFonts(fontInput.files);
+      const {added,skipped}=await importCustomFonts(fontInput.files);
       closeGuideModal(wrap);await showAppSettings('document');
       const next=document.querySelector('[data-custom-font-status]');
-      if(next)next.textContent=`${added.length}개 폰트를 업로드하고 문서에 적용했습니다.`;
+      if(next){
+        if(added.length&&skipped.length)next.textContent=uiLanguage==='en'?`Uploaded ${added.length}; skipped ${skipped.length} duplicate${skipped.length===1?'':'s'}.`:`${added.length}개 업로드 · 중복 ${skipped.length}개 제외`;
+        else if(added.length)next.textContent=uiLanguage==='en'?`Uploaded and applied ${added.length} font${added.length===1?'':'s'}.`:`${added.length}개 폰트를 업로드하고 문서에 적용했습니다.`;
+        else next.textContent=uiLanguage==='en'?'These fonts are already uploaded.':'이미 업로드된 폰트입니다.';
+      }
     }catch(error){fontStatus.textContent=error?.message||'폰트를 불러오지 못했습니다.'}
   };
   wrap.querySelector('[data-custom-font-remove]').onclick=async()=>{
@@ -19451,32 +19556,68 @@ async function registerCustomFont(font){
   document.fonts.add(face);
   customFontFaces.set(font.id,face);
 }
+function normalizedCustomFontFileName(font){
+  return String(font?.fileName||'').trim().toLocaleLowerCase('en-US');
+}
+async function customFontDigest(data){
+  if(!data)return'';
+  const buffer=data instanceof ArrayBuffer?data:data.buffer?.slice(data.byteOffset||0,(data.byteOffset||0)+(data.byteLength||0));
+  if(!buffer)return'';
+  const hash=await crypto.subtle.digest('SHA-256',buffer);
+  return [...new Uint8Array(hash)].map(value=>value.toString(16).padStart(2,'0')).join('');
+}
 async function loadCustomFonts(force=false){
   if(customFontsLoaded&&!force)return customFonts;
-  customFonts=await zzStoreGet('fonts','library').catch(()=>[])||[];
+  const stored=await zzStoreGet('fonts','library').catch(()=>[])||[],unique=[],hashes=new Set(),fileNames=new Set();
+  let repaired=false;
+  for(const font of stored){
+    if(!font?.id||!font?.data){repaired=true;continue}
+    if(!font.hash){try{font.hash=await customFontDigest(font.data);repaired=true}catch{font.hash=''}}
+    const fileName=normalizedCustomFontFileName(font);
+    if((font.hash&&hashes.has(font.hash))||(fileName&&fileNames.has(fileName))){repaired=true;continue}
+    if(font.hash)hashes.add(font.hash);
+    if(fileName)fileNames.add(fileName);
+    unique.push(font);
+  }
+  customFonts=unique;
+  if(repaired)await zzStorePut('fonts','library',customFonts).catch(()=>{});
   for(const font of customFonts){try{await registerCustomFont(font)}catch{}}
   customFontsLoaded=true;
-  if(!localStorage.getItem(CUSTOM_FONT_ACTIVE_KEY)&&customFonts[0])localStorage.setItem(CUSTOM_FONT_ACTIVE_KEY,customFonts[0].id);
+  const activeId=localStorage.getItem(CUSTOM_FONT_ACTIVE_KEY)||'';
+  if(!customFonts.some(font=>font.id===activeId)){
+    if(customFonts[0])localStorage.setItem(CUSTOM_FONT_ACTIVE_KEY,customFonts[0].id);
+    else localStorage.removeItem(CUSTOM_FONT_ACTIVE_KEY);
+  }
   applyCustomDocumentFont();
   return customFonts;
 }
 async function importCustomFonts(files){
   const accepted=[...files].filter(file=>/\.(?:ttf|otf|woff2?)$/i.test(file.name));
   if(!accepted.length)throw new Error('TTF, OTF, WOFF 또는 WOFF2 폰트 파일을 선택해 주세요.');
-  const added=[];
+  await loadCustomFonts();
+  const added=[],skipped=[];
+  const hashes=new Set(customFonts.map(font=>font.hash).filter(Boolean));
+  const fileNames=new Set(customFonts.map(normalizedCustomFontFileName).filter(Boolean));
   for(const file of accepted){
     const data=await file.arrayBuffer();
+    const hash=await customFontDigest(data),fileName=String(file.name||'').trim(),normalizedFileName=fileName.toLocaleLowerCase('en-US');
+    if((hash&&hashes.has(hash))||(normalizedFileName&&fileNames.has(normalizedFileName))){skipped.push(fileName);continue}
     const id=`font-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
-    const name=file.name.replace(/\.(?:ttf|otf|woff2?)$/i,'').trim()||'사용자 폰트';
-    const font={id,name,fileName:file.name,type:file.type||'',data};
+    const name=fileName.replace(/\.(?:ttf|otf|woff2?)$/i,'').trim()||'사용자 폰트';
+    const font={id,name,fileName,type:file.type||'',hash,data};
     await registerCustomFont(font);
-    customFonts.push(font);added.push(font);
+    customFonts.push(font);added.push(font);hashes.add(hash);fileNames.add(normalizedFileName);
   }
-  await zzStorePut('fonts','library',customFonts);
+  try{if(added.length)await zzStorePut('fonts','library',customFonts)}catch(error){
+    const addedIds=new Set(added.map(font=>font.id));
+    added.forEach(font=>{const face=customFontFaces.get(font.id);if(face)document.fonts.delete(face);customFontFaces.delete(font.id)});
+    customFonts=customFonts.filter(font=>!addedIds.has(font.id));
+    throw error;
+  }
   if(added[0])localStorage.setItem(CUSTOM_FONT_ACTIVE_KEY,added[0].id);
-  customFontEnabled=true;localStorage.setItem(CUSTOM_FONT_ENABLED_KEY,'1');
+  if(added.length){customFontEnabled=true;localStorage.setItem(CUSTOM_FONT_ENABLED_KEY,'1')}
   applyCustomDocumentFont();
-  return added;
+  return{added,skipped};
 }
 async function removeCustomFont(id){
   const face=customFontFaces.get(id);
